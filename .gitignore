@@ -1,0 +1,5 @@
+/tellury
+*.test
+*.out
+.DS_Store
+graphify-out/

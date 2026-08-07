@@ -1,0 +1,22 @@
+{
+  "assets": [
+    {
+      "name": "//compute.googleapis.com/projects/my-project/regions/us-central1/addresses/reserved-ip-01",
+      "assetType": "compute.googleapis.com/Address",
+      "project": "projects/my-project",
+      "resource": {
+        "version": "v1",
+        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+        "location": "us-central1",
+        "data": {
+          "name": "reserved-ip-01",
+          "address": "34.147.100.42",
+          "addressType": "EXTERNAL",
+          "status": "RESERVED",
+          "creationTimestamp": "2024-01-01T00:00:00Z",
+          "users": []
+        }
+      }
+    }
+  ]
+}

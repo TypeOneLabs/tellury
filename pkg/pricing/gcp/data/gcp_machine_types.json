@@ -1,0 +1,29 @@
+{
+  "version": "2024-06-01",
+  "families": {
+    "e2-standard": {"min_vcpu": 2, "step_vcpu": 2, "ram_per_vcpu_min": 0.5, "ram_per_vcpu_max": 8},
+    "e2-highmem":  {"min_vcpu": 2, "step_vcpu": 2, "ram_per_vcpu_min": 0.5, "ram_per_vcpu_max": 8},
+    "e2-highcpu":  {"min_vcpu": 2, "step_vcpu": 2, "ram_per_vcpu_min": 0.5, "ram_per_vcpu_max": 8},
+    "n2-standard": {"min_vcpu": 2, "step_vcpu": 2, "ram_per_vcpu_min": 0.5, "ram_per_vcpu_max": 8}
+  },
+  "types": [
+    {"name": "e2-micro",       "family": "e2-shared",   "vcpu": 0.25, "memory_gib": 1,   "shared_core": true},
+    {"name": "e2-small",       "family": "e2-shared",   "vcpu": 0.5,  "memory_gib": 2,   "shared_core": true},
+    {"name": "e2-medium",      "family": "e2-shared",   "vcpu": 1,    "memory_gib": 4,   "shared_core": true},
+    {"name": "e2-standard-2",  "family": "e2-standard", "vcpu": 2,    "memory_gib": 8},
+    {"name": "e2-standard-4",  "family": "e2-standard", "vcpu": 4,    "memory_gib": 16},
+    {"name": "e2-standard-8",  "family": "e2-standard", "vcpu": 8,    "memory_gib": 32},
+    {"name": "e2-standard-16", "family": "e2-standard", "vcpu": 16,   "memory_gib": 64},
+    {"name": "e2-standard-32", "family": "e2-standard", "vcpu": 32,   "memory_gib": 128},
+    {"name": "e2-highmem-2",   "family": "e2-highmem",  "vcpu": 2,    "memory_gib": 16},
+    {"name": "e2-highmem-4",   "family": "e2-highmem",  "vcpu": 4,    "memory_gib": 32},
+    {"name": "e2-highmem-8",   "family": "e2-highmem",  "vcpu": 8,    "memory_gib": 64},
+    {"name": "e2-highcpu-2",   "family": "e2-highcpu",  "vcpu": 2,    "memory_gib": 2},
+    {"name": "e2-highcpu-4",   "family": "e2-highcpu",  "vcpu": 4,    "memory_gib": 4},
+    {"name": "e2-highcpu-8",   "family": "e2-highcpu",  "vcpu": 8,    "memory_gib": 8},
+    {"name": "n2-standard-2",  "family": "n2-standard", "vcpu": 2,    "memory_gib": 8},
+    {"name": "n2-standard-4",  "family": "n2-standard", "vcpu": 4,    "memory_gib": 16},
+    {"name": "n2-standard-8",  "family": "n2-standard", "vcpu": 8,    "memory_gib": 32},
+    {"name": "n2-standard-16", "family": "n2-standard", "vcpu": 16,   "memory_gib": 64}
+  ]
+}
