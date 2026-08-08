@@ -12,6 +12,25 @@ func (g *Graph) Nodes(fn func(*Node) bool) {
 	}
 }
 
+// HasMetric reports whether ANY node carries a usable (sample-positive) value
+// for the given metric key. It is what the offline summary uses to tell which
+// metric-dependent rules could not evaluate for lack of data: a fixture replay
+// materially has no series, so every metric key is absent here and every
+// metric-requiring rule is reported as not evaluated rather than silently
+// looking like "no waste".
+func (g *Graph) HasMetric(key string) bool {
+	found := false
+	g.Nodes(func(n *Node) bool {
+		m, ok := n.Metrics[key]
+		if ok && m.Samples > 0 {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
 // ByKind iterates nodes of one kind - the primary rule entrypoint.
 //
 // Container kinds (organization, folder, project) are excluded structurally:

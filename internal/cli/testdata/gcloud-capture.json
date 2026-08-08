@@ -1,0 +1,24 @@
+[
+  {
+    "name": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/pd-standard-01",
+    "assetType": "compute.googleapis.com/Disk",
+    "project": "projects/my-project",
+    "folders": [],
+    "organization": "",
+    "location": "us-central1-a",
+    "parentFullResourceName": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+    "versionedResources": [
+      {
+        "version": "v1",
+        "resource": {
+          "name": "pd-standard-01",
+          "sizeGb": 200,
+          "type": "projects/my-project/zones/us-central1-a/diskTypes/pd-standard",
+          "status": "READY",
+          "creationTimestamp": "2024-01-01T00:00:00Z",
+          "users": []
+        }
+      }
+    ]
+  }
+]

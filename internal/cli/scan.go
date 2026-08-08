@@ -2,11 +2,14 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -32,7 +35,8 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 		Args:  cobra.NoArgs,
 		Example: "  tellury scan --gcp-project my-gcp-project\n" +
 			"  tellury scan --gcp-project p --rules detached_disk --format json\n" +
-			"  tellury scan --cache-file snap.json   # offline replay",
+			"  tellury scan --cache-file snap.json   # offline replay (full fidelity)\n" +
+			"  tellury scan --fixture cai-assets.json   # offline replay (topology only)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			now := time.Now().UTC()
 			if at != "" {
@@ -62,6 +66,7 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 	f.Float64Var(&cfg.MinConfidence, "min-confidence", 0, "hide findings below confidence")
 	f.StringVar(&cfg.CacheFile, "cache-file", "", "read graph from file if it exists, else write it")
 	f.StringSliceVar(&cfg.Fixture, "fixture", nil, "read assets from CAI JSON fixtures instead of the API")
+	f.StringVar(&cfg.OutDir, "out-dir", config.DefaultOutDir, "directory to write scan artifacts into (created if absent)")
 	f.StringVar(&cfg.PriceFile, "price-file", "", "path to a JSON price override file. Price "+
 		"precedence, highest first: --price-file override > live Cloud Billing Catalog API "+
 		"(cached for this scan) > embedded fallback table used when the API is unreachable or "+
@@ -108,7 +113,15 @@ func runScan(
 		"metric_keys", len(metricKeys),
 		"window_days", cfg.WindowDays)
 
-	// 4. Offline decision — before any provider/client is built. A scan is
+	// 4. Artifact directory. Create it up-front (before any I/O) so a scan
+	// cannot fail partway through for want of a directory it promised to
+	// write into. Errors here are fatal: if we cannot write our artifacts we
+	// must not pretend the scan produced a directory.
+	if err := os.MkdirAll(cfg.OutDir, 0o755); err != nil {
+		return newUsageError(fmt.Errorf("create --out-dir %s: %w", cfg.OutDir, err))
+	}
+
+	// 4b. Offline decision — before any provider/client is built. A scan is
 	// offline when it either replays a fixture (assets come straight from
 	// local JSON) or the --cache-file is present (the graph is replayed
 	// verbatim). An offline scan constructs no cloud SDK client at all, so it
@@ -189,9 +202,31 @@ func runScan(
 		WindowDays:       cfg.WindowDays,
 		ResourcesScanned: gr.ResourceNodeCount(),
 		RulesEvaluated:   len(selected),
+		MultiProject:     gr.ProjectCount() > 1,
 	})
 
-	// 11. Render.
+	// Offline honesty: when the scan's data carried no metric series (a raw
+	// CAI fixture), the metric-dependent rules could not evaluate. State which
+	// ones explicitly on the report so an empty table is not mistaken for "no
+	// waste" when it actually means "could not check". A cached-snapshot replay
+	// usually carries the serialized Metrics map with full fidelity, so it is
+	// rarely blocked here.
+	report.MetricsBlocked = rules.MetricsBlocked(selected, gr)
+
+	// 11. Artifacts: write the enriched graph snapshot, the findings JSON and
+	// the self-contained HTML report into --out-dir BEFORE rendering stdout,
+	// so a scan that crashes after this point has still left all three behind.
+	// A failure here aborts: the operator asked for a directory of artifacts,
+	// and a scan that cannot produce them must say so rather than pretend it
+	// succeeded with only terminal output.
+	artifactDir := artifactDirName(cfg.OutDir, scope.String())
+	if err := writeArtifacts(artifactDir, cfg, gr, scope.String(), report); err != nil {
+		return err
+	}
+
+	// 12. Render. Terminal output is byte-for-byte unchanged by the artifact
+	// writing above: artifact names are only logged to stderr, stdout gets the
+	// same table/JSON/CSV it always did.
 	renderer, err := output.For(cfg.Format)
 	if err != nil {
 		return newUsageError(err)
@@ -207,6 +242,113 @@ func runScan(
 		return errFindings
 	}
 	return nil
+}
+
+// artifactDirName renders the per-scan artifact subdirectory: the --out-dir
+// base joined with <scope>-<timestamp>. The scope and a sub-second-resolution
+// timestamp are baked into the name so consecutive scans never silently
+// overwrite each other's artifacts. Wall-clock UTC with nanosecond precision
+// guarantees that two scans run back-to-back (even within the same second,
+// as a test or CI does) still land in distinct subdirectories.
+func artifactDirName(outDir, scope string) string {
+	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
+	return filepath.Join(outDir, sanitizeSegment(scope)+"-"+stamp)
+}
+
+// sanitizeSegment makes a scope token safe to embed in a directory name. A
+// scope is "projects/my-project" or "folders/123" or "organizations/456";
+// the slash becomes a dash. Any characters that would be invalid in a path
+// segment on any supported filesystem are replaced with an underscore.
+func sanitizeSegment(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '/' || r == '\\':
+			b.WriteByte('-')
+		case r == ':' || r == ' ' || r < 0x20 || r == 0x7f:
+			b.WriteByte('_')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// writeArtifacts emits the three required files into dir:
+//
+//   - graph-<scope>.json — the enriched graph snapshot, serialized with
+//     WriteSnapshot exactly as --cache-file produces it, so it is replayable
+//     through `tellury scan --cache-file` with full fidelity.
+//   - findings-<scope>.json — the scan report (findings, totals, scope,
+//     metrics_blocked) as JSON.
+//   - report-<scope>.html — the self-contained HTML report: collapsible
+//     rollup hierarchy plus the top-findings table. No CDN, no external
+//     stylesheet, no runtime network fetch — an operator can email it, attach
+//     it to a ticket, or open it on an air-gapped machine.
+//
+// All three names carry the scope so an artifact directory containing many
+// scans stays navigable.
+func writeArtifacts(dir string, cfg config.Scan, gr *graph.Graph, scope string, report output.Report) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	// 1. Graph snapshot (full fidelity, replayable).
+	graphPath := filepath.Join(dir, "graph-"+sanitizeSegment(scope)+".json")
+	if err := writeGraphSnapshot(graphPath, gr, cfg.Provider, scope); err != nil {
+		return err
+	}
+
+	// 2. Findings JSON.
+	findingsPath := filepath.Join(dir, "findings-"+sanitizeSegment(scope)+".json")
+	if err := writeFindingsJSON(findingsPath, report); err != nil {
+		return err
+	}
+
+	// 3. Self-contained HTML report.
+	reportPath := filepath.Join(dir, "report-"+sanitizeSegment(scope)+".html")
+	if err := writeHTMLReport(reportPath, gr, report, scope); err != nil {
+		return err
+	}
+	return nil
+}
+
+// writeHTMLReport renders the self-contained HTML report into path. The
+// rollup hierarchy is rebuilt from the graph's containment edges and the
+// report's findings, so the same scan materializes the same tree.
+func writeHTMLReport(path string, gr *graph.Graph, report output.Report, scope string) error {
+	root := output.BuildHierarchy(gr, report.Findings, scope)
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return output.RenderHTML(f, report, root)
+}
+
+// writeGraphSnapshot writes one graph.Snapshot to path. It is the exact same
+// serialization `scan --cache-file` writes, so the artifact directory can be
+// replayed directly.
+func writeGraphSnapshot(path string, gr *graph.Graph, provider, scope string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return gr.WriteSnapshot(f, provider, scope)
+}
+
+// writeFindingsJSON writes the report as indented JSON — the same shape
+// `scan --format json` prints, saved into the artifact directory.
+func writeFindingsJSON(path string, report output.Report) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	return enc.Encode(report)
 }
 
 // cacheIfPresent attempts to load a --cache-file graph. It returns the graph

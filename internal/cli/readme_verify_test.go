@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -21,6 +22,10 @@ var readmeNow = time.Date(2024, 1, 20, 0, 0, 0, 0, time.UTC)
 // table render). It proves the documented command behaves as described: it is
 // not help text. A --cache-file variant is also exercised to cover the
 // "replay carries its own scope" claim.
+//
+// The scan writes its artifacts into a temp directory (OutDir is set to a
+// t.TempDir(), never the source tree, following the same rule artifacts_test.go
+// already applies) so `go test` cannot litter the package directory.
 func TestReadmeScanExample(t *testing.T) {
 	cfg := config.Scan{
 		Provider:       "gcp",
@@ -28,6 +33,7 @@ func TestReadmeScanExample(t *testing.T) {
 		Fixture:        []string{"testdata/readme-assets.json"},
 		Format:         "table",
 		FailOnFindings: false,
+		OutDir:         filepath.Join(t.TempDir(), "out"),
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
@@ -58,6 +64,7 @@ func TestReadmeScanExample(t *testing.T) {
 // through the same runScan pipeline with a reserved external IP fixture. This
 // is how the README's fourth rule claim ("an external IP reserved but
 // attached to nothing, whole cost is waste") is exercised against real code.
+// Its artifacts go to a temp directory, never the source tree.
 func TestReadmeUnusedReservedIPExample(t *testing.T) {
 	cfg := config.Scan{
 		Provider:       "gcp",
@@ -66,6 +73,7 @@ func TestReadmeUnusedReservedIPExample(t *testing.T) {
 		Format:         "table",
 		Rules:          []string{"unused_reserved_ip"},
 		FailOnFindings: false,
+		OutDir:         filepath.Join(t.TempDir(), "out"),
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)

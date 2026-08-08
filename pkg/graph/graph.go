@@ -164,6 +164,23 @@ func (g *Graph) ResourceNodeCount() int {
 	return n
 }
 
+// ProjectCount reports how many distinct project IDs appear across the
+// scan's resource (non-container) nodes. It is what the CLI uses to decide
+// whether an organization-wide scan spans more than one project — and thus
+// whether the table must surface the PROJECT column so an operator can tell
+// which project a finding lives in. A single-project scan returns 0 or 1, and
+// the table stays at its compact width.
+func (g *Graph) ProjectCount() int {
+	seen := map[string]bool{}
+	g.Nodes(func(node *Node) bool {
+		if !node.Container() && node.Project != "" {
+			seen[node.Project] = true
+		}
+		return true
+	})
+	return len(seen)
+}
+
 func (g *Graph) EdgeCount() int {
 	total := 0
 	for _, e := range g.out {

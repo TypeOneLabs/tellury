@@ -165,3 +165,45 @@ func TestNormalizeInstance_ProjectIDFromName(t *testing.T) {
 		t.Fatalf("Project = %q; want the asset-name project ID, not the parent number", n.Project)
 	}
 }
+
+// TestNormalizeInstance_CreatedBy_MIGMarker asserts that the instance
+// normalizer extracts the `created-by` instance metadata item as AttrCreatedBy
+// — the signal Cloud Asset Inventory uses to mark a managed instance group
+// member. The value names an instanceGroupManagers resource self-link.
+func TestNormalizeInstance_CreatedBy_MIGMarker(t *testing.T) {
+	a := &RawAsset{
+		Name:      "//compute.googleapis.com/projects/p/zones/us-central1-a/instances/web-0",
+		AssetType: TypeInstance,
+		Resource: &RawResource{
+			Version:  "v1",
+			Parent:   "//cloudresourcemanager.googleapis.com/projects/123",
+			Location: "us-central1-a",
+			Data: json.RawMessage(`{
+				"name": "web-0",
+				"machineType": "projects/p/zones/us-central1-a/machineTypes/n1-standard-4",
+				"status": "RUNNING",
+				"metadata": {
+					"items": [
+						{"key": "created-by", "value": "projects/p/zones/us-central1-a/instanceGroupManagers/web-mig"},
+						{"key": "startup-script", "value": "echo hi"}
+					]
+				}
+			}`),
+		},
+	}
+
+	n, err := Normalize(a, nil)
+	if err != nil {
+		t.Fatalf("Normalize(instance): %v", err)
+	}
+	if n == nil {
+		t.Fatalf("Normalize(instance) returned nil")
+	}
+	got, ok := n.Str(AttrCreatedBy)
+	if !ok || got == "" {
+		t.Fatalf("created_by attribute absent on a MIG member; want %q", got)
+	}
+	if got != "projects/p/zones/us-central1-a/instanceGroupManagers/web-mig" {
+		t.Fatalf("created_by = %q, want the full instanceGroupManagers self-link", got)
+	}
+}

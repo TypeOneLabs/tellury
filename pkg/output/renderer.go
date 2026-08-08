@@ -29,6 +29,22 @@ type Report struct {
 
 	RuleErrors map[string]string `json:"rule_errors,omitempty"`
 	Skipped    []rules.SkipTally `json:"skipped,omitempty"`
+
+	// MultiProject reports whether the scan's findings span more than one
+	// project. The table renderer surfaces a PROJECT column only in that
+	// case, so a single-project scan keeps its compact width while an
+	// organization-wide scan gives the operator a way to tell where each
+	// resource lives. CSV always writes the project column per finding.
+	MultiProject bool `json:"multi_project,omitempty"`
+
+	// MetricsBlocked lists the rule IDs that were NOT evaluated because the
+	// scan's data carried no metric series for the rules' required keys. This
+	// is the offline summary's honesty mechanism: a raw CAI fixture carries no
+	// metrics, so every metric-dependent rule lands here and the operator can
+	// see "could not check" instead of mistaking an empty table for "no waste".
+	// A cached-snapshot replay usually carries full metric fidelity and so has
+	// no blocked rules.
+	MetricsBlocked []string `json:"metrics_blocked,omitempty"`
 }
 
 // Meta carries the scan context that is not derivable from the findings.
@@ -39,6 +55,7 @@ type Meta struct {
 	WindowDays       int
 	ResourcesScanned int
 	RulesEvaluated   int
+	MultiProject     bool
 }
 
 // NewReport assembles a Report and computes the totals exactly once. The sum is
@@ -53,6 +70,7 @@ func NewReport(res rules.Result, m Meta) Report {
 		FindingCount:     len(res.Findings),
 		ResourcesScanned: m.ResourcesScanned,
 		RulesEvaluated:   m.RulesEvaluated,
+		MultiProject:     m.MultiProject,
 		Skipped:          res.SkipTotals(),
 	}
 	total := 0.0

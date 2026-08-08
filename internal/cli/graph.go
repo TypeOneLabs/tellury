@@ -9,6 +9,7 @@ import (
 	"github.com/TypeOneLabs/tellury/internal/config"
 	"github.com/TypeOneLabs/tellury/pkg/cloud/gcp"
 	"github.com/TypeOneLabs/tellury/pkg/graph"
+	"github.com/TypeOneLabs/tellury/pkg/metrics"
 	"github.com/TypeOneLabs/tellury/pkg/rules"
 )
 
@@ -24,12 +25,36 @@ func newGraphCmd(g *globalFlags) *cobra.Command {
 	return cmd
 }
 
+// newGraphExportCmd ingests a scope, enriches it with metrics, and writes the
+// graph as a JSON snapshot that `tellury scan --cache-file` replays verbatim.
+//
+// Enrichment is ON by default: the whole point of export is to produce a
+// snapshot that preserves fidelity, and a cache written WITHOUT metrics would
+// silently become "could not check" on replay for every metric-dependent rule.
+// Drop --no-enrich-metrics to write a topology-only snapshot (all metric
+// values are then absent on replay and metric-dependent rules skip).
+//
+// The emitted file is a graph.Snapshot (version 2), NOT a CAI fixture. To
+// capture raw Cloud Asset Inventory JSON for `--fixture`, use the gcloud
+// command documented in README.md ("Capturing your own fixture") instead.
 func newGraphExportCmd(g *globalFlags) *cobra.Command {
-	var cfg config.Scan
+	var (
+		cfg            config.Scan
+		noEnrichMetrics bool
+	)
 	cmd := &cobra.Command{
 		Use:   "export",
-		Short: "Ingest a scope and write the graph as a JSON snapshot",
-		Args:  cobra.NoArgs,
+		Short: "Ingest a scope, enrich it with metrics, and write the graph as a full-fidelity snapshot",
+		Long: "Ingest the scope's asset inventory, enrich it with Cloud Monitoring " +
+			"series (exactly as `tellury scan` does), and write the result as a JSON " +
+			"graph snapshot. `tellury scan --cache-file THIS_FILE` then replays it " +
+			"verbatim, so every rule — metric-dependent ones included — can fire. " +
+			"Enrichment is on by default; pass --no-enrich-metrics to write a " +
+			"topology-only snapshot whose replay leaves metric-dependent rules unable " +
+			"to evaluate.",
+		Example: "  tellury graph export --gcp-project p --out graph.json\n" +
+			"  tellury scan --cache-file graph.json   # full-fidelity replay",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := cfg.Validate(); err != nil {
 				return newUsageError(err)
@@ -43,7 +68,7 @@ func newGraphExportCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return newUsageError(err)
 			}
-			assetTypes, _ := rules.Plan(selected)
+			assetTypes, metricKeys := rules.Plan(selected)
 
 			// `graph export` always ingests fresh assets; it never replays a
 			// cache. So it is an online scan: offline=false, cacheHit=false.
@@ -61,6 +86,19 @@ func newGraphExportCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+
+			// Enrich by default so the snapshot can drive metric-dependent
+			// rules on replay, exactly like a `scan` with a cache file. A
+			// failed enrichment is not fatal: it just narrows the replay the
+			// same way it narrows a scan.
+			if len(metricKeys) > 0 && !noEnrichMetrics {
+				req := metrics.Request{Keys: metricKeys, WindowDays: cfg.WindowDays}
+				if err := provider.EnrichMetrics(ctx, gr, scope, req); err != nil {
+					log.Warn("graph export: metric enrichment incomplete; replayed scans will skip metric-dependent rules",
+						"keys", len(metricKeys), "err", err)
+				}
+			}
+			gr.Freeze()
 			return writeSnapshot(cmd, cfg.CacheFile, gr, provider.Name(), scope.String())
 		},
 	}
@@ -71,8 +109,13 @@ func newGraphExportCmd(g *globalFlags) *cobra.Command {
 	// set is hardcoded here.
 	addScopeFlags(f, gcp.ProviderName, &cfg)
 	f.StringVar(&cfg.Provider, "provider", "gcp", "cloud provider")
+	f.StringSliceVar(&cfg.Rules, "rules", nil, "rule IDs to drive asset type and metric planning (default: all)")
+	f.StringSliceVar(&cfg.SkipRules, "skip-rules", nil, "rule IDs to exclude from planning")
 	f.StringSliceVar(&cfg.Fixture, "fixture", nil, "read assets from CAI JSON fixtures instead of the API")
 	f.StringVar(&cfg.CacheFile, "out", "", "output file (default: stdout)")
+	f.IntVar(&cfg.WindowDays, "window", config.DefaultWindowDays, "metric lookback window in days (7-30)")
+	f.BoolVar(&noEnrichMetrics, "no-enrich-metrics", false,
+		"write a topology-only snapshot (no Cloud Monitoring series); metric-dependent rules will skip on replay")
 	return cmd
 }
 

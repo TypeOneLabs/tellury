@@ -7,8 +7,10 @@ A single-binary CLI that ingests your cloud inventory, builds an in-memory resou
 graph, and evaluates deterministic rules against it. Every finding carries the evidence
 behind it and a dollar figure.
 
-> **Status: early development (v0.1.0).** Live GCP scanning works — Cloud Asset Inventory,
-> Cloud Monitoring, and Cloud Billing are wired against the official SDKs. Four rules ship.
+> **Status: early development.** Live GCP scanning works — Cloud Asset Inventory, Cloud
+> Monitoring, and Cloud Billing are wired against the official SDKs. Four rules ship, and a
+> scan writes a directory of artifacts (graph snapshot, findings JSON, self-contained HTML
+> report); `--out-dir` and the HTML report landed after v0.1.0 and are not in a release yet.
 > Expect rough edges, and see [What works today](#what-works-today) for the boundary.
 
 ## Quick start
@@ -31,7 +33,8 @@ TOTAL                         2 findings                       $15.30
 
 Read-only access is enough: `roles/cloudasset.viewer` and `roles/monitoring.viewer`.
 No credentials at hand? `./tellury scan --gcp-project demo --fixture assets.json` runs the
-whole pipeline offline.
+whole pipeline offline (see [Offline mode](#offline-mode) for exactly what that replay can
+and cannot evaluate).
 
 ## Vision
 
@@ -88,8 +91,14 @@ Working:
 - **Rule engine** — bounded worker pool, deterministic ordering, per-rule skip accounting.
 - **Four GCP rules** (see below).
 - **Offline scanning** — `--fixture` replays Cloud Asset Inventory JSON and `--cache-file`
-  replays a saved graph. Both make no API calls and need no credentials.
+  replays a saved graph. Both make no API calls and need no credentials. The distinction
+  between the two is explicit and honest: a fixture replay can only ever evaluate the
+  topology-only rules, while a cached-snapshot replay drives every rule including the
+  metric-dependent ones (see [Offline mode](#offline-mode)).
 - **Output** — `table`, `json`, `csv`, with filtering and sorting.
+- **Scan artifacts** — every scan leaves a directory of artifacts behind in `--out-dir`
+  (default `tellury-out/`): a replayable graph snapshot, the findings JSON, and a
+  self-contained HTML report. See [Scan artifacts](#scan-artifacts).
 
 Not there yet:
 
@@ -113,6 +122,16 @@ monitoring access they skip and say why — they never guess a value from missin
 `detached_disk` and `unused_reserved_ip` are pure graph/attribute checks and need no
 metrics. `tellury rules list` shows the catalogue; `tellury rules explain <id>` prints a
 rule's full declaration.
+
+One exclusion on `underutilized_instance` is worth spelling out: **it skips any instance
+that is a managed instance group (MIG) member**, flagged via the instance's `created-by`
+metadata pointing at an `instanceGroupManagers` resource. The reason is structural — a MIG
+owns its members' size and count, so advice to resize one member is not something an
+operator can act on (the group would just roll it back). Rightsizing advice belongs on the
+group, which is a separate concern with its own future rules, not on an individual member.
+The skip is tallied separately (reason `managed_by_mig`) so `--explain-skips` keeps it
+distinct from every other reason. This is not part of `unused_reserved_ip`, which never
+looks at instances.
 
 ## Build
 
@@ -140,7 +159,7 @@ tellury --help                 # top-level commands
 tellury rules list             # the rule catalogue
 tellury rules explain detached_disk
 tellury version
-tellury graph export --gcp-project my-project --out graph.json   # dump the graph snapshot
+tellury graph export --gcp-project my-project --out graph.json   # enrich + dump a graph snapshot
 ```
 
 ### Scanning a real project
@@ -152,6 +171,9 @@ takes no credentials flag:
 gcloud auth application-default login
 tellury scan --gcp-project my-project
 ```
+
+Every real scan writes a directory of artifacts into `--out-dir` (see
+[Scan artifacts](#scan-artifacts)).
 
 Scope with `--gcp-project`, `--gcp-folder`, or `--gcp-organization`, or the matching
 environment variables `TELLURY_GCP_PROJECT`, `TELLURY_GCP_FOLDER`, `TELLURY_GCP_ORGANIZATION`.
@@ -169,29 +191,155 @@ the `cloudasset`, `monitoring`, and `cloudbilling` APIs enabled. Without billing
 scan still runs and prices from the embedded table. Without monitoring access it still
 runs; only metric-dependent rules skip, each explaining why.
 
-### Scanning offline
+### Scan artifacts
 
-Both offline paths make no API calls and need no credentials — useful for testing rules, CI,
-and reproducing a scan someone else ran. `--fixture` takes Cloud Asset Inventory JSON shaped
-`{"assets": [ ... ]}`:
+A scan is not just a table on stdout. Every `tellury scan` (online or offline, real or
+fixture) leaves a directory of artifacts behind, so a run you cannot watch still records
+what it saw and found. The directory defaults to `tellury-out/` and the artifacts land in a
+per-scan, timestamped subdirectory, so consecutive runs never silently overwrite each
+other:
+
+```
+tellury-out/
+  projects-my-project-20260807T123456.789012345Z/
+    graph-projects-my-project.json       # replayable graph snapshot
+    findings-projects-my-project.json    # the scan report, as JSON
+    report-projects-my-project.html      # self-contained HTML report
+```
+
+Change the base directory with `--out-dir`:
+
+```bash
+tellury scan --gcp-project my-project --out-dir ./reports/
+```
+
+The three files are:
+
+- **`graph-<scope>.json`** — the enriched graph snapshot. It is written by the exact same
+  serializer `--cache-file` uses, so the artifact directory is directly replayable:
+  `tellury scan --cache-file tellury-out/<scope>-<stamp>/graph-<scope>.json` reproduces the
+  scan's full-fidelity graph, metric-dependent rules included, with zero API calls. The
+  snapshot carries its own scope, so a pure replay needs no `--gcp-project`.
+- **`findings-<scope>.json`** — the scan report (findings, totals, scope,
+  `metrics_blocked`) in the same shape `--format json` prints, saved to disk.
+- **`report-<scope>.html`** — a **self-contained** HTML report. All CSS is inlined, there
+  is no JavaScript, no CDN reference, and no runtime network fetch: an operator can open it
+  on an air-gapped machine, email it, or attach it to a ticket and it renders identically.
+
+The HTML report has two parts:
+
+1. A **collapsible hierarchy** built from the graph's container nodes and containment
+   edges. Waste rolls **up**: each organization, folder, and project branch shows the sum
+   of everything beneath it, so a folder-sized or organization-wide scan surfaces where
+   the money is without scrolling a flat list. Expand a branch to walk down to the
+   individual findings.
+2. A **top-findings table**, ordered by monthly waste, where each row carries the evidence
+   behind its figure — including the **price provenance** (which of `--price-file` / live
+   API / embedded table answered each SKU). The same scan renders a byte-identical report,
+   and every value that came from a cloud API is HTML-escaped, so a hostile resource name
+   cannot turn the report into an attack surface.
+
+### Offline mode
+
+Both offline paths make no API calls and need no credentials. **The two paths have
+different fidelity, and tellury says so explicitly at the end of every offline scan.**
+
+#### `--fixture`: raw Cloud Asset Inventory (topology only)
+
+`--fixture` takes a captured Cloud Asset Inventory export — raw assets with their resource
+payloads, but **no metric series**. It is the closest the offline world gets to a live
+ingestion: it runs the full normalization, edge extraction, and hierarchy pass, so every
+topology-based rule (`detached_disk`, `unused_reserved_ip`) can evaluate. The
+metric-dependent rules (`underutilized_instance`, `no_lifecycle_policy`) **cannot** — they
+need Cloud Monitoring series that a raw CAI export does not carry.
+
+tellury does not let this look like "no waste". At the end of a fixture run, the report
+states explicitly which rules could not be evaluated for lack of metrics:
 
 ```bash
 tellury scan --gcp-project my-project --fixture assets.json
-
-# --cache-file writes a snapshot on a miss and replays it on a hit. A graph
-# already written by an earlier run carries its own scope, so a pure replay
-# needs no --gcp-project/--gcp-folder/--gcp-organization at all.
-tellury scan --cache-file snapshot.json
 ```
 
 ```
-RESOURCE                      RULE                      MONTHLY WASTE
-disk/pd-standard-01           detached_disk                     $8.00
-------------------------------------------------------------------
-TOTAL                         1 findings                        $8.00
+No waste found in projects/my-project (1 resources, 4 rules).
+
+2 rule(s) could not be evaluated for lack of metric data: no_lifecycle_policy, underutilized_instance
+(use --cache-file from a live `scan` or an enriched `graph export` to evaluate them)
 ```
 
-Machine-readable output, with per-finding evidence and the inputs behind each cost:
+The JSON report carries the same information under `metrics_blocked`. A fixture run still
+writes the artifact directory (including the HTML report), and its findings JSON and HTML
+carry the same `metrics_blocked` honesty.
+
+#### `--cache-file`: full-fidelity graph snapshot
+
+`--cache-file` reads or writes a **graph snapshot** — the same in-memory graph `scan`
+builds, serialized AFTER enrichment, with every node's `Metrics` map (p95 values, sample
+counts, coverage, window bounds). A replay therefore has full fidelity: **every rule can
+evaluate**, metric-dependent ones included, exactly as if the live scan were rerun.
+
+```bash
+# First run: live scan, graph with metrics written back.
+tellury scan --gcp-project my-project --cache-file snap.json
+
+# Later runs: graph replayed verbatim — zero API calls, same rules, same data.
+tellury scan --cache-file snap.json
+```
+
+A graph snapshot written by `scan` also carries its own scope, so a pure replay needs no
+`--gcp-project`/`--gcp-folder`/`--gcp-organization` at all. And a replay writes its own
+artifact directory the same way an online scan does — the graph goes back out under the
+new run's timestamp, alongside fresh findings and HTML.
+
+#### Capturing your own fixture
+
+To produce the exact CAI shape `--fixture` accepts, run `gcloud asset search-all-resources`
+from the SDK it ships with (`gcloud` CLI uses the same Cloud Asset Inventory
+`SearchAllResources` RPC tellury's live path calls). The command below captures every asset
+type the shipped rules request, with the full versioned resource payload, and writes a
+plain JSON array that `tellury scan --fixture` consumes **without any hand-editing**:
+
+```bash
+gcloud asset search-all-resources \
+  --scope=projects/MY_PROJECT \
+  --asset-types=compute.googleapis.com/Instance,compute.googleapis.com/Disk,compute.googleapis.com/Snapshot,compute.googleapis.com/Address,compute.googleapis.com/Network,storage.googleapis.com/Bucket \
+  --read-mask='*' \
+  --format=json \
+  > cai-assets.json
+```
+
+The captured file is a bare JSON array of `ResourceSearchResult` objects — exactly what
+tellury's fixture reader accepts (it folds `versionedResources` onto the `RawAsset` shape
+its live `SearchAllResources` path uses, so normalization treats the capture identically).
+The `--read-mask='*'` is **mandatory**: without it the payload drops the versioned resource
+fields the normalizers read, and every asset would come through as an empty-shell node.
+
+To capture a folder or organization instead of a project, replace
+`--scope=projects/MY_PROJECT` with `--scope=folders/123` or
+`--scope=organizations/456`.
+
+**Do not confuse a CAI fixture with a graph snapshot.** The `gcloud` command above captures
+raw inventory; a `tellury graph export` (below) writes an enriched graph that carries metric
+series and drives every rule. Prefer `graph export` when you need full fidelity offline.
+
+### `graph export`: full-fidelity snapshot
+
+`graph export` ingests a scope **exactly as `scan` does** — including Cloud Monitoring
+enrichment — and writes the resulting graph as a version-2 JSON snapshot. The output is
+what `scan --cache-file` replays verbatim, so **every rule, metric-dependent included, can
+fire on the replay**.
+
+```bash
+tellury graph export --gcp-project my-project --out graph.json
+tellury scan --cache-file graph.json
+```
+
+Enrichment is on by default. If you only need topology (you are debugging edges, or the
+monitoring API is unreachable), pass `--no-enrich-metrics` to write a snapshot whose replay
+will state metric-dependent rules as "could not be evaluated for lack of metric data" —
+the same explicit honesty the fixture path uses.
+
+### Machine-readable output
 
 ```bash
 tellury scan --gcp-project my-project --fixture assets.json --format json
@@ -210,7 +358,9 @@ Useful flags:
 | `--at` | Pin the evaluation instant (RFC3339) so age predicates are reproducible |
 | `--window` | Metric lookback in days (7–30, default 14) |
 | `--cache-file` | Replay a graph from disk, or write one on first run — zero API calls on a hit |
+| `--fixture` | Read raw CAI assets from local JSON (topology-only; metric rules stated as unevaluated) |
 | `--price-file` | Override the embedded price table |
+| `--out-dir` | Directory to write scan artifacts into (created if absent; default `tellury-out/`) |
 
 Exit codes: `0` clean, `3` findings present (disable with `--fail-on-findings=false`),
 non-zero otherwise on error.
@@ -229,7 +379,7 @@ pkg/pricing/        price tables, machine catalogue, cost math
 pkg/rules/          engine, registry, findings, skip accounting
 pkg/rules/compiler/ declarative-rule compiler layer
 pkg/rules/gcp/      the GCP rule implementations
-pkg/output/         table, JSON, and CSV renderers
+pkg/output/         table, JSON, CSV, and HTML renderers
 ```
 
 ## Known issues
@@ -239,9 +389,12 @@ None affect a scan's results.
 - **Multi-failure error text is dense.** When more than one metric fetch fails, the failures
   are joined with `errors.Join` — each stays individually inspectable via `errors.Is` — but
   they render as a single flat line rather than one per failure.
-- **Only the first `--fixture` shape is supported.** Fixtures must match Cloud Asset
-  Inventory's resource JSON. A fixture hand-written from documentation rather than captured
-  from the API will normalize to a node with empty attributes rather than failing loudly.
+- **A raw CAI fixture can only evaluate topology rules.** This is by design and stated
+  explicitly at the end of every fixture run (see [Offline mode](#offline-mode)). Use
+  `--cache-file` or `graph export` for full-fidelity offline evaluation.
+- **The HTML report needs `--out-dir`.** Terminal-only output still works without it (the
+  directory is created only so nothing aborts mid-scan), but the report lives there; a CI
+  job that wants the HTML must point `--out-dir` at something it can collect.
 
 ## Changelog
 

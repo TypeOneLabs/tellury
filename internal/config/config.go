@@ -34,6 +34,11 @@ const (
 	DefaultWindowDays = 14
 )
 
+// DefaultOutDir is the directory a scan writes its artifacts into when
+// --out-dir is not given. Created on demand; a scan chooses not to scatter
+// files across the working directory.
+const DefaultOutDir = "tellury-out"
+
 // Scan is the fully-resolved `tellury scan` configuration.
 type Scan struct {
 	Project      string
@@ -55,6 +60,7 @@ type Scan struct {
 	Fixture   []string
 	PriceFile string
 
+	OutDir         string
 	FailOnFindings bool
 	ExplainSkips   bool
 }
@@ -111,6 +117,10 @@ func (c *Scan) Validate() error {
 	}
 	if c.MinWaste < 0 {
 		return fmt.Errorf("invalid --min-waste %.2f (want >= 0)", c.MinWaste)
+	}
+
+	if c.OutDir == "" {
+		c.OutDir = DefaultOutDir
 	}
 
 	c.Rules = cleanList(c.Rules)

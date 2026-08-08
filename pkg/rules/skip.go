@@ -79,4 +79,11 @@ const (
 	// SkipInternalAddress: the address is INTERNAL, and internal addresses
 	// are free — not waste.
 	SkipInternalAddress SkipCode = "internal_address"
+	// SkipManagedByMIG: the instance belongs to a managed instance group,
+	// which owns the member's size and count. GCP marks MIG members with the
+	// `created-by` instance metadata item naming an instanceGroupManagers
+	// resource; recommending a resize for one member is advice an operator
+	// cannot act on, and the group's own sizing is a separate concern with
+	// its own rules.
+	SkipManagedByMIG SkipCode = "managed_by_mig"
 )

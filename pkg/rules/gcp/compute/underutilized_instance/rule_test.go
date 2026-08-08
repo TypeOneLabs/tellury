@@ -9,6 +9,7 @@ import (
 	"github.com/TypeOneLabs/tellury/pkg/metrics"
 	"github.com/TypeOneLabs/tellury/pkg/pricing"
 	"github.com/TypeOneLabs/tellury/pkg/rules"
+	gcprules "github.com/TypeOneLabs/tellury/pkg/rules/gcp"
 )
 
 // fakePricer prices exactly one catalog machine type so instanceMonthlyCost
@@ -119,5 +120,95 @@ func TestEval_NoSmallerSize_NoDoubleCounting(t *testing.T) {
 	}
 	if f.MonthlyWasteUSD <= 0 {
 		t.Errorf("expected positive MonthlyWasteUSD, got %v", f.MonthlyWasteUSD)
+	}
+}
+
+// TestEval_SkipMIGMember asserts that an instance whose `created-by` metadata
+// item resolves to an instanceGroupManagers resource (i.e. a managed instance
+// group member) is skipped with the distinct SkipManagedByMIG reason, and
+// produces NO finding. A MIG owns its members' size and count; recommending a
+// resize for one member is advice an operator cannot act on.
+func TestEval_SkipMIGMember(t *testing.T) {
+	now := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	g := graph.New()
+	n := buildNode(now)
+	// Real CAI shape for a MIG member's created-by metadata: a creator
+	// self-link that resolves to an instanceGroupManagers resource.
+	n.SetAttr(gcprules.AttrCreatedBy,
+		"projects/p/zones/us-central1-a/instanceGroupManagers/web-mig")
+	if err := g.AddNode(n); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	g.Freeze()
+
+	skipCounts := map[rules.SkipCode]int{}
+	p := &rules.Pass{
+		Graph: g,
+		Price: fakePricer{sku: "n1-standard-4", unit: 0.5},
+		Sizer: nil,
+		Now:   now,
+		Skip: func(ruleID string, id graph.Ref, code rules.SkipCode) {
+			skipCounts[code]++
+		},
+	}
+
+	findings, err := rule{}.Eval(context.Background(), p)
+	if err != nil {
+		t.Fatalf("Eval returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("want 0 findings for a MIG member, got %d (%+v)", len(findings), findings)
+	}
+	if got := skipCounts[rules.SkipManagedByMIG]; got != 1 {
+		t.Fatalf("SkipManagedByMIG recorded %d times, want exactly 1 (this instance is a MIG member)", got)
+	}
+	// No other reason may fire for a clean MIG member.
+	for code, count := range skipCounts {
+		if code != rules.SkipManagedByMIG {
+			t.Errorf("unexpected skip reason %q recorded %d times; a MIG member must be skipped solely by SkipManagedByMIG", code, count)
+		}
+	}
+}
+
+// TestEval_NonMIG_EvaluatesNormally asserts that an instance with NO
+// `created-by` MIG marker still evaluates normally: it is NOT skipped by
+// SkipManagedByMIG and, with no Sizer, reaches the no-candidate stop/delete
+// branch and emits a Finding (the same behavior as a plain instance).
+func TestEval_NonMIG_EvaluatesNormally(t *testing.T) {
+	now := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	g := graph.New()
+	n := buildNode(now)
+	// No created-by MIG marker: this is a standalone instance. For good
+	// measure an unrelated created-by value must NOT trigger the skip.
+	n.SetAttr(gcprules.AttrCreatedBy,
+		"projects/p/zones/us-central1-a/instances/web-0")
+	if err := g.AddNode(n); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	g.Freeze()
+
+	skipCounts := map[rules.SkipCode]int{}
+	p := &rules.Pass{
+		Graph: g,
+		Price: fakePricer{sku: "n1-standard-4", unit: 0.5},
+		Sizer: nil, // no Sizer => no candidate => stop/delete finding
+		Now:   now,
+		Skip: func(ruleID string, id graph.Ref, code rules.SkipCode) {
+			skipCounts[code]++
+		},
+	}
+
+	findings, err := rule{}.Eval(context.Background(), p)
+	if err != nil {
+		t.Fatalf("Eval returned error: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("want 1 finding for a non-MIG instance, got %d (%+v)", len(findings), findings)
+	}
+	if f := findings[0]; f.ResourceID != n.ID {
+		t.Fatalf("finding for wrong resource: %s", f.ResourceID)
+	}
+	if got := skipCounts[rules.SkipManagedByMIG]; got != 0 {
+		t.Errorf("SkipManagedByMIG recorded %d times for a non-MIG instance; want 0", got)
 	}
 }

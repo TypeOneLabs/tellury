@@ -7,12 +7,14 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/TypeOneLabs/tellury/pkg/graph"
 	"github.com/TypeOneLabs/tellury/pkg/metrics"
 	"github.com/TypeOneLabs/tellury/pkg/pricing"
 	"github.com/TypeOneLabs/tellury/pkg/rules"
+	gcprules "github.com/TypeOneLabs/tellury/pkg/rules/gcp"
 )
 
 // ID is the stable rule identifier.
@@ -30,6 +32,17 @@ const (
 	MinCandidateVCPU   = 1.0
 	MinCandidateMemGiB = 1.0
 )
+
+// migCreatedByMarker is the substring a managed instance group's `created-by`
+// metadata item names when it points at an instanceGroupManagers resource:
+//
+//	"projects/<p>/zones/<z>/instanceGroupManagers/<name>"
+//
+// The marker match is substring-based on the resource-type segment because the
+// CREATED_BY metadata value is a creator self-link whose exact path prefix
+// differs by API version and zone vs. region placement; what is stable across
+// every spelling is that it RESOLVES to an instanceGroupManagers resource.
+const migCreatedByMarker = "instanceGroupManagers"
 
 func init() { rules.Register(rule{}) }
 
@@ -72,6 +85,20 @@ func (rule) Eval(ctx context.Context, p *rules.Pass) ([]rules.Finding, error) {
 		// P0: exemption label.
 		if n.Labels["tellury-exempt"] == "true" {
 			p.SkipNode(ID, n.ID, rules.SkipExemptLabel)
+			return true
+		}
+
+		// P0.5: managed instance group member. GCP marks a MIG member with
+		// the `created-by` instance metadata item, whose value is a creator
+		// self-link that resolves to an instanceGroupManagers resource. A MIG
+		// owns its members' size and count; recommending a resize for one
+		// member is advice an operator cannot act on, and the group's own
+		// sizing is a separate concern with its own rules later. Distinct
+		// skip reason so `--explain-skips` shows these separately from other
+		// skips ("12 instances skipped: managed by a MIG").
+		if createdBy, ok := n.Str(gcprules.AttrCreatedBy); ok &&
+			strings.Contains(createdBy, migCreatedByMarker) {
+			p.SkipNode(ID, n.ID, rules.SkipManagedByMIG)
 			return true
 		}
 

@@ -1,5 +1,9 @@
+# Build output. The module is named tellury, so `go build` drops the binary here;
+# `go build -o tellury-bin` and friends land alongside it.
 /tellury
+/tellury-*
 *.test
 *.out
 .DS_Store
 graphify-out/
+tellury-out/
