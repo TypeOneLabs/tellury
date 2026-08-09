@@ -8,6 +8,18 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
+### Fixed
+
+- `old_snapshot` priced snapshots against their source disk's size rather than the
+  incremental, deduplicated bytes Google actually bills. Measured against a real
+  organization it overstated snapshot waste by about 9x — $7.28/month reported against
+  $0.82 of real storage — and the error was not a constant factor that a rate could absorb:
+  the billable fraction ranged from 15% of the source disk down to 0%. A fully deduplicated
+  snapshot occupies no billable bytes and is now correctly worth nothing rather than being
+  reported as waste. Snapshots now carry `storage_bytes` as their billable size, with
+  `source_disk_size_gb` kept alongside as evidence because it is the figure the console
+  shows.
+
 ## [0.1.1] — 2026-08-09
 
 Reporting, a rewritten rule interface, and a contributor on-ramp. No breaking changes to

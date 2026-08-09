@@ -88,10 +88,17 @@ func (rule) Guards() []rules.Guard {
 				nc.Set("created_at", createdAt)
 				return true
 			}},
-		{Name: "size_gb_positive", SkipCode: rules.SkipMissingAttr,
+		{Name: "billable_bytes_present", SkipCode: rules.SkipMissingAttr,
 			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
-				v, ok := n.Num("size_gb")
-				return ok && v > 0
+				// Absent means the payload was not parsed. Present-but-zero is
+				// a real and common state — a snapshot fully deduplicated
+				// against the rest of its chain occupies no billable bytes —
+				// and it is not an error, it is simply worth nothing. It falls
+				// out below the minimum-waste floor rather than being skipped
+				// here, so `--explain-skips` reports it as immaterial rather
+				// than as missing data.
+				_, ok := n.Num("storage_bytes")
+				return ok
 			}},
 		{Name: "old_enough", SkipCode: rules.SkipTooYoung,
 			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
@@ -105,11 +112,14 @@ func (rule) Guards() []rules.Guard {
 }
 
 func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *rules.Pass) ([]rules.CostBranch, error) {
-	// Snapshot storage bills a flat per-GiB-month rate. size_gb is the source
-	// disk's size at snapshot time (diskSizeGb) — the figure the snapshot UI
-	// shows and the price table bills against. The whole cost is waste; there
-	// is no partial component to subtract.
-	sizeGB, _ := n.Num("size_gb")
+	// Snapshot storage bills a flat per-GiB-month rate on storage_bytes: the
+	// incremental, compressed bytes the snapshot occupies after deduplication
+	// against the rest of its chain. NOT the source disk's size — measured
+	// against a real organization those differed by ~9x, and the ratio ranged
+	// from 15% to 0% per snapshot, so no rate adjustment could stand in for
+	// it. The whole cost is waste; there is no partial component to subtract.
+	sizeGB, _ := n.Num("storage_bytes")
+	sizeGB /= 1 << 30
 	region := pricing.RegionOf(n.Location)
 	unit, resolvedRegion, err := p.Price.UnitPrice(pricing.KindSnapshotStorage, "gcp", SnapshotStorageSKU, region)
 	if err != nil {
@@ -142,7 +152,10 @@ func (rule) MinWasteUSD() float64 { return MinMonthlyWasteUSD }
 // age_days, the unit price, the price source — is computed and rendered by
 // ExtraEvidence.
 func (rule) EvidenceKeys() []string {
-	return []string{"size_gb", "creation_timestamp"}
+	// source_disk_size_gb is surfaced alongside the billable bytes because it
+	// is the number the console shows, so a reader comparing tellury's figure
+	// against the UI can see immediately why they differ.
+	return []string{"storage_bytes", "source_disk_size_gb", "creation_timestamp"}
 }
 
 func (rule) ExtraEvidence(n *graph.Node, nc *rules.NodeContext, branch rules.CostBranch) []rules.Evidence {

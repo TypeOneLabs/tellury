@@ -44,6 +44,8 @@ const (
 	AttrStatus                = gcprules.AttrStatus
 	AttrResourceID            = gcprules.AttrResourceID
 	AttrSizeGB                = gcprules.AttrSizeGB
+	AttrStorageBytes          = gcprules.AttrStorageBytes
+	AttrSourceDiskSizeGB      = gcprules.AttrSourceDiskSizeGB
 	AttrDiskType              = gcprules.AttrDiskType
 	AttrDiskSKU               = gcprules.AttrDiskSKU
 	AttrUserCount             = gcprules.AttrUserCount

@@ -13,7 +13,8 @@
           "status": "READY",
           "diskSizeGb": 250,
           "sourceDisk": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/web-db-01",
-          "creationTimestamp": "2023-01-01T00:00:00Z"
+          "creationTimestamp": "2023-01-01T00:00:00Z",
+          "storageBytes": "32212254720"
         }
       }
     },
@@ -29,7 +30,8 @@
           "name": "backup-2024-01-10",
           "status": "READY",
           "diskSizeGb": 120,
-          "creationTimestamp": "2024-01-10T00:00:00Z"
+          "creationTimestamp": "2024-01-10T00:00:00Z",
+          "storageBytes": "15461882265"
         }
       }
     },

@@ -56,9 +56,12 @@ func TestSkillWorkedExample_OldSnapshotScan(t *testing.T) {
 	if !strings.Contains(got, "old_snapshot") {
 		t.Errorf("table output missing the old_snapshot rule column:\n%s", got)
 	}
-	// 250 GiB x $0.026/GiB-month = $6.50/month, exactly (the flat cost).
-	if !strings.Contains(got, "$6.50") {
-		t.Errorf("table output missing the $6.50 monthly waste (250 GiB x $0.026/GiB-month):\n%s", got)
+	// The snapshot bills on storageBytes (30 GiB incremental), NOT on the 250
+	// GiB source disk: 30 x $0.026/GiB-month = $0.78/month. Pricing the source
+	// disk instead would give $6.50 — the defect this asserts against, which
+	// overstated a real organization's snapshot waste by ~9x.
+	if !strings.Contains(got, "$0.78") {
+		t.Errorf("table output missing the $0.78 monthly waste (30 GiB billable x $0.026/GiB-month):\n%s", got)
 	}
 
 	skips := errOut.String()

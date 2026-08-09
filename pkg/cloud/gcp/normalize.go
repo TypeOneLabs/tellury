@@ -332,13 +332,30 @@ func normalizeSnapshot(a *RawAsset, _ pricing.Sizer) (*graph.Node, error) {
 	if ts, ok := strOf(data["creationTimestamp"]); ok && ts != "" {
 		n.SetAttr(AttrCreationTime, ts)
 	}
-	// diskSizeGb is the size of the source disk at snapshot time — the figure
-	// the snapshot UI shows and the price table bills against. storageBytes
-	// (the actual incremental bytes) lags and is byte-precision; v1 prices the
-	// flat diskSizeGb figure, the same simplification detached_disk applies to
-	// sizeGb.
+	// storageBytes is what Google bills a snapshot on: the incremental,
+	// compressed bytes it actually occupies after deduplication against the
+	// rest of its chain. diskSizeGb is the size of the SOURCE DISK at snapshot
+	// time, which is a different and much larger number — measured against a
+	// real organization it ran ~9x high, and the ratio varied from 15% down to
+	// 0% per snapshot, so it is not a constant factor that a rate could absorb.
+	// A fully deduplicated snapshot has storageBytes 0 and costs nothing.
+	//
+	// storage_bytes is written ONLY when the payload carried it. This is the
+	// opposite of the unconditional-write convention used for user_count and
+	// provisioned_iops, and deliberately so: for those, absent genuinely means
+	// zero. Here it does not. A snapshot with zero billable bytes is a real,
+	// free snapshot; a snapshot whose payload never parsed is unknown, and the
+	// rule must refuse to price it rather than call it free. Collapsing both
+	// to 0 would make an unreadable payload look like a $0 finding.
+	//
+	// diskSizeGb is kept as evidence because it is the figure the console
+	// shows, which explains any discrepancy to a reader — but it must never be
+	// the basis for a price.
+	if storageBytes, ok := numOf(data["storageBytes"]); ok {
+		n.SetAttr(AttrStorageBytes, storageBytes)
+	}
 	size, _ := numOf(data["diskSizeGb"])
-	n.SetAttr(AttrSizeGB, size)
+	n.SetAttr(AttrSourceDiskSizeGB, size)
 	return n, nil
 }
 

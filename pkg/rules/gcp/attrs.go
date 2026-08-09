@@ -17,6 +17,12 @@ const (
 	AttrProvisionedThroughput = "provisioned_throughput_mbps"
 	AttrArchitecture          = "architecture"
 
+	// Snapshot sizes. storage_bytes is the incremental, deduplicated size
+	// Google bills against; source_disk_size_gb is the source disk's size at
+	// snapshot time, which the console displays but nothing should price.
+	AttrStorageBytes     = "storage_bytes"
+	AttrSourceDiskSizeGB = "source_disk_size_gb"
+
 	AttrInstanceID        = "instance_id"
 	AttrMachineType       = "machine_type"
 	AttrMachineFamily     = "machine_family"

@@ -36,8 +36,12 @@ func (f fakePricer) MonthlyCost(it pricing.Item) (float64, error) {
 	return unit * it.Quantity, nil
 }
 
-// snapshotNode builds a snapshot node with the two attributes the rule reads.
-func snapshotNode(sizeGB float64, createdAt string) *graph.Node {
+// snapshotNode builds a snapshot node. gib is the BILLABLE size — the
+// incremental bytes Google charges for — not the source disk's size. The
+// helper also writes a deliberately much larger source_disk_size_gb, so any
+// test that accidentally prices the disk instead of the billable bytes
+// produces an obviously wrong number rather than a plausible one.
+func snapshotNode(gib float64, createdAt string) *graph.Node {
 	n := &graph.Node{
 		ID:       graph.Ref("//compute.googleapis.com/projects/p/global/snapshots/s1"),
 		Kind:     graph.KindSnapshot,
@@ -45,7 +49,8 @@ func snapshotNode(sizeGB float64, createdAt string) *graph.Node {
 		Project:  "p",
 		Location: "us-central1",
 	}
-	n.SetAttr("size_gb", sizeGB)
+	n.SetAttr("storage_bytes", gib*(1<<30))
+	n.SetAttr("source_disk_size_gb", gib*10)
 	n.SetAttr("creation_timestamp", createdAt)
 	return n
 }
@@ -112,8 +117,8 @@ func TestEval_OldSnapshot_Fires(t *testing.T) {
 	for _, e := range f.Evidence {
 		byKey[e.Key] = e.Value
 	}
-	if byKey["size_gb"] != "250" {
-		t.Errorf("evidence size_gb = %q, want 250", byKey["size_gb"])
+	if byKey["source_disk_size_gb"] != "2500" {
+		t.Errorf("evidence source_disk_size_gb = %q, want 2500", byKey["source_disk_size_gb"])
 	}
 	if byKey["creation_timestamp"] != createdAt.Format(time.RFC3339) {
 		t.Errorf("evidence creation_timestamp = %q, want %q", byKey["creation_timestamp"], createdAt.Format(time.RFC3339))
@@ -170,18 +175,45 @@ func TestEval_YoungSnapshot_Skips(t *testing.T) {
 	}
 }
 
-// TestEval_MissingSize_Skips: a snapshot with no diskSizeGb has no billable
-// size the rule can price; the rule refuses to guess.
+// TestEval_MissingSize_Skips: a payload that never produced storage_bytes has
+// no billable size the rule can price, and the rule refuses to guess. This is
+// distinct from a snapshot whose billable size is genuinely zero, below.
 func TestEval_MissingSize_Skips(t *testing.T) {
 	createdAt := now.AddDate(0, 0, -120)
-	n := snapshotNode(0, createdAt.Format(time.RFC3339)) // size_gb absent -> written as 0
+	n := snapshotNode(0, createdAt.Format(time.RFC3339))
+	delete(n.Attrs, "storage_bytes") // payload not parsed, not "free"
 	findings, skips := runEval(t, n, 0.026)
 
 	if len(findings) != 0 {
-		t.Fatalf("want 0 findings without a size, got %+v", findings)
+		t.Fatalf("want 0 findings without a billable size, got %+v", findings)
 	}
 	if skips[rules.SkipMissingAttr] != 1 {
 		t.Errorf("want SkipMissingAttr recorded once, got %+v", skips)
+	}
+}
+
+// TestEval_FullyDeduplicatedSnapshot_CostsNothing pins the case that exposed
+// the original defect. A snapshot fully deduplicated against the rest of its
+// chain occupies zero billable bytes and costs nothing, even though its source
+// disk was large — a real organization had exactly this: a 10 GiB source disk
+// with storageBytes 0, which the rule used to report as $0.26/month of waste.
+//
+// It must skip as immaterial, NOT as missing data: the payload parsed fine and
+// the answer is simply "this is free".
+func TestEval_FullyDeduplicatedSnapshot_CostsNothing(t *testing.T) {
+	createdAt := now.AddDate(0, 0, -120)
+	n := snapshotNode(0, createdAt.Format(time.RFC3339)) // storage_bytes 0, source disk 0*10
+	n.SetAttr("source_disk_size_gb", 10.0)               // large source, nothing billable
+	findings, skips := runEval(t, n, 0.026)
+
+	if len(findings) != 0 {
+		t.Fatalf("a fully deduplicated snapshot is free; want 0 findings, got %+v", findings)
+	}
+	if skips[rules.SkipMissingAttr] != 0 {
+		t.Errorf("zero billable bytes is parsed data, not missing data; got %+v", skips)
+	}
+	if skips[rules.SkipBelowMinWaste] != 1 {
+		t.Errorf("want SkipBelowMinWaste recorded once, got %+v", skips)
 	}
 }
 
