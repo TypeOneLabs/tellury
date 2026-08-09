@@ -8,10 +8,10 @@ graph, and evaluates deterministic rules against it. Every finding carries the e
 behind it and a dollar figure.
 
 > **Status: early development.** Live GCP scanning works — Cloud Asset Inventory, Cloud
-> Monitoring, and Cloud Billing are wired against the official SDKs. Four rules ship, and a
+> Monitoring, and Cloud Billing are wired against the official SDKs. Five rules ship, and a
 > scan writes a directory of artifacts (graph snapshot, findings JSON, self-contained HTML
-> report); `--out-dir` and the HTML report landed after v0.1.0 and are not in a release yet.
-> Expect rough edges, and see [What works today](#what-works-today) for the boundary.
+> report). Expect rough edges, and see [What works today](#what-works-today) for the
+> boundary.
 
 ## Quick start
 

@@ -8,6 +8,57 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-08-09
+
+Reporting, a rewritten rule interface, and a contributor on-ramp. No breaking changes to
+the CLI; scans produce the same findings they did in 0.1.0.
+
+### Added
+
+- A scan writes a directory of artifacts instead of only printing to the terminal.
+  `--out-dir` (default `tellury-out/`) receives a timestamped subdirectory holding the graph
+  snapshot, findings JSON, and a self-contained HTML report. The graph replays through
+  `--cache-file`, so a scan is reproducible offline.
+- The HTML report renders the resource hierarchy as a collapsible tree with waste rolled up
+  per organization, folder and project, above a table of the largest findings with price
+  provenance. No network access is needed to view it.
+- `old_snapshot` — persistent disk snapshots older than the retention window.
+- A contributor skill at `.claude/skills/write-a-tellury-rule/`, walking through the rule
+  interface, registration, the skip-code vocabulary, and a required mutation check: break
+  the condition your rule detects, watch the test fail, restore it.
+- A `PROJECT` column in table output for scans spanning more than one project, and a
+  coverage report naming rules that could not be evaluated for lack of metrics.
+
+### Changed
+
+- Rules implement `NodeRule`, and the engine owns the evaluation skeleton — node iteration,
+  the `tellury-exempt` check, ordered guards each carrying a typed skip code, the
+  minimum-waste floor, and Finding construction. A rule supplies only what is specific to
+  it. `Cost` returns a slice of branches, so a rule can offer a rightsizing delta and a
+  stop/delete fallback and let the engine pick; a per-node context carries values computed
+  in a guard through to cost and evidence. The previous `Rule` interface remains for rules
+  that must reason across nodes.
+- All four shipped rules were converted with identical output — same findings, same skip
+  codes, same confidence.
+- `underutilized_instance` skips instances managed by an instance group. A MIG owns its
+  members' sizing, so per-member advice is not actionable.
+
+### Fixed
+
+- Static IP pricing never matched the live Cloud Billing Catalog: the catalog indexed the
+  SKU as `external-static` while the rule queried `unattached`, so every static IP silently
+  resolved from the embedded fallback table with provenance reading `embedded`.
+- The HTML report's hierarchy total disagreed with the findings total in two directions —
+  containers outside the scanned scope root were dropped, and a project reachable from two
+  folders was counted twice. Both are now pinned by one invariant test.
+- Table output no longer collides the `PROJECT` and `RULE` columns when a project ID fills
+  or exceeds the column width.
+
+### Removed
+
+- `pkg/rules/compiler`, an unused 914-line scaffold for a declarative rule format that was
+  evaluated and not adopted. Nothing imported it and no test covered it.
+
 ## [0.1.0] — 2026-08-07
 
 First release. GCP only.
@@ -76,11 +127,11 @@ First release. GCP only.
 
 - GCP only. The provider seam exists — a provider declares its own scope flags and
   environment variables — but AWS and Azure are not implemented.
-- Rules are native Go packages implementing the `NodeRule` interface; there is no separate
-  declarative rule language to compile.
+- Rules are native Go packages; there is no declarative rule language.
 - Fixtures must match Cloud Asset Inventory's real resource JSON. A fixture written from
   documentation rather than captured from the API normalizes to a node with empty
   attributes rather than failing loudly.
 
-[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/TypeOneLabs/tellury/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/TypeOneLabs/tellury/releases/tag/v0.1.0
