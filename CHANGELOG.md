@@ -76,8 +76,8 @@ First release. GCP only.
 
 - GCP only. The provider seam exists — a provider declares its own scope flags and
   environment variables — but AWS and Azure are not implemented.
-- Rules are Go packages. `pkg/rules/compiler` is the seam for declarative rules; it is not
-  finished.
+- Rules are native Go packages implementing the `NodeRule` interface; there is no separate
+  declarative rule language to compile.
 - Fixtures must match Cloud Asset Inventory's real resource JSON. A fixture written from
   documentation rather than captured from the API normalizes to a node with empty
   attributes rather than failing loudly.

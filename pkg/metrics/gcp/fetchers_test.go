@@ -43,9 +43,9 @@ func TestRunFetchJobs_IsolatesPerJobFailures(t *testing.T) {
 // job that must still run.
 func TestRunFetchJobs_NoCancelOnSiblingErrRegression(t *testing.T) {
 	var (
-		failed      atomic.Int32
-		sawHealthy  atomic.Bool
-		runsSeen    atomic.Int32
+		failed     atomic.Int32
+		sawHealthy atomic.Bool
+		runsSeen   atomic.Int32
 	)
 
 	worker := func(ctx context.Context, j fetchJob) error {
@@ -93,8 +93,8 @@ func TestRunFetchJobs_NoCancelOnSiblingErrRegression(t *testing.T) {
 // just the first — must stay inspectable.
 func TestRunFetchJobs_JoinedErrorsInspectable(t *testing.T) {
 	var (
-		errFirst  = errors.New("second-job sentinel failure")
-		errLast   = errors.New("last-job sentinel failure")
+		errFirst            = errors.New("second-job sentinel failure")
+		errLast             = errors.New("last-job sentinel failure")
 		failFirst, failLast bool
 	)
 	worker := func(_ context.Context, j fetchJob) error {

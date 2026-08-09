@@ -56,10 +56,14 @@ want to replay it. Dependencies are chosen on merit — the official provider SD
 auth, retries, pagination, and regional endpoints properly, and reimplementing that
 badly isn't a virtue.
 
-**Rules as a compilable surface.** Rules are ordinary Go packages behind a small
-interface, and there's a rule-compiler layer (`pkg/rules/compiler`) designed so that
-rules can eventually be expressed declaratively and compiled into execution passes —
-rather than every new check requiring a code change and a release.
+**Rules as a compilable surface.** Rules are native Go packages implementing the
+`NodeRule` interface — `Meta`, `Kind`, ordered `Guards`, `Cost`, `MinWasteUSD`, and the
+evidence hooks — compiled by the ordinary Go toolchain, no code generation. The engine
+owns the evaluation skeleton (the exempt-label check, typed skip accounting, the
+minimum-waste floor, finding construction), so a rule is just the decisions: what to
+detect, how to price it, and how to say why it was skipped. Writing one is a short,
+well-trodden path — see [Contributing](#contributing) and the contributor skill at
+`.claude/skills/write-a-tellury-rule/`, which walks a complete new rule end to end.
 
 The long-term target is multi-cloud. GCP is implemented first because Cloud Asset
 Inventory gives a whole-scope inventory in one API surface.
@@ -105,8 +109,6 @@ Not there yet:
 - **AWS and Azure.** The provider seam exists — a provider declares its own scope flags
   and environment variables — but only GCP is implemented.
 - **Rules beyond the initial four.** The engine is built for many more.
-- **Declarative rules.** `pkg/rules/compiler` is the seam for compiling rules from a
-  specification rather than writing Go; it isn't finished.
 
 ### Rules
 
@@ -377,7 +379,6 @@ pkg/cloud/gcp/      GCP ingestion, normalization, asset types, hierarchy
 pkg/metrics/        metric series + client-side percentiles
 pkg/pricing/        price tables, machine catalogue, cost math
 pkg/rules/          engine, registry, findings, skip accounting
-pkg/rules/compiler/ declarative-rule compiler layer
 pkg/rules/gcp/      the GCP rule implementations
 pkg/output/         table, JSON, CSV, and HTML renderers
 ```
@@ -405,7 +406,11 @@ and rule interface may change between minor releases.
 ## Contributing
 
 Rules are the point, and community rules are the reason this is open source — see
-[CONTRIBUTING.md](CONTRIBUTING.md) for what a good rule looks like. No CLA, nothing to sign.
+[CONTRIBUTING.md](CONTRIBUTING.md) for what a good rule looks like. Before you write one,
+run the contributor skill at `.claude/skills/write-a-tellury-rule/`: it teaches the
+`NodeRule` interface method by method, the typed skip-code vocabulary, the registration
+step and its silent-nothing trap, and the mandatory mutation check, with `old_snapshot`
+as a complete worked example already in this repo. No CLA, nothing to sign.
 
 ## License
 

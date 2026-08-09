@@ -20,6 +20,11 @@ const (
 	KindGCSRetrieval   Kind = "gcs_retrieval"
 	KindGCSOpsClassA   Kind = "gcs_ops_class_a"
 	KindStaticIP       Kind = "static_ip"
+	// KindSnapshotStorage is the flat per-GiB-month charge for keeping a
+	// persistent disk snapshot. A snapshot is never "attached" to anything,
+	// so this is an idle, flat cost: it bills every month the snapshot
+	// exists, regardless of whether anything ever restores from it.
+	KindSnapshotStorage Kind = "snapshot_storage"
 )
 
 // HoursPerMonth / DaysPerMonth are the fixed conventions (Invariant I1).

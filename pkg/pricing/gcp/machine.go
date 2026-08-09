@@ -36,7 +36,7 @@ const (
 
 // MachineSpec is the GCP-vocabulary alias over the agnostic shape struct.
 // GCP rules and the normalizer speak pkg/pricing/gcp.MachineSpec directly,
-// while the compiler and the agnostic core address the underlying
+// while the agnostic core (and any non-GCP caller) addresses the underlying
 // pricing.MachineSpec (identical field layout).
 type MachineSpec = pricing.MachineSpec
 
@@ -60,9 +60,9 @@ type familyMeta struct {
 }
 
 type machineCatalogFile struct {
-	Version  string                    `json:"version"`
-	Families map[string]familyMeta     `json:"families"`
-	Types    []pricing.MachineSpec     `json:"types"`
+	Version  string                `json:"version"`
+	Families map[string]familyMeta `json:"families"`
+	Types    []pricing.MachineSpec `json:"types"`
 }
 
 // StaticSizer implements pricing.Sizer from the embedded catalog plus a

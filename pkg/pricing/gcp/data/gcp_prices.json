@@ -72,5 +72,8 @@
   },
   "static_ip": {
     "unattached": {"default": 0.010}
+  },
+  "snapshot_storage": {
+    "standard": {"default": 0.026, "us-central1": 0.026}
   }
 }

@@ -1,7 +1,7 @@
 // Package metrics is the provider-agnostic core of metric enrichment. It owns
 // the shared value types (Sample, Series), the enrichment contracts (Request,
 // Setter, Provider), the client-side percentile, and the cross-cloud set of
-// metric key tokens that rules and the compiler validate against.
+// metric key tokens that rules declare against.
 //
 // It is deliberately GCP-free. Anything that names a concrete GCP concept — a
 // Cloud Monitoring metric type, an alignment period, a monitored-resource
@@ -21,8 +21,8 @@ import (
 //
 // These are cross-cloud identifier tokens (e.g. "cpu_utilization_p95"), NOT
 // cloud metric types; a cloud's metric subpackage maps each token to its own
-// concrete query. Rules and the compiler reference the tokens; the GCP
-// subpackages define the specs.
+// concrete query. Rules reference the tokens; the GCP subpackages define the
+// specs.
 const (
 	KeyCPUUtilizationP95     = "cpu_utilization_p95"
 	KeyCPUUtilizationMean    = "cpu_utilization_mean"
@@ -34,8 +34,9 @@ const (
 )
 
 // knownKeys is the provider-agnostic set of metric-key tokens a rule may
-// reference. It is the single source of truth the compiler (pkg/rules/compiler)
-// validates spec fields against, independent of which cloud's specs are loaded.
+// declare. It is the single source of truth for the cross-cloud metric
+// vocabulary: a rule's RequiredMetrics may only name keys present here,
+// independent of which cloud's specs are loaded.
 var knownKeys = map[string]bool{
 	KeyCPUUtilizationP95:     true,
 	KeyCPUUtilizationMean:    true,

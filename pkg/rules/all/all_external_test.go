@@ -20,12 +20,13 @@ import (
 	// imports hold each rule alive, so removing a blank import from `all` shows
 	// up as a rule that is registered but no longer shipped by `all`.
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/detached_disk"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/old_snapshot"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/underutilized_instance"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/unused_reserved_ip"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/gcs/no_lifecycle_policy"
 
-	_ "github.com/TypeOneLabs/tellury/pkg/rules/all" // what `all` actually ships
 	"github.com/TypeOneLabs/tellury/pkg/rules"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/all" // what `all` actually ships
 )
 
 // importedRulePackages returns the import paths of every rule package that

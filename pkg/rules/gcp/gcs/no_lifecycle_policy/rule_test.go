@@ -64,12 +64,12 @@ func bucketNode(totalBytes float64) *graph.Node {
 	n.SetAttr("storage_class", "STANDARD")
 	n.Metrics = map[string]graph.MetricValue{
 		metrics.KeyBucketTotalBytesMean: {
-			Value:      totalBytes,
-			Unit:       "bytes",
-			Stat:       "mean",
-			WindowDays: 7,
-			Samples:    100,
-			Coverage:   1.0,
+			Value:           totalBytes,
+			Unit:            "bytes",
+			Stat:            "mean",
+			WindowDays:      7,
+			Samples:         100,
+			Coverage:        1.0,
 			ExpectedSamples: 100,
 		},
 	}
@@ -94,7 +94,7 @@ func runEval(t *testing.T, nodes []*graph.Node, pricer pricing.Pricer) ([]rules.
 			skipCounts[code]++
 		},
 	}
-	findings, err := rule{}.Eval(context.Background(), p)
+	findings, err := rules.AdaptNodeRule(rule{}).Eval(context.Background(), p)
 	if err != nil {
 		t.Fatalf("Eval: %v", err)
 	}
@@ -283,12 +283,12 @@ func TestEval_NoMetric_Skips(t *testing.T) {
 func TestEval_InsufficientMetricCoverage_Skips(t *testing.T) {
 	n := bucketNode(float64(100 << 30))
 	n.Metrics[metrics.KeyBucketTotalBytesMean] = graph.MetricValue{
-		Value:          float64(100 << 30),
-		Unit:           "bytes",
-		Stat:           "mean",
-		WindowDays:     7,
-		Samples:        100,
-		Coverage:       0.10, // below the 0.20 gate
+		Value:           float64(100 << 30),
+		Unit:            "bytes",
+		Stat:            "mean",
+		WindowDays:      7,
+		Samples:         100,
+		Coverage:        0.10, // below the 0.20 gate
 		ExpectedSamples: 100,
 	}
 	findings, skips := runEval(t, []*graph.Node{n}, defaultPricer())

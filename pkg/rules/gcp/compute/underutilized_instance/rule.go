@@ -44,7 +44,7 @@ const (
 // every spelling is that it RESOLVES to an instanceGroupManagers resource.
 const migCreatedByMarker = "instanceGroupManagers"
 
-func init() { rules.Register(rule{}) }
+func init() { rules.RegisterNode(rule{}) }
 
 type rule struct{}
 
@@ -74,20 +74,10 @@ type priceableShape struct {
 	comps []rules.PricedComponent
 }
 
-func (rule) Eval(ctx context.Context, p *rules.Pass) ([]rules.Finding, error) {
-	var out []rules.Finding
+func (rule) Kind() graph.ResourceKind { return graph.KindInstance }
 
-	p.Graph.ByKind(graph.KindInstance, func(n *graph.Node) bool {
-		if ctx.Err() != nil {
-			return false
-		}
-
-		// P0: exemption label.
-		if n.Labels["tellury-exempt"] == "true" {
-			p.SkipNode(ID, n.ID, rules.SkipExemptLabel)
-			return true
-		}
-
+func (rule) Guards() []rules.Guard {
+	return []rules.Guard{
 		// P0.5: managed instance group member. GCP marks a MIG member with
 		// the `created-by` instance metadata item, whose value is a creator
 		// self-link that resolves to an instanceGroupManagers resource. A MIG
@@ -96,174 +86,218 @@ func (rule) Eval(ctx context.Context, p *rules.Pass) ([]rules.Finding, error) {
 		// sizing is a separate concern with its own rules later. Distinct
 		// skip reason so `--explain-skips` shows these separately from other
 		// skips ("12 instances skipped: managed by a MIG").
-		if createdBy, ok := n.Str(gcprules.AttrCreatedBy); ok &&
-			strings.Contains(createdBy, migCreatedByMarker) {
-			p.SkipNode(ID, n.ID, rules.SkipManagedByMIG)
-			return true
-		}
+		{Name: "not_mig_member", SkipCode: rules.SkipManagedByMIG,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				createdBy, ok := n.Str(gcprules.AttrCreatedBy)
+				return !ok || !strings.Contains(createdBy, migCreatedByMarker)
+			}},
 
-		// P1: shape valid.
-		machineType, ok := n.Str("machine_type")
-		if !ok || machineType == "" {
-			p.SkipNode(ID, n.ID, rules.SkipUnknownMachineType)
-			return true
-		}
-		vcpu, ok := n.Num("vcpu_count")
-		if !ok || vcpu < 1 {
-			p.SkipNode(ID, n.ID, rules.SkipUnknownMachineType)
-			return true
-		}
-		memGiB, ok := n.Num("memory_gib")
-		if !ok || memGiB <= 0 {
-			p.SkipNode(ID, n.ID, rules.SkipUnknownMachineType)
-			return true
-		}
-		family, ok := n.Str("machine_family")
-		if !ok || family == "" {
-			p.SkipNode(ID, n.ID, rules.SkipUnknownMachineType)
-			return true
-		}
-		status, ok := n.Str("status")
-		if !ok || status == "" {
-			p.SkipNode(ID, n.ID, rules.SkipMissingAttr)
-			return true
-		}
+		// P1: shape valid. Four checks share SkipUnknownMachineType, each
+		// independently named; status is its own code.
+		{Name: "machine_type_valid", SkipCode: rules.SkipUnknownMachineType,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				v, ok := n.Str("machine_type")
+				return ok && v != ""
+			}},
+		{Name: "vcpu_valid", SkipCode: rules.SkipUnknownMachineType,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				v, ok := n.Num("vcpu_count")
+				return ok && v >= 1
+			}},
+		{Name: "memory_valid", SkipCode: rules.SkipUnknownMachineType,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				v, ok := n.Num("memory_gib")
+				return ok && v > 0
+			}},
+		{Name: "family_valid", SkipCode: rules.SkipUnknownMachineType,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				v, ok := n.Str("machine_family")
+				return ok && v != ""
+			}},
+		{Name: "status_present", SkipCode: rules.SkipMissingAttr,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				v, ok := n.Str("status")
+				return ok && v != ""
+			}},
 
 		// P2: running.
-		if status != "RUNNING" {
-			p.SkipNode(ID, n.ID, rules.SkipNotRunning)
-			return true
-		}
+		{Name: "running", SkipCode: rules.SkipNotRunning,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				s, _ := n.Str("status")
+				return s == "RUNNING"
+			}},
 
-		// P3: not spot.
-		provisioningModel, _ := n.Str("provisioning_model")
-		if provisioningModel == "" {
-			provisioningModel = "STANDARD"
-		}
-		preemptible, _ := n.Bool("preemptible")
-		if provisioningModel == "SPOT" || preemptible {
-			p.SkipNode(ID, n.ID, rules.SkipSpot)
-			return true
-		}
+		// P3: not spot. provisioning_model absent defaults to STANDARD (the
+		// normalizer writes it unconditionally, but the defaulting read
+		// preserves the pre-refactor semantics for hand-built fixtures).
+		{Name: "not_spot", SkipCode: rules.SkipSpot,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				provisioningModel, _ := n.Str("provisioning_model")
+				if provisioningModel == "" {
+					provisioningModel = "STANDARD"
+				}
+				preemptible, _ := n.Bool("preemptible")
+				return provisioningModel != "SPOT" && !preemptible
+			}},
 
 		// P4: no accelerators.
-		accelCount, _ := n.Num("accelerator_count")
-		if accelCount > 0 {
-			p.SkipNode(ID, n.ID, rules.SkipAccelerator)
-			return true
-		}
+		{Name: "no_accelerators", SkipCode: rules.SkipAccelerator,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				// ABSENCE MEANS ZERO: accelerator_count is written
+				// unconditionally by the normalizer; a missing key means
+				// "no accelerators", never an unknown to skip on.
+				accelCount, _ := n.Num("accelerator_count")
+				return accelCount == 0
+			}},
 
-		// P5: old enough.
-		creationTS, ok := n.Str("creation_timestamp")
-		if !ok {
-			p.SkipNode(ID, n.ID, rules.SkipMissingAttr)
-			return true
-		}
-		createdAt, err := time.Parse(time.RFC3339, creationTS)
-		if err != nil {
-			p.SkipNode(ID, n.ID, rules.SkipMissingAttr)
-			return true
-		}
-		ageDays := p.Now.Sub(createdAt).Hours() / 24
-		if ageDays < MinAgeDays {
-			p.SkipNode(ID, n.ID, rules.SkipTooYoung)
-			return true
-		}
+		// P5: old enough. The parse check and the age gate are separate
+		// guards so a missing/unparseable creation_timestamp keeps its
+		// distinct missing-attribute code (SkipMissingAttr) instead of
+		// collapsing onto too_young.
+		{Name: "creation_timestamp_parseable", SkipCode: rules.SkipMissingAttr,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				ts, ok := n.Str("creation_timestamp")
+				if !ok {
+					return false
+				}
+				_, err := time.Parse(time.RFC3339, ts)
+				return err == nil
+			}},
+		{Name: "old_enough", SkipCode: rules.SkipTooYoung,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				ts, _ := n.Str("creation_timestamp")
+				createdAt, _ := time.Parse(time.RFC3339, ts)
+				return p.Now.Sub(createdAt).Hours()/24 >= MinAgeDays
+			}},
 
-		// P6: CPU data present.
-		cpu, ok := n.MetricOK(metrics.KeyCPUUtilizationP95, MinSamplesReq, MinCoverageReq)
-		if !ok {
-			p.SkipNode(ID, n.ID, rules.SkipNoMetric)
-			return true
-		}
+		// P6: CPU data present. The metric gate stashes the p95 value and
+		// sample count for Cost and ExtraEvidence.
+		{Name: "cpu_data_present", SkipCode: rules.SkipNoMetric,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				cpu, ok := n.MetricOK(metrics.KeyCPUUtilizationP95, MinSamplesReq, MinCoverageReq)
+				if !ok {
+					return false
+				}
+				nc.Set("p95_cpu", cpu.Value)
+				nc.Set("cpu_samples", cpu.Samples)
+				return true
+			}},
 
 		// P7: overprovisioned. Ratio uses the *current* shape's headroom:
-		// a p95 CPU utilization of cpu.Value on `vcpu` vCPUs; overprovision
-		// ratio = 1 - cpu.Value (fraction of the current shape sitting idle).
-		overprovisionRatio := 1 - cpu.Value
-		if overprovisionRatio <= MinOverprovisionRatio {
-			p.SkipNode(ID, n.ID, rules.SkipBelowOverprovision)
-			return true
-		}
+		// a p95 CPU utilization of p95 on `vcpu` vCPUs; overprovision
+		// ratio = 1 - p95 (fraction of the current shape sitting idle).
+		{Name: "overprovisioned", SkipCode: rules.SkipBelowOverprovision,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				p95, _ := nc.Get("p95_cpu")
+				overprovisionRatio := 1 - p95.(float64)
+				return overprovisionRatio > MinOverprovisionRatio
+			}},
+	}
+}
 
-		// P8: current priceable.
-		current, err := priceShape(p, machineType, family, vcpu, memGiB)
-		if err != nil {
-			p.SkipNode(ID, n.ID, rules.SkipNoPrice)
-			return true
-		}
+func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *rules.Pass) ([]rules.CostBranch, error) {
+	// All four shape attrs are guaranteed present and valid by the guards.
+	machineType, _ := n.Str("machine_type")
+	family, _ := n.Str("machine_family")
+	vcpu, _ := n.Num("vcpu_count")
+	memGiB, _ := n.Num("memory_gib")
 
-		// P9: candidate exists.
-		candidate, cand, ok := findCandidate(p, family, vcpu, cpu.Value)
-		var (
-			monthlyWaste  float64
-			confidence    float64
-			recMachine    string
-			recMonthly    float64
-			noSmallerSize bool
-			recComps      []rules.PricedComponent
-		)
-		if ok {
-			monthlyWaste = current.cost - cand.cost
-			confidence = 0.8
-			recMachine = candidate.Name
-			recMonthly = cand.cost
-			recComps = cand.comps
-		} else {
-			// No smaller size exists in-family: recommend stop/delete.
-			//
-			// This is NOT a skip: we still have a Finding to report (the
-			// instance is overprovisioned and reclaimable via stop/delete),
-			// so SkipNode must not be called here - skips and findings are
-			// disjoint sets, and --explain-skips tallies would otherwise
-			// double-count this resource. The fact is surfaced as evidence
-			// on the Finding instead.
-			noSmallerSize = true
-			monthlyWaste = current.cost
-			confidence = 0.5
-			recMachine = "stop/delete"
-			recMonthly = 0
-		}
+	// P8: current priceable.
+	current, err := priceShape(p, machineType, family, vcpu, memGiB)
+	if err != nil {
+		return nil, err // engine records SkipNoPrice; never a $0 assumption (Invariant I4)
+	}
 
-		if monthlyWaste < MinMonthlyWasteUSD {
-			p.SkipNode(ID, n.ID, rules.SkipBelowMinWaste)
-			return true
-		}
+	p95, _ := nc.Get("p95_cpu")
+	cpu := p95.(float64)
 
-		ev := []rules.Evidence{
-			{Key: "p95_cpu", Value: fmt.Sprintf("%.2f%%", cpu.Value*100)},
-			{Key: "machine_type", Value: machineType},
-			{Key: "recommended_machine_type", Value: recMachine},
-			{Key: "current_monthly", Value: fmt.Sprintf("$%.2f", current.cost)},
-			{Key: "recommended_monthly", Value: fmt.Sprintf("$%.2f", recMonthly)},
-			{Key: "samples", Value: fmt.Sprintf("%d", cpu.Samples)},
-		}
-		// One price-source evidence entry per component that contributed a
-		// nonzero amount: a live answer for one leg and an embedded answer
-		// for another must both be visible on the Finding, never collapsed
-		// onto a single dominant source.
-		ev = append(ev, rules.PriceEvidenceFor("current_price_source", p.Price, current.comps...)...)
-		if ok {
-			ev = append(ev, rules.PriceEvidenceFor("recommended_price_source", p.Price, recComps...)...)
-		}
-		if noSmallerSize {
-			ev = append(ev, rules.Evidence{Key: "no_smaller_size", Value: "true"})
-		}
+	// P9: candidate exists. Two mutually exclusive cost branches (§7):
+	//
+	//   rightsize — a smaller in-family shape exists: the delta between the
+	//       current and candidate monthly cost, confidence 0.8.
+	//
+	//   stop_delete — no smaller shape exists: the whole current monthly
+	//       cost is reclaimable by stopping the instance, confidence 0.5.
+	//       This is a Finding, NOT a skip: skips and findings are disjoint
+	//       sets, so no SkipNoSmallerSize is ever recorded here; the
+	//       no-candidate fact is surfaced as evidence instead.
+	candidate, cand, ok := findCandidate(p, family, vcpu, cpu)
 
-		out = append(out, rules.Finding{
-			RuleID:          ID,
-			ResourceID:      n.ID,
-			Resource:        n.Display(),
-			Kind:            n.Kind,
-			Project:         n.Project,
-			Location:        n.Location,
-			MonthlyWasteUSD: monthlyWaste,
-			Confidence:      round2(confidence),
-			Evidence:        ev,
-		})
-		return true
-	})
-	return out, nil
+	var (
+		monthlyWaste  float64
+		confidence    float64
+		recMachine    string
+		recMonthly    float64
+		noSmallerSize bool
+		label         string
+	)
+	if ok {
+		monthlyWaste = current.cost - cand.cost
+		confidence = 0.8
+		recMachine = candidate.Name
+		recMonthly = cand.cost
+		label = "rightsize"
+	} else {
+		noSmallerSize = true
+		monthlyWaste = current.cost
+		confidence = 0.5
+		recMachine = "stop/delete"
+		recMonthly = 0
+		label = "stop_delete"
+	}
+
+	// Stash evidence inputs; price-source entries are rendered here because
+	// ExtraEvidence has no Pass to reach the pricer.
+	nc.Set("recommended_machine_type", recMachine)
+	nc.Set("current_monthly", current.cost)
+	nc.Set("recommended_monthly", recMonthly)
+	nc.Set("no_smaller_size", noSmallerSize)
+	nc.Set("current_price_source", rules.PriceEvidenceFor("current_price_source", p.Price, current.comps...))
+	if ok {
+		nc.Set("recommended_price_source", rules.PriceEvidenceFor("recommended_price_source", p.Price, cand.comps...))
+	}
+
+	return []rules.CostBranch{{
+		Waste:      monthlyWaste,
+		Confidence: round2(confidence),
+		Label:      label,
+	}}, nil
+}
+
+func (rule) MinWasteUSD() float64 { return MinMonthlyWasteUSD }
+
+// EvidenceKeys returns nil: every evidence entry is formatted with a non-%v
+// layout (p95_cpu as %.2f%%, the monthly figures as $%.2f) or produced from
+// a price lookup, so ExtraEvidence renders the whole list to keep the
+// pre-refactor keys, values and order byte-for-byte.
+func (rule) EvidenceKeys() []string { return nil }
+
+func (rule) ExtraEvidence(n *graph.Node, nc *rules.NodeContext, branch rules.CostBranch) []rules.Evidence {
+	machineType, _ := n.Str("machine_type")
+	p95, _ := nc.Get("p95_cpu")
+	samples, _ := nc.Get("cpu_samples")
+	recMachine, _ := nc.Get("recommended_machine_type")
+	currentMonthly, _ := nc.Get("current_monthly")
+	recMonthly, _ := nc.Get("recommended_monthly")
+
+	ev := []rules.Evidence{
+		{Key: "p95_cpu", Value: fmt.Sprintf("%.2f%%", p95.(float64)*100)},
+		{Key: "machine_type", Value: machineType},
+		{Key: "recommended_machine_type", Value: recMachine.(string)},
+		{Key: "current_monthly", Value: fmt.Sprintf("$%.2f", currentMonthly.(float64))},
+		{Key: "recommended_monthly", Value: fmt.Sprintf("$%.2f", recMonthly.(float64))},
+		{Key: "samples", Value: fmt.Sprintf("%d", samples.(int))},
+	}
+	if v, ok := nc.Get("current_price_source"); ok {
+		ev = append(ev, v.([]rules.Evidence)...)
+	}
+	if v, ok := nc.Get("recommended_price_source"); ok {
+		ev = append(ev, v.([]rules.Evidence)...)
+	}
+	if noSmaller, _ := nc.Get("no_smaller_size"); noSmaller.(bool) {
+		ev = append(ev, rules.Evidence{Key: "no_smaller_size", Value: "true"})
+	}
+	return ev
 }
 
 // priceShape prices the given machine shape and returns the summed monthly

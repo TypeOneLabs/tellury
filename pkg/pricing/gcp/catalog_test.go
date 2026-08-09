@@ -6,7 +6,10 @@ import (
 	"testing"
 	"time"
 
+	billingpb "cloud.google.com/go/billing/apiv1/billingpb"
+
 	"github.com/TypeOneLabs/tellury/pkg/pricing"
+	"github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/unused_reserved_ip"
 )
 
 // TestLiveUnitPrice_ThreadsScanContext is the regression test for finding #2:
@@ -100,5 +103,43 @@ func TestLiveUnitPrice_DeadlineExceededOnce(t *testing.T) {
 	unit2, _, err := p.UnitPrice(pricing.KindDiskCapacity, "gcp", "pd-ssd", "default")
 	if err != nil || unit2 != unit {
 		t.Fatalf("second UnitPrice diverged (loadErr must be cached via sync.Once): unit=%v err=%v", unit2, err)
+	}
+}
+
+// TestMatchSKU_StaticIPTokenPinned is the regression test for the static-IP
+// pricing token mismatch: matchSKU indexed live Cloud Billing static-IP SKUs
+// under "external-static" while the unused_reserved_ip rule queried
+// StaticIPSKU = "unattached" (the same token the embedded table's
+// static_ip.unattached entry is keyed under). The live lookup therefore NEVER
+// matched: every static-IP price silently resolved from the embedded
+// fallback, provenance always read "embedded_fallback", and a region whose
+// live rate differs from the table was mispriced with no error.
+//
+// The assertion imports the constant the rule ACTUALLY queries, so the two
+// cannot drift apart again: if matchSKU's token or the rule's StaticIPSKU
+// ever changes without the other, this test fails.
+func TestMatchSKU_StaticIPTokenPinned(t *testing.T) {
+	sk := &billingpb.Sku{
+		Category: &billingpb.Category{
+			ServiceDisplayName: "Compute Engine",
+			ResourceFamily:     "Compute",
+			ResourceGroup:      "StaticIpAddress",
+			UsageType:          "OnDemand",
+		},
+		Description: "External IPv4 IP address on a standard VM",
+	}
+
+	kind, token, ok := matchSKU(sk)
+	if !ok {
+		t.Fatalf("matchSKU(%q) must match a live static-IP SKU", sk.GetDescription())
+	}
+	if kind != pricing.KindStaticIP {
+		t.Fatalf("matchSKU kind = %v, want %v", kind, pricing.KindStaticIP)
+	}
+	if token != unused_reserved_ip.StaticIPSKU {
+		t.Fatalf("matchSKU token = %q, but the unused_reserved_ip rule queries %q: "+
+			"the live catalogue would never match and every static-IP price "+
+			"would silently fall back to the embedded table",
+			token, unused_reserved_ip.StaticIPSKU)
 	}
 }

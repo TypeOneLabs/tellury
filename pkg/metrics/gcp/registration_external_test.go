@@ -19,8 +19,8 @@ import (
 	_ "github.com/TypeOneLabs/tellury/pkg/cloud/gcp"
 	// Pull in every shipped rule so expected metric keys are derived from
 	// what the rules actually ask for.
-	_ "github.com/TypeOneLabs/tellury/pkg/rules/all"
 	"github.com/TypeOneLabs/tellury/pkg/rules"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/all"
 )
 
 // ruleMetricKeys returns every metric key that the shipped built-in rules

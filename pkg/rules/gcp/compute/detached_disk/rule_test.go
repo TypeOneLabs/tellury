@@ -99,7 +99,7 @@ func runEval(t *testing.T, nodes []*graph.Node, edges []graph.Edge, pricer prici
 			skipCounts[code]++
 		},
 	}
-	findings, err := rule{}.Eval(context.Background(), p)
+	findings, err := rules.AdaptNodeRule(rule{}).Eval(context.Background(), p)
 	if err != nil {
 		t.Fatalf("Eval: %v", err)
 	}

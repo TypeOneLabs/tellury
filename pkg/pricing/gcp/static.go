@@ -27,32 +27,34 @@ type StaticPricer struct {
 }
 
 type priceFile struct {
-	Version        string                        `json:"version"`
-	Currency       string                        `json:"currency"`
-	DiskCapacity   map[string]map[string]float64 `json:"disk_capacity"`
-	DiskIOPS       map[string]map[string]float64 `json:"disk_iops"`
-	DiskThroughput map[string]map[string]float64 `json:"disk_throughput"`
-	VMInstance     map[string]map[string]float64 `json:"vm_instance"`
-	VMCustomCPU    map[string]map[string]float64 `json:"vm_custom_cpu"`
-	VMCustomRAM    map[string]map[string]float64 `json:"vm_custom_ram"`
-	GCSStorage     map[string]map[string]float64 `json:"gcs_storage"`
-	GCSRetrieval   map[string]map[string]float64 `json:"gcs_retrieval"`
-	GCSOpsClassA   map[string]map[string]float64 `json:"gcs_ops_class_a"`
-	StaticIP       map[string]map[string]float64 `json:"static_ip"`
+	Version         string                        `json:"version"`
+	Currency        string                        `json:"currency"`
+	DiskCapacity    map[string]map[string]float64 `json:"disk_capacity"`
+	DiskIOPS        map[string]map[string]float64 `json:"disk_iops"`
+	DiskThroughput  map[string]map[string]float64 `json:"disk_throughput"`
+	VMInstance      map[string]map[string]float64 `json:"vm_instance"`
+	VMCustomCPU     map[string]map[string]float64 `json:"vm_custom_cpu"`
+	VMCustomRAM     map[string]map[string]float64 `json:"vm_custom_ram"`
+	GCSStorage      map[string]map[string]float64 `json:"gcs_storage"`
+	GCSRetrieval    map[string]map[string]float64 `json:"gcs_retrieval"`
+	GCSOpsClassA    map[string]map[string]float64 `json:"gcs_ops_class_a"`
+	StaticIP        map[string]map[string]float64 `json:"static_ip"`
+	SnapshotStorage map[string]map[string]float64 `json:"snapshot_storage"`
 }
 
 func newTableFromFile(pf priceFile) table {
 	t := table{
-		pricing.KindDiskCapacity:   pf.DiskCapacity,
-		pricing.KindDiskIOPS:       pf.DiskIOPS,
-		pricing.KindDiskThroughput: pf.DiskThroughput,
-		pricing.KindVMInstance:     pf.VMInstance,
-		pricing.KindVMCustomCPU:    pf.VMCustomCPU,
-		pricing.KindVMCustomRAM:    pf.VMCustomRAM,
-		pricing.KindGCSStorage:     pf.GCSStorage,
-		pricing.KindGCSRetrieval:   pf.GCSRetrieval,
-		pricing.KindGCSOpsClassA:   pf.GCSOpsClassA,
-		pricing.KindStaticIP:       pf.StaticIP,
+		pricing.KindDiskCapacity:    pf.DiskCapacity,
+		pricing.KindDiskIOPS:        pf.DiskIOPS,
+		pricing.KindDiskThroughput:  pf.DiskThroughput,
+		pricing.KindVMInstance:      pf.VMInstance,
+		pricing.KindVMCustomCPU:     pf.VMCustomCPU,
+		pricing.KindVMCustomRAM:     pf.VMCustomRAM,
+		pricing.KindGCSStorage:      pf.GCSStorage,
+		pricing.KindGCSRetrieval:    pf.GCSRetrieval,
+		pricing.KindGCSOpsClassA:    pf.GCSOpsClassA,
+		pricing.KindStaticIP:        pf.StaticIP,
+		pricing.KindSnapshotStorage: pf.SnapshotStorage,
 	}
 	for k, v := range t {
 		if v == nil {

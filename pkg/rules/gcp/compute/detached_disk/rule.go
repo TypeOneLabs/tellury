@@ -27,7 +27,7 @@ const (
 	MinMonthlyWasteUSD = 0.10
 )
 
-func init() { rules.Register(rule{}) }
+func init() { rules.RegisterNode(rule{}) }
 
 type rule struct{}
 
@@ -66,142 +66,179 @@ var billingStatuses = map[string]bool{
 	"UNAVAILABLE": true,
 }
 
-func (rule) Eval(ctx context.Context, p *rules.Pass) ([]rules.Finding, error) {
-	var out []rules.Finding
+func (rule) Kind() graph.ResourceKind { return graph.KindDisk }
 
-	p.Graph.ByKind(graph.KindDisk, func(n *graph.Node) bool {
-		if ctx.Err() != nil {
-			return false
-		}
-
-		// P0: exemption label.
-		if n.Labels["tellury-exempt"] == "true" {
-			p.SkipNode(ID, n.ID, rules.SkipExemptLabel)
-			return true
-		}
-
-		// P1: shape valid.
-		sizeGB, ok := n.Num("size_gb")
-		if !ok || sizeGB <= 0 {
-			p.SkipNode(ID, n.ID, rules.SkipMissingAttr)
-			return true
-		}
-		diskType, ok := n.Str("disk_type")
-		if !ok || diskType == "" {
-			p.SkipNode(ID, n.ID, rules.SkipMissingAttr)
-			return true
-		}
-		status, ok := n.Str("status")
-		if !ok || status == "" {
-			p.SkipNode(ID, n.ID, rules.SkipMissingAttr)
-			return true
-		}
-		creationTS, ok := n.Str("creation_timestamp")
-		if !ok {
-			p.SkipNode(ID, n.ID, rules.SkipMissingAttr)
-			return true
-		}
-		createdAt, err := time.Parse(time.RFC3339, creationTS)
-		if err != nil {
-			p.SkipNode(ID, n.ID, rules.SkipMissingAttr)
-			return true
-		}
+func (rule) Guards() []rules.Guard {
+	return []rules.Guard{
+		// P1: shape valid. Four checks share the missing-attribute code,
+		// each independently named so a future --explain-skips can report
+		// exactly which shape field failed.
+		{Name: "size_gb_positive", SkipCode: rules.SkipMissingAttr,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				v, ok := n.Num("size_gb")
+				return ok && v > 0
+			}},
+		{Name: "disk_type_present", SkipCode: rules.SkipMissingAttr,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				v, ok := n.Str("disk_type")
+				return ok && v != ""
+			}},
+		{Name: "status_present", SkipCode: rules.SkipMissingAttr,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				v, ok := n.Str("status")
+				return ok && v != ""
+			}},
+		{Name: "creation_timestamp_parseable", SkipCode: rules.SkipMissingAttr,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				ts, ok := n.Str("creation_timestamp")
+				if !ok {
+					return false
+				}
+				createdAt, err := time.Parse(time.RFC3339, ts)
+				if err != nil {
+					return false
+				}
+				nc.Set("created_at", createdAt)
+				return true
+			}},
 
 		// P2: no graph attachment.
-		if p.Graph.InDegree(n.ID, graph.EdgeAttachedTo) > 0 {
-			p.SkipNode(ID, n.ID, rules.SkipAttached)
-			return true
-		}
+		{Name: "not_attached", SkipCode: rules.SkipAttached,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				return p.Graph.InDegree(n.ID, graph.EdgeAttachedTo) == 0
+			}},
 
 		// P3: no CAI users.
-		userCount, _ := n.Num("user_count") // absent => treat as 0
-		if userCount > 0 {
-			p.SkipNode(ID, n.ID, rules.SkipAttached)
-			return true
-		}
+		{Name: "no_cai_users", SkipCode: rules.SkipAttached,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				// ABSENCE MEANS ZERO: the normalizer writes user_count
+				// unconditionally (users[] is always counted, even when
+				// empty), so a missing key means "no users", never an
+				// unknown to skip on. Skipping on absence would silently
+				// lose every capacity-only finding for a disk whose users[]
+				// was not parsed.
+				uc, _ := n.Num("user_count")
+				return uc == 0
+			}},
 
 		// P4: billing status.
-		if !billingStatuses[status] {
-			p.SkipNode(ID, n.ID, rules.SkipNonBillingStatus)
-			return true
-		}
+		{Name: "billing_status", SkipCode: rules.SkipNonBillingStatus,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				s, _ := n.Str("status")
+				return billingStatuses[s]
+			}},
 
-		// P5: detached long enough.
-		detachedDays, ageBasis := detachedDays(p.Now, n, createdAt)
-		if detachedDays < MinDetachedDays {
-			p.SkipNode(ID, n.ID, rules.SkipRecentlyDetached)
-			return true
-		}
+		// P5: detached long enough. This guard also computes the two values
+		// Cost (confidence) and ExtraEvidence (detached_days, age_basis)
+		// consume, so the three-branch detachedDays logic lives here exactly
+		// once and every downstream reader sees the same answer.
+		{Name: "detached_long_enough", SkipCode: rules.SkipRecentlyDetached,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				createdAt, _ := nc.Get("created_at")
+				days, basis := detachedDays(p.Now, n, createdAt.(time.Time))
+				if days < MinDetachedDays {
+					return false
+				}
+				nc.Set("detached_days", days)
+				nc.Set("age_basis", basis)
+				return true
+			}},
+	}
+}
 
-		// Cost formula (§6.2): capacity + IOPS + throughput.
-		replicaZones, _ := n.Num("replica_zone_count")
-		sku := diskSKU(diskType, replicaZones)
-		region := pricing.RegionOf(n.Location)
+func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *rules.Pass) ([]rules.CostBranch, error) {
+	// size_gb, disk_type and status are guaranteed present and valid by the
+	// shape guards; the defaulting reads keep the accessor style uniform.
+	sizeGB, _ := n.Num("size_gb")
+	diskType, _ := n.Str("disk_type")
+	status, _ := n.Str("status")
 
-		capPrice, capRegion, err := p.Price.UnitPrice(pricing.KindDiskCapacity, "gcp", sku, region)
-		if err != nil {
-			p.SkipNode(ID, n.ID, rules.SkipNoPrice)
-			return true
-		}
-		iopsPrice, iopsRegion, _ := p.Price.UnitPrice(pricing.KindDiskIOPS, "gcp", sku, region)
-		thrPrice, thrRegion, _ := p.Price.UnitPrice(pricing.KindDiskThroughput, "gcp", sku, region)
+	// ABSENCE MEANS ZERO (defaulting accessor): replica_zone_count,
+	// provisioned_iops and provisioned_throughput_mbps are written
+	// unconditionally by the normalizer, so a missing key is "0", never an
+	// unknown to skip on. Skipping on absence would silently lose the
+	// capacity-only findings for any disk whose IOPS/throughput payload was
+	// not parsed — and every existing fixture carries these fields, so no
+	// test would catch the regression.
+	replicaZones, _ := n.Num("replica_zone_count")
+	sku := diskSKU(diskType, replicaZones)
+	region := pricing.RegionOf(n.Location)
 
-		iops, _ := n.Num("provisioned_iops")
-		mbps, _ := n.Num("provisioned_throughput_mbps")
+	capPrice, capRegion, err := p.Price.UnitPrice(pricing.KindDiskCapacity, "gcp", sku, region)
+	if err != nil {
+		return nil, err // engine records SkipNoPrice; never a $0 assumption (Invariant I4)
+	}
+	iopsPrice, iopsRegion, _ := p.Price.UnitPrice(pricing.KindDiskIOPS, "gcp", sku, region)
+	thrPrice, thrRegion, _ := p.Price.UnitPrice(pricing.KindDiskThroughput, "gcp", sku, region)
 
-		monthlyWaste := sizeGB*capPrice + iops*iopsPrice + mbps*thrPrice
+	iops, _ := n.Num("provisioned_iops")
+	mbps, _ := n.Num("provisioned_throughput_mbps")
 
-		// P7: material.
-		if monthlyWaste < MinMonthlyWasteUSD {
-			p.SkipNode(ID, n.ID, rules.SkipBelowMinWaste)
-			return true
-		}
+	monthlyWaste := sizeGB*capPrice + iops*iopsPrice + mbps*thrPrice
 
-		confidence := confidenceFor(ageBasis, status)
+	ageBasis, _ := nc.Get("age_basis")
+	confidence := round2(confidenceFor(ageBasis.(string), status))
 
-		// One price-source evidence entry per component that contributed a
-		// nonzero amount. A live answer for capacity and an embedded answer
-		// for IOPS/throughput must both stay visible on the Finding instead
-		// of collapsing onto the dominant capacity source.
-		pricedComps := diskPricedComponents(sku, region, capRegion, iopsPrice, iopsRegion, thrPrice, thrRegion, sizeGB, iops, mbps)
+	// Stash the values ExtraEvidence needs. The price-source entries are
+	// rendered here because ExtraEvidence has no Pass to reach the pricer.
+	comps := diskPricedComponents(sku, region, capRegion, iopsPrice, iopsRegion, thrPrice, thrRegion, sizeGB, iops, mbps)
+	nc.Set("disk_sku", sku)
+	nc.Set("cap_price", capPrice)
+	nc.Set("price_source_evidence", rules.PriceEvidenceFor("price_source", p.Price, comps...))
+	nc.Set("provisioned_iops", iops)
+	nc.Set("provisioned_throughput_mbps", mbps)
 
-		ev := []rules.Evidence{
-			{Key: "size_gb", Value: fmt.Sprintf("%.0f", sizeGB)},
-			{Key: "disk_type", Value: diskType},
-			{Key: "disk_sku", Value: sku},
-			{Key: "status", Value: status},
-			{Key: "attached_instances", Value: "0"},
-			{Key: "detached_days", Value: fmt.Sprintf("%.0f", detachedDays)},
-			{Key: "age_basis", Value: ageBasis},
-			{Key: "unit_price_gib_month", Value: fmt.Sprintf("$%.4f", capPrice)},
-		}
-		ev = append(ev, rules.PriceEvidenceFor("price_source", p.Price, pricedComps...)...)
-		if iops > 0 {
-			ev = append(ev, rules.Evidence{Key: "provisioned_iops", Value: fmt.Sprintf("%.0f", iops)})
-		}
-		if mbps > 0 {
-			ev = append(ev, rules.Evidence{Key: "provisioned_throughput_mbps", Value: fmt.Sprintf("%.0f", mbps)})
-		}
+	return []rules.CostBranch{{
+		Waste:      monthlyWaste,
+		Confidence: confidence,
+		Label:      "detached",
+	}}, nil
+}
 
-		out = append(out, rules.Finding{
-			RuleID:          ID,
-			ResourceID:      n.ID,
-			Resource:        n.Display(),
-			Kind:            n.Kind,
-			Project:         n.Project,
-			Location:        n.Location,
-			MonthlyWasteUSD: monthlyWaste,
-			Confidence:      round2(confidence),
-			Evidence:        ev,
-		})
-		return true
-	})
-	return out, nil
+func (rule) MinWasteUSD() float64 { return MinMonthlyWasteUSD }
+
+// EvidenceKeys returns nil: the first evidence entry (size_gb) is rendered
+// with %.0f, which %v would not reproduce for fractional sizes, and the rest
+// are computed (detached_days, age_basis), formatted ($%.4f) or conditional
+// (provisioned_iops / provisioned_throughput_mbps). ExtraEvidence renders the
+// whole list so the pre-refactor keys, values and order stay byte-for-byte.
+func (rule) EvidenceKeys() []string { return nil }
+
+func (rule) ExtraEvidence(n *graph.Node, nc *rules.NodeContext, branch rules.CostBranch) []rules.Evidence {
+	sizeGB, _ := n.Num("size_gb")
+	diskType, _ := n.Str("disk_type")
+	status, _ := n.Str("status")
+
+	sku, _ := nc.Get("disk_sku")
+	capPrice, _ := nc.Get("cap_price")
+	detachedDays, _ := nc.Get("detached_days")
+	ageBasis, _ := nc.Get("age_basis")
+
+	ev := []rules.Evidence{
+		{Key: "size_gb", Value: fmt.Sprintf("%.0f", sizeGB)},
+		{Key: "disk_type", Value: diskType},
+		{Key: "disk_sku", Value: sku.(string)},
+		{Key: "status", Value: status},
+		{Key: "attached_instances", Value: "0"},
+		{Key: "detached_days", Value: fmt.Sprintf("%.0f", detachedDays.(float64))},
+		{Key: "age_basis", Value: ageBasis.(string)},
+		{Key: "unit_price_gib_month", Value: fmt.Sprintf("$%.4f", capPrice.(float64))},
+	}
+	if v, ok := nc.Get("price_source_evidence"); ok {
+		ev = append(ev, v.([]rules.Evidence)...)
+	}
+	if iops, _ := nc.Get("provisioned_iops"); iops.(float64) > 0 {
+		ev = append(ev, rules.Evidence{Key: "provisioned_iops", Value: fmt.Sprintf("%.0f", iops.(float64))})
+	}
+	if mbps, _ := nc.Get("provisioned_throughput_mbps"); mbps.(float64) > 0 {
+		ev = append(ev, rules.Evidence{Key: "provisioned_throughput_mbps", Value: fmt.Sprintf("%.0f", mbps.(float64))})
+	}
+	return ev
 }
 
 // diskPricedComponents returns the components of a disk's monthly cost that
 // contributed a nonzero dollar amount. Capacity always contributes (a
-// captured error was already fatal in Eval); IOPS and throughput contribute
+// captured error was already fatal in Cost); IOPS and throughput contribute
 // only if they have both a resolved price and a provisioned quantity.
 // sku/region are the lookup keys; capRegion/iopsRegion/thrRegion are the
 // regions each lookup actually resolved to.
@@ -209,7 +246,7 @@ func diskPricedComponents(sku, region, capRegion string, iopsPrice float64, iops
 	comps := make([]rules.PricedComponent, 0, 3)
 
 	// Capacity: sizeGB is guaranteed > 0 by P1, and capPrice is guaranteed
-	// resolvable by Eval's early return, so this leg always contributes.
+	// resolvable by Cost's early return, so this leg always contributes.
 	if sizeGB != 0 {
 		comps = append(comps, rules.PricedComponent{
 			Kind:   pricing.KindDiskCapacity,

@@ -6,8 +6,8 @@ package storage
 import (
 	"math"
 
-	metricsgcp "github.com/TypeOneLabs/tellury/pkg/metrics/gcp"
 	"github.com/TypeOneLabs/tellury/pkg/metrics"
+	metricsgcp "github.com/TypeOneLabs/tellury/pkg/metrics/gcp"
 )
 
 // GCP metric types for the storage (gcs_bucket monitored-resource) specs.

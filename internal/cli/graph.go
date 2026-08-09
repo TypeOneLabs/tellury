@@ -39,7 +39,7 @@ func newGraphCmd(g *globalFlags) *cobra.Command {
 // command documented in README.md ("Capturing your own fixture") instead.
 func newGraphExportCmd(g *globalFlags) *cobra.Command {
 	var (
-		cfg            config.Scan
+		cfg             config.Scan
 		noEnrichMetrics bool
 	)
 	cmd := &cobra.Command{

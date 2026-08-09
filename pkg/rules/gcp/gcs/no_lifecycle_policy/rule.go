@@ -31,9 +31,14 @@ const (
 	ToClass   = "NEARLINE"
 	// Confidence is fixed: bucket size is measured, cold fraction is modelled.
 	Confidence = 0.6
+	// MinSamplesReq / MinCoverageReq are the metric gate (Invariant I5):
+	// the byte mean is only trusted with at least 7 aligned samples covering
+	// 20% of the window.
+	MinSamplesReq  = 7
+	MinCoverageReq = 0.20
 )
 
-func init() { rules.Register(rule{}) }
+func init() { rules.RegisterNode(rule{}) }
 
 type rule struct{}
 
@@ -54,119 +59,126 @@ func (rule) Meta() rules.Meta {
 	}
 }
 
-func (rule) Eval(ctx context.Context, p *rules.Pass) ([]rules.Finding, error) {
-	var out []rules.Finding
+func (rule) Kind() graph.ResourceKind { return graph.KindBucket }
 
-	p.Graph.ByKind(graph.KindBucket, func(n *graph.Node) bool {
-		if ctx.Err() != nil {
-			return false
-		}
+func (rule) Guards() []rules.Guard {
+	return []rules.Guard{
+		{Name: "bucket_name_present", SkipCode: rules.SkipMissingAttr,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				v, ok := n.Str("bucket_name")
+				return ok && v != ""
+			}},
+		{Name: "lifecycle_count_present", SkipCode: rules.SkipMissingAttr,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				_, ok := n.Num("lifecycle_rule_count")
+				return ok
+			}},
+		{Name: "storage_class_present", SkipCode: rules.SkipMissingAttr,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				v, ok := n.Str("storage_class")
+				return ok && v != ""
+			}},
+		{Name: "no_lifecycle_rules", SkipCode: rules.SkipHasLifecycle,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				cnt, _ := n.Num("lifecycle_rule_count")
+				return cnt == 0
+			}},
+		{Name: "standard_class", SkipCode: rules.SkipNotStandardClass,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				class, _ := n.Str("storage_class")
+				return normalizeStorageClass(class) == "STANDARD"
+			}},
+		{Name: "no_autoclass", SkipCode: rules.SkipAutoclass,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				autoclass, _ := n.Bool("autoclass_enabled")
+				return !autoclass
+			}},
+		{Name: "not_retention_locked", SkipCode: rules.SkipRetentionLocked,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				locked, _ := n.Bool("retention_locked")
+				return !locked
+			}},
+		{Name: "metric_sufficient", SkipCode: rules.SkipNoMetric,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				m, ok := n.MetricOK(metrics.KeyBucketTotalBytesMean, MinSamplesReq, MinCoverageReq)
+				if !ok {
+					return false
+				}
+				nc.Set("total_bytes", m.Value)
+				return true
+			}},
+		{Name: "min_bytes_reached", SkipCode: rules.SkipBelowMinBytes,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				totalBytes, _ := nc.Get("total_bytes")
+				return totalBytes.(float64) >= MinBytes
+			}},
+	}
+}
 
-		// P0: exemption label.
-		if n.Labels["tellury-exempt"] == "true" {
-			p.SkipNode(ID, n.ID, rules.SkipExemptLabel)
-			return true
-		}
+func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *rules.Pass) ([]rules.CostBranch, error) {
+	totalBytes, _ := nc.Get("total_bytes")
+	region := pricing.RegionOf(n.Location)
 
-		// Shape: bucket_name, lifecycle_rule_count, storage_class required.
-		bucketName, ok := n.Str("bucket_name")
-		if !ok || bucketName == "" {
-			p.SkipNode(ID, n.ID, rules.SkipMissingAttr)
-			return true
-		}
-		lifecycleCount, ok := n.Num("lifecycle_rule_count")
-		if !ok {
-			p.SkipNode(ID, n.ID, rules.SkipMissingAttr)
-			return true
-		}
-		storageClass, ok := n.Str("storage_class")
-		if !ok || storageClass == "" {
-			p.SkipNode(ID, n.ID, rules.SkipMissingAttr)
-			return true
-		}
+	fromPrice, fromRegion, err := p.Price.UnitPrice(pricing.KindGCSStorage, "gcp", FromClass, region)
+	if err != nil {
+		return nil, err // engine records SkipNoPrice; never a $0 assumption (Invariant I4)
+	}
+	toPrice, toRegion, err := p.Price.UnitPrice(pricing.KindGCSStorage, "gcp", ToClass, region)
+	if err != nil {
+		return nil, err
+	}
+	deltaPerGiBMonth := fromPrice - toPrice
 
-		// Detection: lifecycle_rule_count == 0 AND storage_class == STANDARD.
-		if lifecycleCount != 0 {
-			p.SkipNode(ID, n.ID, rules.SkipHasLifecycle)
-			return true
-		}
-		normalizedClass := normalizeStorageClass(storageClass)
-		if normalizedClass != "STANDARD" {
-			p.SkipNode(ID, n.ID, rules.SkipNotStandardClass)
-			return true
-		}
+	totalGiB := totalBytes.(float64) / (1 << 30)
+	monthlyWaste := totalGiB * ColdFraction * deltaPerGiBMonth
 
-		// Autoclass supersedes manual lifecycle management.
-		autoclass, _ := n.Bool("autoclass_enabled")
-		if autoclass {
-			p.SkipNode(ID, n.ID, rules.SkipAutoclass)
-			return true
-		}
+	// Stash evidence inputs; the price-source entries are rendered here
+	// because ExtraEvidence has no Pass to reach the pricer.
+	nc.Set("delta_per_gb_month", deltaPerGiBMonth)
+	nc.Set("from_price_source", rules.PriceEvidence("from_price_source", p.Price, pricing.KindGCSStorage, FromClass, fromRegion))
+	nc.Set("to_price_source", rules.PriceEvidence("to_price_source", p.Price, pricing.KindGCSStorage, ToClass, toRegion))
 
-		// Retention lock prevents any class transition.
-		retentionLocked, _ := n.Bool("retention_locked")
-		if retentionLocked {
-			p.SkipNode(ID, n.ID, rules.SkipRetentionLocked)
-			return true
-		}
+	return []rules.CostBranch{{
+		Waste:      monthlyWaste,
+		Confidence: round2(Confidence),
+		Label:      "class_transition",
+	}}, nil
+}
 
-		bytesMetric, ok := n.MetricOK(metrics.KeyBucketTotalBytesMean, 7, 0.20)
-		if !ok {
-			p.SkipNode(ID, n.ID, rules.SkipNoMetric)
-			return true
-		}
-		totalBytes := bytesMetric.Value
+// MinWasteUSD is the dollar noise floor below which a branch is dropped. This
+// rule has no dollar floor — its real noise floor is MinBytes, enforced as a
+// guard — so 0.0 keeps every non-negative branch. The floor still does real
+// work here: a negative class delta (fromPrice < toPrice) yields a negative
+// branch, which the engine drops and reports as SkipBelowMinWaste, exactly
+// matching the pre-refactor `if monthlyWaste < 0 { SkipBelowMinWaste }` skip.
+func (rule) MinWasteUSD() float64 { return 0.0 }
 
-		if totalBytes < MinBytes {
-			p.SkipNode(ID, n.ID, rules.SkipBelowMinBytes)
-			return true
-		}
+// EvidenceKeys returns nil: every evidence entry is either formatted with a
+// non-%v layout (total_bytes as %.0f, cold_fraction as %.2f, delta as $%.4f)
+// or produced from a price lookup, so the whole list is rendered by
+// ExtraEvidence to keep the pre-refactor keys, values and order byte-for-byte.
+func (rule) EvidenceKeys() []string { return nil }
 
-		region := pricing.RegionOf(n.Location)
-		fromPrice, fromRegion, err := p.Price.UnitPrice(pricing.KindGCSStorage, "gcp", FromClass, region)
-		if err != nil {
-			p.SkipNode(ID, n.ID, rules.SkipNoPrice)
-			return true
-		}
-		toPrice, toRegion, err := p.Price.UnitPrice(pricing.KindGCSStorage, "gcp", ToClass, region)
-		if err != nil {
-			p.SkipNode(ID, n.ID, rules.SkipNoPrice)
-			return true
-		}
-		deltaPerGiBMonth := fromPrice - toPrice
+func (rule) ExtraEvidence(n *graph.Node, nc *rules.NodeContext, branch rules.CostBranch) []rules.Evidence {
+	totalBytes, _ := nc.Get("total_bytes")
+	storageClass, _ := n.Str("storage_class")
+	lifecycleCount, _ := n.Num("lifecycle_rule_count")
+	delta, _ := nc.Get("delta_per_gb_month")
 
-		totalGiB := totalBytes / (1 << 30)
-		monthlyWaste := totalGiB * ColdFraction * deltaPerGiBMonth
-
-		if monthlyWaste < 0 {
-			p.SkipNode(ID, n.ID, rules.SkipBelowMinWaste)
-			return true
-		}
-
-		ev := []rules.Evidence{
-			{Key: "total_bytes", Value: fmt.Sprintf("%.0f", totalBytes)},
-			{Key: "storage_class", Value: storageClass},
-			{Key: "lifecycle_rules", Value: fmt.Sprintf("%.0f", lifecycleCount)},
-			{Key: "cold_fraction", Value: fmt.Sprintf("%.2f", ColdFraction)},
-			{Key: "delta_per_gb_month", Value: fmt.Sprintf("$%.4f", deltaPerGiBMonth)},
-			rules.PriceEvidence("from_price_source", p.Price, pricing.KindGCSStorage, FromClass, fromRegion),
-			rules.PriceEvidence("to_price_source", p.Price, pricing.KindGCSStorage, ToClass, toRegion),
-		}
-
-		out = append(out, rules.Finding{
-			RuleID:          ID,
-			ResourceID:      n.ID,
-			Resource:        n.Display(),
-			Kind:            n.Kind,
-			Project:         n.Project,
-			Location:        n.Location,
-			MonthlyWasteUSD: monthlyWaste,
-			Confidence:      round2(Confidence),
-			Evidence:        ev,
-		})
-		return true
-	})
-	return out, nil
+	ev := []rules.Evidence{
+		{Key: "total_bytes", Value: fmt.Sprintf("%.0f", totalBytes.(float64))},
+		{Key: "storage_class", Value: storageClass},
+		{Key: "lifecycle_rules", Value: fmt.Sprintf("%.0f", lifecycleCount)},
+		{Key: "cold_fraction", Value: fmt.Sprintf("%.2f", ColdFraction)},
+		{Key: "delta_per_gb_month", Value: fmt.Sprintf("$%.4f", delta.(float64))},
+	}
+	if v, ok := nc.Get("from_price_source"); ok {
+		ev = append(ev, v.(rules.Evidence))
+	}
+	if v, ok := nc.Get("to_price_source"); ok {
+		ev = append(ev, v.(rules.Evidence))
+	}
+	return ev
 }
 
 // normalizeStorageClass collapses legacy class names onto their modern

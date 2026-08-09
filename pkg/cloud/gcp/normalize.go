@@ -18,7 +18,7 @@ var normalizers = map[string]normalizer{
 	TypeInstance: normalizeInstance,
 	TypeDisk:     normalizeDisk,
 	TypeBucket:   normalizeBucket,
-	TypeSnapshot: normalizeGeneric(graph.KindSnapshot, ServiceCompute),
+	TypeSnapshot: normalizeSnapshot,
 	TypeAddress:  normalizeAddress,
 	TypeNetwork:  normalizeGeneric(graph.KindNetwork, ServiceCompute),
 }
@@ -299,6 +299,46 @@ func normalizeDisk(a *RawAsset, _ pricing.Sizer) (*graph.Node, error) {
 	if diskType != "" {
 		n.SetAttr(AttrDiskSKU, pricing.DiskSKU(diskType, float64(len(replicas))))
 	}
+	return n, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// compute.googleapis.com/Snapshot
+// ─────────────────────────────────────────────────────────────────────────────
+
+// normalizeSnapshot is the real Snapshot normalizer. CAI's Snapshot payload
+// is the Compute Engine Snapshot resource: status, diskSizeGb, sourceDisk,
+// creationTimestamp, labels. The node carries everything the `old_snapshot`
+// rule needs — age (creation_timestamp) and the billable size (size_gb) —
+// plus status for diagnostics.
+//
+// size_gb is written UNCONDITIONALLY (0 when the field is absent) so the rule
+// can tell "no billable size" from "payload not parsed": an absent diskSizeGb
+// means a legacy/partial snapshot whose storage the rule refuses to guess at,
+// not a free one. A rule that skipped on absence would silently lose nothing
+// (0 fails the same guard), but writing it keeps the distinction explicit in
+// the node.
+func normalizeSnapshot(a *RawAsset, _ pricing.Sizer) (*graph.Node, error) {
+	data := decodeData(a.Data())
+	n := baseNode(a, graph.KindSnapshot, ServiceCompute)
+	n.Labels = labelsOf(data)
+	n.Location = locationOf(data, a.Location())
+	if name, ok := strOf(data["name"]); ok && name != "" {
+		n.Name = name
+	}
+	if status, ok := strOf(data["status"]); ok && status != "" {
+		n.SetAttr(AttrStatus, strings.ToUpper(status))
+	}
+	if ts, ok := strOf(data["creationTimestamp"]); ok && ts != "" {
+		n.SetAttr(AttrCreationTime, ts)
+	}
+	// diskSizeGb is the size of the source disk at snapshot time — the figure
+	// the snapshot UI shows and the price table bills against. storageBytes
+	// (the actual incremental bytes) lags and is byte-precision; v1 prices the
+	// flat diskSizeGb figure, the same simplification detached_disk applies to
+	// sizeGb.
+	size, _ := numOf(data["diskSizeGb"])
+	n.SetAttr(AttrSizeGB, size)
 	return n, nil
 }
 

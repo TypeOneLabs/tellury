@@ -15,10 +15,7 @@ const (
 )
 
 // Origin records how a rule came to exist.
-const (
-	OriginNative   = "native"
-	OriginCompiled = "compiled"
-)
+const OriginNative = "native"
 
 // Meta is a rule's static, machine-readable declaration.
 type Meta struct {
@@ -36,7 +33,7 @@ type Meta struct {
 	RequiredMetrics []string
 
 	Remediation string
-	// Origin records how the rule came to exist: "native" or "compiled".
+	// Origin records how the rule came to exist: "native".
 	Origin string
 }
 
@@ -64,8 +61,8 @@ func (r RuleFunc) Eval(ctx context.Context, p *Pass) ([]Finding, error) {
 }
 
 // Ev builds one Evidence entry, formatting value with format. It is the
-// shared helper native rules and the spec interpreter both use so evidence
-// rendering never drifts between the two paths.
+// shared helper native rules use so evidence rendering never drifts between
+// the two paths.
 func Ev(key, format string, value any) Evidence {
 	return Evidence{Key: key, Value: fmt.Sprintf(format, value)}
 }

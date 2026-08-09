@@ -5,15 +5,15 @@
 package compute
 
 import (
-	metricsgcp "github.com/TypeOneLabs/tellury/pkg/metrics/gcp"
 	"github.com/TypeOneLabs/tellury/pkg/metrics"
+	metricsgcp "github.com/TypeOneLabs/tellury/pkg/metrics/gcp"
 )
 
 // GCP metric types for the compute (gce_instance monitored-resource) specs.
 const (
-	MetricCPUUtilization        = "compute.googleapis.com/instance/cpu/utilization"
-	MetricMemoryPercentUsed     = "agent.googleapis.com/memory/percent_used"
-	MetricMemoryBalloonRAMUsed  = "compute.googleapis.com/instance/memory/balloon/ram_used"
+	MetricCPUUtilization       = "compute.googleapis.com/instance/cpu/utilization"
+	MetricMemoryPercentUsed    = "agent.googleapis.com/memory/percent_used"
+	MetricMemoryBalloonRAMUsed = "compute.googleapis.com/instance/memory/balloon/ram_used"
 )
 
 func init() {

@@ -59,7 +59,7 @@ func runEval(t *testing.T, n *graph.Node) ([]rules.Finding, map[rules.SkipCode]i
 			skipCounts[code]++
 		},
 	}
-	findings, err := rule{}.Eval(context.Background(), p)
+	findings, err := rules.AdaptNodeRule(rule{}).Eval(context.Background(), p)
 	if err != nil {
 		t.Fatalf("Eval: %v", err)
 	}
@@ -88,6 +88,57 @@ func TestEval_ExternalReservedUnattached_Fires(t *testing.T) {
 	}
 	if len(skips) != 0 {
 		t.Errorf("expected zero skips for a firing resource, got %+v", skips)
+	}
+}
+
+// TestEval_AddressUserCountAbsent_Fires pins ABSENCE MEANS ZERO for the
+// address_user_count attribute: a CAI payload whose users[] was never parsed
+// (or a replayed snapshot missing the key entirely) must behave EXACTLY like
+// user_count == 0 — the address has no users, so the rule still fires. A
+// regression to "skip on absence" (uc, ok := ...; return ok && uc == 0)
+// would silently lose this finding; this test fails under that mutation.
+func TestEval_AddressUserCountAbsent_Fires(t *testing.T) {
+	n := addrNode("EXTERNAL", "RESERVED", 0)
+	delete(n.Attrs, "address_user_count") // users[] was never parsed -> key absent
+	findings, skips := runEval(t, n)
+
+	if len(findings) != 1 {
+		t.Fatalf("want 1 finding when address_user_count is absent (absence means zero), got %d (%+v)", len(findings), findings)
+	}
+	f := findings[0]
+	if f.ResourceID != n.ID {
+		t.Fatalf("finding for wrong resource: %s", f.ResourceID)
+	}
+	wantWaste := 0.01 * pricing.HoursPerMonth
+	if f.MonthlyWasteUSD != round2(wantWaste) {
+		t.Errorf("MonthlyWasteUSD = %v, want %v (the whole reservation cost)", f.MonthlyWasteUSD, round2(wantWaste))
+	}
+	if len(skips) != 0 {
+		t.Errorf("expected zero skips for a firing resource, got %+v", skips)
+	}
+}
+
+// TestEval_TransientStatus_Skips pins the reserved_status guard against the
+// exact regression that real GCP states expose: an address sitting in a
+// transient status such as RESERVING or CREATING is NOT a billable reserved
+// address (no stable charge while the reservation is being set up), so it
+// must be skipped as non_billing_status, never reported as waste. This is
+// the test that fails if reserved_status is loosened to
+// `status != "IN_USE"`, which would sweep every transient-status address
+// into the firing set.
+func TestEval_TransientStatus_Skips(t *testing.T) {
+	for _, status := range []string{"RESERVING", "CREATING"} {
+		t.Run(status, func(t *testing.T) {
+			n := addrNode("EXTERNAL", status, 0)
+			findings, skips := runEval(t, n)
+
+			if len(findings) != 0 {
+				t.Fatalf("want 0 findings for an address in status %s, got %+v", status, findings)
+			}
+			if skips[rules.SkipNonBillingStatus] != 1 {
+				t.Errorf("want SkipNonBillingStatus recorded once for %s, got %+v", status, skips)
+			}
+		})
 	}
 }
 
@@ -158,7 +209,7 @@ func TestEval_NoPrice_Skips(t *testing.T) {
 	// Force a pricer that never resolves the SKU at all.
 	p.Price = noPricePricer{}
 
-	findings, err := rule{}.Eval(context.Background(), p)
+	findings, err := rules.AdaptNodeRule(rule{}).Eval(context.Background(), p)
 	if err != nil {
 		t.Fatalf("Eval: %v", err)
 	}

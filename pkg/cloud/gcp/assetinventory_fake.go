@@ -122,14 +122,14 @@ func foldSearchResult(item json.RawMessage) (*RawAsset, error) {
 		Resource json.RawMessage `json:"resource"`
 	}
 	var sr struct {
-		Name         string               `json:"name"`
-		AssetType    string               `json:"assetType"`
-		Project      string               `json:"project"`
-		Folders      []string             `json:"folders"`
-		Organization string               `json:"organization"`
-		UpdateTime   time.Time            `json:"updateTime"`
-		Location     string               `json:"location"`
-		Parent       string               `json:"parentFullResourceName"`
+		Name         string              `json:"name"`
+		AssetType    string              `json:"assetType"`
+		Project      string              `json:"project"`
+		Folders      []string            `json:"folders"`
+		Organization string              `json:"organization"`
+		UpdateTime   time.Time           `json:"updateTime"`
+		Location     string              `json:"location"`
+		Parent       string              `json:"parentFullResourceName"`
 		Versioned    []versionedResource `json:"versionedResources"`
 	}
 	if err := json.Unmarshal(item, &sr); err != nil {

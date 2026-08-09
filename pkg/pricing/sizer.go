@@ -7,8 +7,8 @@ package pricing
 // Family) and never names a concrete cloud SKU. The GCP-specific
 // implementation — the embedded machine catalog, StaticSizer and the custom
 // machine-type name parser — lives in pkg/pricing/gcp, which produces
-// MachineSpec values through this interface so rules and the compiler never
-// depend on a cloud package.
+// MachineSpec values through this interface so rules and the agnostic core
+// never depend on a cloud package.
 type Sizer interface {
 	Spec(machineType string) (MachineSpec, bool)
 	Family(machineType string) string

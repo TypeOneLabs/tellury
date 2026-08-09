@@ -27,15 +27,19 @@ const (
 	MinMonthlyWasteUSD = 0.10
 
 	// StaticIPSKU is the pricing catalogue SKU token for an unattached
-	// external static IP address. It matches both the embedded price
-	// table's "static_ip.unattached" entry and the token the live Cloud
-	// Billing Catalog lookup (pkg/pricing/gcp/catalog.go's matchSKU)
-	// indexes IP-range/static-IP SKUs under, so a live answer and the
-	// embedded fallback resolve the exact same key.
+	// external static IP address. All three price sources share it verbatim:
+	// the embedded table's "static_ip.unattached" entry, the live Cloud
+	// Billing Catalog lookup (pkg/pricing/gcp/catalog.go's matchSKU returns
+	// this exact token for IP-range/static-IP SKUs), and the key this rule
+	// queries — so a live answer and the embedded fallback resolve the same
+	// key. pkg/pricing/gcp/catalog_test.go's TestMatchSKU_StaticIPTokenPinned
+	// pins matchSKU's token to this constant, so the two can never drift
+	// apart again (a drift silently sends every static-IP price to the
+	// embedded fallback with no error).
 	StaticIPSKU = "unattached"
 )
 
-func init() { rules.Register(rule{}) }
+func init() { rules.RegisterNode(rule{}) }
 
 type rule struct{}
 
@@ -59,103 +63,99 @@ func (rule) Meta() rules.Meta {
 	}
 }
 
-func (rule) Eval(ctx context.Context, p *rules.Pass) ([]rules.Finding, error) {
-	var out []rules.Finding
+func (rule) Kind() graph.ResourceKind { return graph.KindAddress }
 
-	p.Graph.ByKind(graph.KindAddress, func(n *graph.Node) bool {
-		if ctx.Err() != nil {
-			return false
-		}
+func (rule) Guards() []rules.Guard {
+	return []rules.Guard{
+		{Name: "address_type_present", SkipCode: rules.SkipMissingAttr,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				v, ok := n.Str("address_type")
+				return ok && v != ""
+			}},
+		{Name: "status_present", SkipCode: rules.SkipMissingAttr,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				v, ok := n.Str("status")
+				return ok && v != ""
+			}},
+		{Name: "external_type", SkipCode: rules.SkipInternalAddress,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				addrType, _ := n.Str("address_type")
+				return addrType == "EXTERNAL"
+			}},
+		{Name: "not_in_use", SkipCode: rules.SkipAttached,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				status, _ := n.Str("status")
+				return status != "IN_USE"
+			}},
+		{Name: "reserved_status", SkipCode: rules.SkipNonBillingStatus,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				status, _ := n.Str("status")
+				return status == "RESERVED"
+			}},
+		{Name: "no_cai_users", SkipCode: rules.SkipAttached,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				// ABSENCE MEANS ZERO: the normalizer writes
+				// address_user_count unconditionally (users[] is always
+				// counted, even when empty), so a missing key means "no
+				// users", never an unknown to skip on. Skipping on absence
+				// would silently lose every finding for an address whose
+				// users[] was not parsed.
+				uc, _ := n.Num("address_user_count")
+				return uc == 0
+			}},
+	}
+}
 
-		// P0: exemption label.
-		if n.Labels["tellury-exempt"] == "true" {
-			p.SkipNode(ID, n.ID, rules.SkipExemptLabel)
-			return true
-		}
+func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *rules.Pass) ([]rules.CostBranch, error) {
+	// The whole monthly reservation cost is waste — there is no partial
+	// component to subtract, unlike an oversized resource.
+	region := pricing.RegionOf(n.Location)
+	unit, resolvedRegion, err := p.Price.UnitPrice(pricing.KindStaticIP, "gcp", StaticIPSKU, region)
+	if err != nil {
+		return nil, err // engine records SkipNoPrice; never a $0 assumption (Invariant I4)
+	}
+	monthlyWaste := unit * pricing.HoursPerMonth
 
-		// P1: shape valid.
-		addrType, ok := n.Str("address_type")
-		if !ok || addrType == "" {
-			p.SkipNode(ID, n.ID, rules.SkipMissingAttr)
-			return true
-		}
-		status, ok := n.Str("status")
-		if !ok || status == "" {
-			p.SkipNode(ID, n.ID, rules.SkipMissingAttr)
-			return true
-		}
+	// Stash the values ExtraEvidence needs. ExtraEvidence has no Pass, so
+	// the price-source entry is rendered here — the only place the pricer
+	// is reachable — and carried through nc.
+	nc.Set("unit_price_hourly", unit)
+	nc.Set("price_source", rules.PriceEvidence("price_source", p.Price, pricing.KindStaticIP, StaticIPSKU, resolvedRegion))
 
-		// P2: internal addresses are free — not waste. Distinct reason from
-		// "in use" so --explain-skips can tell the two apart.
-		if addrType != "EXTERNAL" {
-			p.SkipNode(ID, n.ID, rules.SkipInternalAddress)
-			return true
-		}
+	return []rules.CostBranch{{
+		Waste:      round2(monthlyWaste),
+		Confidence: 1.0, // deterministic attribute check; no measurement involved
+		Label:      "full_reservation",
+	}}, nil
+}
 
-		// P3: in-use addresses are doing their job — not waste.
-		if status == "IN_USE" {
-			p.SkipNode(ID, n.ID, rules.SkipAttached)
-			return true
-		}
-		if status != "RESERVED" {
-			// e.g. a transient "RESERVING" state: no stable billable waste
-			// to report yet.
-			p.SkipNode(ID, n.ID, rules.SkipNonBillingStatus)
-			return true
-		}
+func (rule) MinWasteUSD() float64 { return MinMonthlyWasteUSD }
 
-		// P4: defensive cross-check against CAI's own users[] — status and
-		// the users list must agree that nothing is attached, exactly the
-		// dual-signal pattern detached_disk uses for disks.
-		userCount, _ := n.Num("address_user_count") // absent => treat as 0
-		if userCount > 0 {
-			p.SkipNode(ID, n.ID, rules.SkipAttached)
-			return true
-		}
+// EvidenceKeys auto-collects the two leading evidence entries exactly as the
+// pre-refactor rule rendered them: address_type and status are node attrs
+// whose %v rendering equals the original string values, and they are the
+// first two keys of the original evidence list, so auto-collection preserves
+// the original order. Everything from unit_price_hourly onward is computed or
+// conditionally present, so ExtraEvidence renders it.
+func (rule) EvidenceKeys() []string {
+	return []string{"address_type", "status"}
+}
 
-		// Cost model: the whole monthly reservation cost is waste — there is
-		// no partial component to subtract, unlike an oversized resource.
-		region := pricing.RegionOf(n.Location)
-		unit, resolvedRegion, err := p.Price.UnitPrice(pricing.KindStaticIP, "gcp", StaticIPSKU, region)
-		if err != nil {
-			p.SkipNode(ID, n.ID, rules.SkipNoPrice)
-			return true
-		}
-		monthlyWaste := unit * pricing.HoursPerMonth
-
-		// P5: material.
-		if monthlyWaste < MinMonthlyWasteUSD {
-			p.SkipNode(ID, n.ID, rules.SkipBelowMinWaste)
-			return true
-		}
-
-		ev := []rules.Evidence{
-			{Key: "address_type", Value: addrType},
-			{Key: "status", Value: status},
-			{Key: "unit_price_hourly", Value: fmt.Sprintf("$%.4f", unit)},
-		}
-		if purpose, ok := n.Str("address_purpose"); ok && purpose != "" {
-			ev = append(ev, rules.Evidence{Key: "address_purpose", Value: purpose})
-		}
-		if ip, ok := n.Str("address_ip"); ok && ip != "" {
-			ev = append(ev, rules.Evidence{Key: "address_ip", Value: ip})
-		}
-		ev = append(ev, rules.PriceEvidence("price_source", p.Price, pricing.KindStaticIP, StaticIPSKU, resolvedRegion))
-
-		out = append(out, rules.Finding{
-			RuleID:          ID,
-			ResourceID:      n.ID,
-			Resource:        n.Display(),
-			Kind:            n.Kind,
-			Project:         n.Project,
-			Location:        n.Location,
-			MonthlyWasteUSD: round2(monthlyWaste),
-			Confidence:      1.0, // deterministic attribute check; no measurement involved
-			Evidence:        ev,
-		})
-		return true
-	})
-	return out, nil
+func (rule) ExtraEvidence(n *graph.Node, nc *rules.NodeContext, branch rules.CostBranch) []rules.Evidence {
+	unit, _ := nc.Get("unit_price_hourly")
+	ev := []rules.Evidence{
+		{Key: "unit_price_hourly", Value: fmt.Sprintf("$%.4f", unit.(float64))},
+	}
+	if purpose, ok := n.Str("address_purpose"); ok && purpose != "" {
+		ev = append(ev, rules.Evidence{Key: "address_purpose", Value: purpose})
+	}
+	if ip, ok := n.Str("address_ip"); ok && ip != "" {
+		ev = append(ev, rules.Evidence{Key: "address_ip", Value: ip})
+	}
+	if v, ok := nc.Get("price_source"); ok {
+		ev = append(ev, v.(rules.Evidence))
+	}
+	return ev
 }
 
 func round2(v float64) float64 {

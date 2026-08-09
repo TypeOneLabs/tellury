@@ -26,10 +26,10 @@ const (
 	// SearchAllResources hierarchy fields and are NEVER rule evaluation
 	// targets and never appear as findings (see Node.Container and
 	// Graph.ResourceNodeCount).
-	KindProject     ResourceKind = "project"
-	KindFolder      ResourceKind = "folder"
+	KindProject      ResourceKind = "project"
+	KindFolder       ResourceKind = "folder"
 	KindOrganization ResourceKind = "organization"
-	KindUnknown     ResourceKind = "unknown"
+	KindUnknown      ResourceKind = "unknown"
 )
 
 // Ref is a stable, globally unique node identity. For GCP we use the Cloud

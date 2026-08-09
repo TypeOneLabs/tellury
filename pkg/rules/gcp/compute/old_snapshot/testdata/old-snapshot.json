@@ -1,0 +1,52 @@
+{
+  "assets": [
+    {
+      "name": "//compute.googleapis.com/projects/my-project/global/snapshots/backup-2023-01-01",
+      "assetType": "compute.googleapis.com/Snapshot",
+      "project": "projects/my-project",
+      "resource": {
+        "version": "v1",
+        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+        "location": "us-central1",
+        "data": {
+          "name": "backup-2023-01-01",
+          "status": "READY",
+          "diskSizeGb": 250,
+          "sourceDisk": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/web-db-01",
+          "creationTimestamp": "2023-01-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "//compute.googleapis.com/projects/my-project/global/snapshots/backup-2024-01-10",
+      "assetType": "compute.googleapis.com/Snapshot",
+      "project": "projects/my-project",
+      "resource": {
+        "version": "v1",
+        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+        "location": "us-central1",
+        "data": {
+          "name": "backup-2024-01-10",
+          "status": "READY",
+          "diskSizeGb": 120,
+          "creationTimestamp": "2024-01-10T00:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "//compute.googleapis.com/projects/my-project/global/snapshots/legacy-no-size",
+      "assetType": "compute.googleapis.com/Snapshot",
+      "project": "projects/my-project",
+      "resource": {
+        "version": "v1",
+        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+        "location": "us-central1",
+        "data": {
+          "name": "legacy-no-size",
+          "status": "READY",
+          "creationTimestamp": "2022-06-01T00:00:00Z"
+        }
+      }
+    }
+  ]
+}

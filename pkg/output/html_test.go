@@ -295,7 +295,7 @@ func TestRenderHTML_ZeroFindingsRenders(t *testing.T) {
 
 	must := []string{
 		"<!DOCTYPE html>",
-		"$0.00",          // zero rollup root
+		"$0.00", // zero rollup root
 		"No findings in this scan.",
 		`<time datetime="2024-01-20T00:00:00Z">`,
 	}

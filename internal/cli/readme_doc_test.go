@@ -81,12 +81,12 @@ func TestReadmeOutDirAndHTMLReport(t *testing.T) {
 	// It must contain a collapsible hierarchy and the findings table with the
 	// price source provenance on the row.
 	for _, want := range []string{
-		"<details>",                 // collapsible hierarchy node
-		"Where the waste is",        // hierarchy section
-		"Top findings",              // findings table section
-		"price_source",              // price provenance on a finding
-		"pd-standard-01",            // the fixture resource
-		"$8.00",                     // the documented monthly waste
+		"<details>",          // collapsible hierarchy node
+		"Where the waste is", // hierarchy section
+		"Top findings",       // findings table section
+		"price_source",       // price provenance on a finding
+		"pd-standard-01",     // the fixture resource
+		"$8.00",              // the documented monthly waste
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("HTML report missing %q", want)

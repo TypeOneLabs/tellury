@@ -39,9 +39,9 @@ import (
 // pass uses to build the hierarchy container nodes (project / folder /
 // organization) without any extra Cloud Resource Manager call.
 type RawAsset struct {
-	Name       string       `json:"name"`
-	AssetType  string       `json:"assetType"`
-	UpdateTime time.Time    `json:"updateTime"`
+	Name       string    `json:"name"`
+	AssetType  string    `json:"assetType"`
+	UpdateTime time.Time `json:"updateTime"`
 	// Project is the project this resource belongs to, "projects/<N>".
 	Project string `json:"project"`
 	// Folders are the folders (immediate and ancestors) that contain this
@@ -49,7 +49,7 @@ type RawAsset struct {
 	Folders []string `json:"folders"`
 	// Organization is the organization this resource belongs to,
 	// "organizations/<N>".
-	Organization string     `json:"organization"`
+	Organization string       `json:"organization"`
 	Resource     *RawResource `json:"resource"`
 }
 

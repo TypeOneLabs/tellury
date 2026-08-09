@@ -258,16 +258,17 @@ func (c *CatalogPricer) overrideValue(kind pricing.Kind, sku, region string) (fl
 // service display name ListServices returns, so ListSkus can be scoped to
 // the right service instead of walking the entire (very large) catalogue.
 var billingServiceForKind = map[pricing.Kind]string{
-	pricing.KindDiskCapacity:   "Compute Engine",
-	pricing.KindDiskIOPS:       "Compute Engine",
-	pricing.KindDiskThroughput: "Compute Engine",
-	pricing.KindVMInstance:     "Compute Engine",
-	pricing.KindVMCustomCPU:    "Compute Engine",
-	pricing.KindVMCustomRAM:    "Compute Engine",
-	pricing.KindStaticIP:       "Compute Engine",
-	pricing.KindGCSStorage:     "Cloud Storage",
-	pricing.KindGCSRetrieval:   "Cloud Storage",
-	pricing.KindGCSOpsClassA:   "Cloud Storage",
+	pricing.KindDiskCapacity:    "Compute Engine",
+	pricing.KindDiskIOPS:        "Compute Engine",
+	pricing.KindDiskThroughput:  "Compute Engine",
+	pricing.KindVMInstance:      "Compute Engine",
+	pricing.KindVMCustomCPU:     "Compute Engine",
+	pricing.KindVMCustomRAM:     "Compute Engine",
+	pricing.KindStaticIP:        "Compute Engine",
+	pricing.KindSnapshotStorage: "Compute Engine",
+	pricing.KindGCSStorage:      "Cloud Storage",
+	pricing.KindGCSRetrieval:    "Cloud Storage",
+	pricing.KindGCSOpsClassA:    "Cloud Storage",
 }
 
 // liveUnitPrice resolves (kind, sku, region) against the cached catalogue,
@@ -400,8 +401,16 @@ func (c *CatalogPricer) indexServiceSKUs(ctx context.Context, displayName, servi
 // matchSKU derives tellury's (Kind, sku-token) pair from a Cloud Billing SKU's
 // category/description, so the live catalogue lines up with the same SKU
 // vocabulary the embedded table and every rule already use (e.g. "pd-ssd",
-// "n1-standard", "STANDARD"/"NEARLINE" storage classes). Returns ok=false
-// for every SKU tellury does not model - the vast majority of the catalogue.
+// "n1-standard", "unattached", "STANDARD"/"NEARLINE" storage classes).
+// Returns ok=false for every SKU tellury does not model - the vast majority
+// of the catalogue.
+//
+// The static-IP token is pinned to the exact constant the unused_reserved_ip
+// rule queries: matchSKU returns "unattached" for IP-range/static-IP SKUs,
+// and TestMatchSKU_StaticIPTokenPinned asserts that token equals
+// unused_reserved_ip.StaticIPSKU so a live answer and the embedded fallback
+// can never resolve different keys (and every static-IP price silently fall
+// back to the embedded table) again.
 func matchSKU(sk *billingpb.Sku) (pricing.Kind, string, bool) {
 	cat := sk.GetCategory()
 	desc := strings.ToLower(sk.GetDescription())
@@ -440,7 +449,16 @@ func matchSKU(sk *billingpb.Sku) (pricing.Kind, string, bool) {
 		case "extremepd":
 			return pricing.KindDiskCapacity, "pd-extreme", true
 		case "iprange", "staticipaddress":
-			return pricing.KindStaticIP, "external-static", true
+			// A reserved external (static) IP: a flat per-address-hour rate.
+			// Indexed under the same "unattached" token the embedded table's
+			// static_ip.unattached entry and the unused_reserved_ip rule use,
+			// so the live catalogue resolves the exact key the rule queries.
+			return pricing.KindStaticIP, "unattached", true
+		case "storagesnapshot":
+			// Persistent disk snapshots: a flat per-GiB-month storage rate,
+			// indexed under the same "standard" token the embedded table and
+			// the old_snapshot rule use.
+			return pricing.KindSnapshotStorage, "standard", true
 		}
 	case "Storage":
 		switch {

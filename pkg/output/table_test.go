@@ -37,9 +37,9 @@ func TestTableColumnsNeverTouch_MultiProject(t *testing.T) {
 	}
 
 	report := Report{
-		Scope:                "projects/alpha-proj",
-		Provider:             "gcp",
-		WindowDays:           14,
+		Scope:      "projects/alpha-proj",
+		Provider:   "gcp",
+		WindowDays: 14,
 		Findings: []rules.Finding{
 			// "abcdefghi" is exactly colProject (9): the padded-exactly boundary.
 			{RuleID: "detached_disk", Resource: "disk/disk-a", Project: "abcdefghi", MonthlyWasteUSD: 8.00},
