@@ -8,6 +8,12 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-08-09
+
+Snapshot pricing corrections. `old_snapshot` shipped in 0.1.1 reporting figures that were
+wrong in both directions at once; both errors are fixed and validated against a real
+organization's bill.
+
 ### Fixed
 
 - `old_snapshot` priced snapshots against their source disk's size rather than the
@@ -152,6 +158,7 @@ First release. GCP only.
   documentation rather than captured from the API normalizes to a node with empty
   attributes rather than failing loudly.
 
-[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/TypeOneLabs/tellury/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/TypeOneLabs/tellury/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/TypeOneLabs/tellury/releases/tag/v0.1.0
