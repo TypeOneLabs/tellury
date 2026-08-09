@@ -19,6 +19,14 @@ version is `0`, the CLI surface and the rule interface may change between minor 
   reported as waste. Snapshots now carry `storage_bytes` as their billable size, with
   `source_disk_size_gb` kept alongside as evidence because it is the figure the console
   shows.
+- Snapshot pricing never resolved from the live Cloud Billing Catalog. The matcher looked
+  for resource group `storagesnapshot`; the catalogue calls it `PDSnapshot` and files it
+  under resource family `Storage`, not `Compute`. Every snapshot therefore fell back to the
+  embedded table, which itself carried $0.026/GiB-month against a real rate of $0.050 —
+  so the fallback was wrong too, and the two errors compounded. Snapshot SKUs are now
+  matched on resource group alone, since the group name is unique and the family is not
+  where a reader would expect it. Early-deletion charges in the same group are excluded:
+  they are one-off penalties, not standing rates.
 
 ## [0.1.1] — 2026-08-09
 

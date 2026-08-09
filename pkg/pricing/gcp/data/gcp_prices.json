@@ -2,78 +2,196 @@
   "version": "2024-06-01",
   "currency": "USD",
   "disk_capacity": {
-    "pd-standard":          {"default": 0.040, "us-central1": 0.040},
-    "pd-standard-regional": {"default": 0.080},
-    "pd-balanced":          {"default": 0.100},
-    "pd-balanced-regional": {"default": 0.200},
-    "pd-ssd":               {"default": 0.170},
-    "pd-ssd-regional":      {"default": 0.340},
-    "pd-extreme":           {"default": 0.125},
-    "hyperdisk-balanced":   {"default": 0.088},
-    "hyperdisk-throughput": {"default": 0.030},
-    "hyperdisk-extreme":    {"default": 0.125}
+    "pd-standard": {
+      "default": 0.04,
+      "us-central1": 0.04
+    },
+    "pd-standard-regional": {
+      "default": 0.08
+    },
+    "pd-balanced": {
+      "default": 0.1
+    },
+    "pd-balanced-regional": {
+      "default": 0.2
+    },
+    "pd-ssd": {
+      "default": 0.17
+    },
+    "pd-ssd-regional": {
+      "default": 0.34
+    },
+    "pd-extreme": {
+      "default": 0.125
+    },
+    "hyperdisk-balanced": {
+      "default": 0.088
+    },
+    "hyperdisk-throughput": {
+      "default": 0.03
+    },
+    "hyperdisk-extreme": {
+      "default": 0.125
+    }
   },
   "disk_iops": {
-    "pd-extreme":         {"default": 0.065},
-    "hyperdisk-balanced": {"default": 0.005},
-    "hyperdisk-extreme":  {"default": 0.008}
+    "pd-extreme": {
+      "default": 0.065
+    },
+    "hyperdisk-balanced": {
+      "default": 0.005
+    },
+    "hyperdisk-extreme": {
+      "default": 0.008
+    }
   },
   "disk_throughput": {
-    "hyperdisk-balanced":   {"default": 0.040},
-    "hyperdisk-throughput": {"default": 0.040}
+    "hyperdisk-balanced": {
+      "default": 0.04
+    },
+    "hyperdisk-throughput": {
+      "default": 0.04
+    }
   },
   "vm_instance": {
-    "e2-micro":       {"default": 0.008376},
-    "e2-small":       {"default": 0.016751},
-    "e2-medium":      {"default": 0.033503},
-    "e2-standard-2":  {"default": 0.067006},
-    "e2-standard-4":  {"default": 0.134012},
-    "e2-standard-8":  {"default": 0.268024},
-    "e2-standard-16": {"default": 0.536048},
-    "e2-standard-32": {"default": 1.072096},
-    "e2-highmem-2":   {"default": 0.090381},
-    "e2-highmem-4":   {"default": 0.180762},
-    "e2-highmem-8":   {"default": 0.361524},
-    "e2-highcpu-2":   {"default": 0.049464},
-    "e2-highcpu-4":   {"default": 0.098928},
-    "e2-highcpu-8":   {"default": 0.197856},
-    "n2-standard-2":  {"default": 0.097118},
-    "n2-standard-4":  {"default": 0.194236},
-    "n2-standard-8":  {"default": 0.388472},
-    "n2-standard-16": {"default": 0.776944}
+    "e2-micro": {
+      "default": 0.008376
+    },
+    "e2-small": {
+      "default": 0.016751
+    },
+    "e2-medium": {
+      "default": 0.033503
+    },
+    "e2-standard-2": {
+      "default": 0.067006
+    },
+    "e2-standard-4": {
+      "default": 0.134012
+    },
+    "e2-standard-8": {
+      "default": 0.268024
+    },
+    "e2-standard-16": {
+      "default": 0.536048
+    },
+    "e2-standard-32": {
+      "default": 1.072096
+    },
+    "e2-highmem-2": {
+      "default": 0.090381
+    },
+    "e2-highmem-4": {
+      "default": 0.180762
+    },
+    "e2-highmem-8": {
+      "default": 0.361524
+    },
+    "e2-highcpu-2": {
+      "default": 0.049464
+    },
+    "e2-highcpu-4": {
+      "default": 0.098928
+    },
+    "e2-highcpu-8": {
+      "default": 0.197856
+    },
+    "n2-standard-2": {
+      "default": 0.097118
+    },
+    "n2-standard-4": {
+      "default": 0.194236
+    },
+    "n2-standard-8": {
+      "default": 0.388472
+    },
+    "n2-standard-16": {
+      "default": 0.776944
+    }
   },
   "vm_custom_cpu": {
-    "e2-custom": {"default": 0.022890},
-    "n1-custom": {"default": 0.033174},
-    "n2-custom": {"default": 0.033174}
+    "e2-custom": {
+      "default": 0.02289
+    },
+    "n1-custom": {
+      "default": 0.033174
+    },
+    "n2-custom": {
+      "default": 0.033174
+    }
   },
   "vm_custom_ram": {
-    "e2-custom": {"default": 0.003067},
-    "n1-custom": {"default": 0.004446},
-    "n2-custom": {"default": 0.004446}
+    "e2-custom": {
+      "default": 0.003067
+    },
+    "n1-custom": {
+      "default": 0.004446
+    },
+    "n2-custom": {
+      "default": 0.004446
+    }
   },
   "gcs_storage": {
-    "STANDARD": {"default": 0.020, "us": 0.020, "us-central1": 0.020, "eu": 0.020, "asia": 0.023},
-    "NEARLINE": {"default": 0.010, "us": 0.010, "us-central1": 0.010},
-    "COLDLINE": {"default": 0.004, "us": 0.004},
-    "ARCHIVE":  {"default": 0.0012, "us": 0.0012}
+    "STANDARD": {
+      "default": 0.02,
+      "us": 0.02,
+      "us-central1": 0.02,
+      "eu": 0.02,
+      "asia": 0.023
+    },
+    "NEARLINE": {
+      "default": 0.01,
+      "us": 0.01,
+      "us-central1": 0.01
+    },
+    "COLDLINE": {
+      "default": 0.004,
+      "us": 0.004
+    },
+    "ARCHIVE": {
+      "default": 0.0012,
+      "us": 0.0012
+    }
   },
   "gcs_retrieval": {
-    "STANDARD": {"default": 0.000},
-    "NEARLINE": {"default": 0.010},
-    "COLDLINE": {"default": 0.020},
-    "ARCHIVE":  {"default": 0.050}
+    "STANDARD": {
+      "default": 0.0
+    },
+    "NEARLINE": {
+      "default": 0.01
+    },
+    "COLDLINE": {
+      "default": 0.02
+    },
+    "ARCHIVE": {
+      "default": 0.05
+    }
   },
   "gcs_ops_class_a": {
-    "STANDARD": {"default": 0.005},
-    "NEARLINE": {"default": 0.010},
-    "COLDLINE": {"default": 0.010},
-    "ARCHIVE":  {"default": 0.050}
+    "STANDARD": {
+      "default": 0.005
+    },
+    "NEARLINE": {
+      "default": 0.01
+    },
+    "COLDLINE": {
+      "default": 0.01
+    },
+    "ARCHIVE": {
+      "default": 0.05
+    }
   },
   "static_ip": {
-    "unattached": {"default": 0.010}
+    "unattached": {
+      "default": 0.01
+    }
   },
   "snapshot_storage": {
-    "standard": {"default": 0.026, "us-central1": 0.026}
+    "standard": {
+      "default": 0.05
+    },
+    "archive": {
+      "default": 0.024
+    }
   }
 }

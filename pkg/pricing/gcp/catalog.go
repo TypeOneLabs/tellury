@@ -417,6 +417,30 @@ func matchSKU(sk *billingpb.Sku) (pricing.Kind, string, bool) {
 	resourceGroup := strings.ToLower(cat.GetResourceGroup())
 	usageType := cat.GetUsageType()
 
+	// Persistent disk snapshots are matched on resource group ALONE, before the
+	// family switch, because Cloud Billing files them under ResourceFamily
+	// "Storage" — not "Compute", where a reader would look for a Compute Engine
+	// SKU, and not where an earlier version of this function put them. Their
+	// group name "PDSnapshot" is unique in the catalogue, so it identifies them
+	// without help from the family.
+	//
+	// Billed per GiB-month (usage unit GiBy.mo), which is why the rule converts
+	// bytes with 1<<30 rather than 1e9. The group holds three kinds of SKU and
+	// only the first is a standing storage rate:
+	//   "Storage PD Snapshot"                the standard rate
+	//   "... Archive Snapshot Data Storage"  the archive tier
+	//   "... Snapshot Early Deletion"        a one-off charge, not a rate
+	if resourceGroup == "pdsnapshot" && usageType == "OnDemand" {
+		switch {
+		case strings.Contains(desc, "early deletion"):
+			return "", "", false
+		case strings.Contains(desc, "archive"):
+			return pricing.KindSnapshotStorage, "archive", true
+		default:
+			return pricing.KindSnapshotStorage, "standard", true
+		}
+	}
+
 	switch cat.GetResourceFamily() {
 	case "Compute":
 		if usageType != "OnDemand" {
@@ -454,11 +478,6 @@ func matchSKU(sk *billingpb.Sku) (pricing.Kind, string, bool) {
 			// static_ip.unattached entry and the unused_reserved_ip rule use,
 			// so the live catalogue resolves the exact key the rule queries.
 			return pricing.KindStaticIP, "unattached", true
-		case "storagesnapshot":
-			// Persistent disk snapshots: a flat per-GiB-month storage rate,
-			// indexed under the same "standard" token the embedded table and
-			// the old_snapshot rule use.
-			return pricing.KindSnapshotStorage, "standard", true
 		}
 	case "Storage":
 		switch {

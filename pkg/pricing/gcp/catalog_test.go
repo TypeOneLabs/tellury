@@ -9,6 +9,7 @@ import (
 	billingpb "cloud.google.com/go/billing/apiv1/billingpb"
 
 	"github.com/TypeOneLabs/tellury/pkg/pricing"
+	"github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/old_snapshot"
 	"github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/unused_reserved_ip"
 )
 
@@ -141,5 +142,63 @@ func TestMatchSKU_StaticIPTokenPinned(t *testing.T) {
 			"the live catalogue would never match and every static-IP price "+
 			"would silently fall back to the embedded table",
 			token, unused_reserved_ip.StaticIPSKU)
+	}
+}
+
+// TestMatchSKU_SnapshotTokenPinned is the snapshot equivalent of the static-IP
+// test above, and exists for the same reason: the resource group was wrong
+// ("storagesnapshot"), so no live SKU ever matched and every snapshot silently
+// resolved from the embedded table — which itself carried a rate roughly half
+// the real one. The combined error understated a real snapshot's cost by ~2x.
+//
+// The Category values below are copied from a live catalogue response, not
+// invented, which is the whole point: an invented group name is what broke it.
+func TestMatchSKU_SnapshotTokenPinned(t *testing.T) {
+	sk := &billingpb.Sku{
+		Category: &billingpb.Category{
+			ServiceDisplayName: "Compute Engine",
+			// Copied verbatim from a live catalogue response. Cloud Billing
+			// files snapshot SKUs under family "Storage", NOT "Compute" — an
+			// earlier version of this test invented "Compute", so the test
+			// passed while no live SKU matched and every snapshot silently
+			// used the embedded rate.
+			ResourceFamily: "Storage",
+			ResourceGroup:  "PDSnapshot",
+			UsageType:      "OnDemand",
+		},
+		Description: "Storage PD Snapshot",
+	}
+
+	kind, token, ok := matchSKU(sk)
+	if !ok {
+		t.Fatalf("matchSKU(%q) must match a live snapshot SKU", sk.GetDescription())
+	}
+	if kind != pricing.KindSnapshotStorage {
+		t.Fatalf("matchSKU kind = %v, want %v", kind, pricing.KindSnapshotStorage)
+	}
+	if token != old_snapshot.SnapshotStorageSKU {
+		t.Fatalf("matchSKU token = %q, but the old_snapshot rule queries %q: "+
+			"the live catalogue would never match and every snapshot price "+
+			"would silently fall back to the embedded table",
+			token, old_snapshot.SnapshotStorageSKU)
+	}
+}
+
+// TestMatchSKU_SnapshotEarlyDeletionIgnored: the PDSnapshot group also carries
+// early-deletion charges, which are one-off penalties rather than a standing
+// per-GiB-month rate. Indexing one as the storage rate would overwrite the real
+// rate for that region with an unrelated number.
+func TestMatchSKU_SnapshotEarlyDeletionIgnored(t *testing.T) {
+	sk := &billingpb.Sku{
+		Category: &billingpb.Category{
+			ServiceDisplayName: "Compute Engine",
+			ResourceFamily: "Storage",
+			ResourceGroup:  "PDSnapshot",
+			UsageType:      "OnDemand",
+		},
+		Description: "Regional Standard Snapshot Early Deletion in Changhua County",
+	}
+	if _, _, ok := matchSKU(sk); ok {
+		t.Error("an early-deletion charge must not be indexed as a snapshot storage rate")
 	}
 }
