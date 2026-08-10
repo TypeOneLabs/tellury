@@ -22,6 +22,17 @@ type table map[pricing.Kind]map[string]map[string]float64
 // conventions; this package owns the actual USD values and the SKU/region
 // spelling. A future AWS provider would keep its own StaticPricer in its own
 // package rather than sharing this GCP-shaped one.
+//
+// FALLBACK OF LAST RESORT. A rate in this table is the lowest-precedence
+// source in the CatalogPricer stack (--price-file override > live Cloud
+// Billing Catalog > embedded table) and is a hand-maintained snapshot, not
+// ground truth: it can silently drift from the live catalogue. The
+// snapshot_storage.standard entry did exactly that — it sat at $0.026/GiB
+// while the real catalogue billed ~$0.050/GiB, a roughly 2x understatement —
+// and because live lookups fell back to this table without any error, the
+// drift went unnoticed until a real bill was compared. Treat any answer whose
+// provenance reads SourceEmbedded as a stopgap to verify against the live
+// catalogue, never as a number to trust on its own.
 type StaticPricer struct {
 	t table
 }

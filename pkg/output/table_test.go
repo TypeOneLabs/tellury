@@ -2,50 +2,81 @@ package output
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/TypeOneLabs/tellury/pkg/rules"
 )
 
-// projectRowWidth is the multi-project row's fixed width: RESOURCE (19) + one
-// separator + PROJECT (9) + one separator + RULE (26) + MONTHLY WASTE (13).
-// Because every variable column is right-padded to exactly its width and a
-// literal space follows each one, a value that fills its cell (padded exactly
-// at the boundary) or that is truncated down to it can never run straight
-// into the next column. The single-project layout is 30+26+13 = 69 too, so
-// an organization-wide scan never grows past the single-project width.
-const projectRowWidth = colResourceNarrow + 1 + colProject + 1 + colRule + colMoney
+// ---------------------------------------------------------------------------
+// Defect 1 — project and resource names must never be truncated
+// ---------------------------------------------------------------------------
 
-// offsetProjectStart is the rune offset where the PROJECT cell begins: after
-// the resource field and its single separator space.
-const offsetProjectStart = colResourceNarrow + 1
-
-// offsetRuleStart is the rune offset where the RULE cell begins: after the
-// project field and its single separator space.
-const offsetRuleStart = colResourceNarrow + 1 + colProject + 1
-
-// TestTableColumnsNeverTouch_MultiProject is the boundary regression for the
-// multi-project layout. GCP project IDs are routinely longer than the column
-// width, so a value that fills its cell (padded exactly at the boundary — a
-// 9-rune project) or a value that is truncated down to it (a 10+-rune project)
-// must still be separated from the RULE column by at least one space. This is
-// the case that used to collide when the separator was missing.
-func TestTableColumnsNeverTouch_MultiProject(t *testing.T) {
-	if projectRowWidth != 69 {
-		t.Fatalf("project row width = %d, want 69; layout drift must be caught here", projectRowWidth)
+// TestTableProjectAndResourceNamesNeverTruncated pins the defect-1 fix. The
+// real output used to read "alpha-da…" and "ib-testi…" because the PROJECT
+// column was a fixed 9-rune width, and "snapshot/alpha-des…" because the
+// RESOURCE column was fixed too. Every variable column is now sized to its
+// widest value, so a 20-character GCP project ID and a long resource name are
+// rendered in full and can be copied straight into a gcloud command.
+func TestTableProjectAndResourceNamesNeverTruncated(t *testing.T) {
+	report := Report{
+		Scope:      "organizations/506691140800",
+		Provider:   "gcp",
+		WindowDays: 14,
+		Findings: []rules.Finding{
+			{RuleID: "old_snapshot", Resource: "snapshot/alpha-desktop", Project: "alpha-data-storage", MonthlyWasteUSD: 5.20},
+			{RuleID: "old_snapshot", Resource: "snapshot/ib-test", Project: "ib-testing-playground", MonthlyWasteUSD: 0.26},
+		},
+		TotalMonthlyWasteUSD: 5.46,
+		FindingCount:         2,
+		MultiProject:         true,
+		ResourcesScanned:     17,
+		RulesEvaluated:       5,
 	}
 
+	var buf bytes.Buffer
+	if err := (tableRenderer{}).Render(&buf, report); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		"alpha-data-storage",
+		"ib-testing-playground",
+		"snapshot/alpha-desktop",
+		"snapshot/ib-test",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("table must render the full %q (variable columns are sized to their widest value, never truncated):\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "…") {
+		t.Errorf("table must not contain an ellipsis — no displayed value may be truncated:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Column separation under content-sized widths
+// ---------------------------------------------------------------------------
+
+// TestTableColumnsNeverTouch_MultiProject is the boundary regression for the
+// multi-project layout under content-sized columns. Because every variable
+// column is sized to its widest value, the widest value fills its cell
+// exactly — so the literal separator space after every variable cell is what
+// keeps it from running into the next column. This is the case that used to
+// collide when the separator was missing.
+func TestTableColumnsNeverTouch_MultiProject(t *testing.T) {
 	report := Report{
 		Scope:      "projects/alpha-proj",
 		Provider:   "gcp",
 		WindowDays: 14,
 		Findings: []rules.Finding{
-			// "abcdefghi" is exactly colProject (9): the padded-exactly boundary.
-			{RuleID: "detached_disk", Resource: "disk/disk-a", Project: "abcdefghi", MonthlyWasteUSD: 8.00},
-			// Longer than the 9-rune width: truncates down to a 9-rune cell.
-			{RuleID: "detached_disk", Resource: "disk/d2", Project: "a-very-long-project-name", MonthlyWasteUSD: 8.00},
-			// Short: left-padding must not collide either.
+			// "a-very-long-project-name" is the widest project, so the PROJECT
+			// column is sized to it: this value fills its cell exactly and must
+			// not touch RULE.
+			{RuleID: "detached_disk", Resource: "disk/disk-a", Project: "a-very-long-project-name", MonthlyWasteUSD: 8.00},
+			{RuleID: "detached_disk", Resource: "disk/d2", Project: "abcdefghi", MonthlyWasteUSD: 8.00},
 			{RuleID: "detached_disk", Resource: "disk/d1", Project: "ab", MonthlyWasteUSD: 8.00},
 		},
 		TotalMonthlyWasteUSD: 24.00,
@@ -65,51 +96,336 @@ func TestTableColumnsNeverTouch_MultiProject(t *testing.T) {
 		t.Fatalf("expected 6 lines, got %d:\n%s", len(lines), buf.String())
 	}
 
-	// Header + the three data rows: every variable boundary must hold a space.
-	for _, line := range lines[:4] {
-		assertRowSeparated(t, line)
-	}
-	assertRowSeparated(t, lines[1]) // exact-width project
-	assertRowSeparated(t, lines[2]) // truncated project
-	assertRowSeparated(t, lines[3]) // short project (padding)
+	display := tableFindings(report)
+	l := layoutTable(report, display)
 
-	// The TOTAL row mirrors the header's four-column layout and is likewise
-	// separated at every variable boundary.
-	totalRow := lines[len(lines)-1]
-	assertRowSeparated(t, totalRow)
-	if !strings.Contains(totalRow, "TOTAL") {
-		t.Errorf("TOTAL row missing TOTAL in the resource cell: %q", totalRow)
+	// Header + data rows: every variable boundary must hold a space, and every
+	// row must be exactly one data-row wide.
+	for _, line := range lines[:4] {
+		assertRowSeparated(t, line, l)
 	}
-	// The finding count lands in the PROJECT cell and the money lands in the
-	// far-right MONTHLY WASTE cell — proving the total row uses four columns
-	// and not the three-column layout.
-	projectCell := strings.TrimSpace(runeSlice(totalRow, offsetProjectStart, colProject))
-	if !strings.Contains(projectCell, "findings") && !strings.Contains(projectCell, "findin") {
-		t.Errorf("TOTAL row PROJECT cell = %q, want the finding count; the total must use the four-column layout", projectCell)
+
+	// TOTAL row: label in the resource cell, summary spanning the columns left
+	// of the money cell, money right-aligned.
+	assertTotalRow(t, lines[len(lines)-1], l, "3 findings", "$24.00")
+}
+
+// assertRowSeparated asserts the row is exactly one data-row wide and that a
+// literal space sits at every variable-column boundary, so no value in a
+// RESOURCE, PROJECT or RULE cell can touch the cell to its right — even when
+// the value fills its cell exactly (a column is sized to its widest value).
+func assertRowSeparated(t *testing.T, line string, l tableLayout) {
+	t.Helper()
+	runes := []rune(line)
+	if len(runes) != l.separatorWidth() {
+		t.Errorf("row rune length = %d, want %d: %q", len(runes), l.separatorWidth(), line)
+		return
 	}
-	moneyCell := strings.TrimSpace(runeSlice(totalRow, offsetRuleStart+colRule, colMoney))
-	if moneyCell != "$24.00" {
-		t.Errorf("TOTAL row MONTHLY WASTE cell = %q, want $24.00", moneyCell)
+	// Boundary after RESOURCE: rune at offset l.resource must be a space.
+	if runes[l.resource] != ' ' {
+		t.Errorf("resource cell runs into the next cell (offset %d not a space): %q", l.resource, line)
+	}
+	if l.project > 0 {
+		// Boundary after PROJECT: rune at offset l.resource+1+l.project must be a space.
+		if runes[l.resource+1+l.project] != ' ' {
+			t.Errorf("project cell runs into rule cell (offset %d not a space): %q", l.resource+1+l.project, line)
+		}
 	}
 }
 
-// assertRowSeparated asserts the row is exactly projectRowWidth runes wide and
-// that a literal space sits at both variable-column boundaries, so no value in
-// a RESOURCE, PROJECT or RULE cell can touch the cell to its right.
-func assertRowSeparated(t *testing.T, line string) {
+// assertTotalRow asserts the TOTAL row's exact cell contents: the label in the
+// resource cell, the finding summary left-aligned in the full span of the
+// columns left of the money cell, and the total right-aligned in the money
+// cell. The summary assertion is EXACT — a truncated form must fail.
+func assertTotalRow(t *testing.T, row string, l tableLayout, wantSummary, wantMoney string) {
 	t.Helper()
-	runes := []rune(line)
-	if len(runes) != projectRowWidth {
-		t.Errorf("row rune length = %d, want %d: %q", len(runes), projectRowWidth, line)
-		return
+	runes := []rune(row)
+	if len(runes) != l.separatorWidth() {
+		t.Errorf("TOTAL row rune length = %d, want %d: %q", len(runes), l.separatorWidth(), row)
 	}
-	// Boundary after RESOURCE: rune at offset colResourceNarrow must be a space.
-	if runes[colResourceNarrow] != ' ' {
-		t.Errorf("resource cell runs into project cell (offset %d not a space): %q", colResourceNarrow, line)
+	labelCell := strings.TrimSpace(runeSlice(row, 0, l.resource))
+	if labelCell != "TOTAL" {
+		t.Errorf("TOTAL row label cell = %q, want \"TOTAL\"", labelCell)
 	}
-	// Boundary after PROJECT: rune at offsetProjectStart+colProject must be a space.
-	if runes[offsetRuleStart-1] != ' ' {
-		t.Errorf("project cell runs into rule cell (offset %d not a space): %q", offsetRuleStart-1, line)
+	summaryCell := strings.TrimSpace(runeSlice(row, l.resource+1, l.totalSummaryWidth()))
+	if summaryCell != wantSummary {
+		t.Errorf("TOTAL row summary cell = %q, want %q — the finding count must span the columns left of the money cell and never be truncated", summaryCell, wantSummary)
+	}
+	moneyCell := strings.TrimSpace(runeSlice(row, l.resource+1+l.totalSummaryWidth(), colMoney))
+	if moneyCell != wantMoney {
+		t.Errorf("TOTAL row money cell = %q, want %q", moneyCell, wantMoney)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Defect 2 — the TOTAL row must not truncate its own summary
+// ---------------------------------------------------------------------------
+
+// TestTableTotalRow_SummaryNeverTruncated reproduces the exact real-scan shape
+// that used to render "TOTAL   9 findin…   $7.28": nine findings across two
+// projects whose IDs exceed the old 9-rune PROJECT column. The finding count
+// is not a project, so it must span the columns left of the money cell and the
+// summary cell must contain the exact, untruncated text "9 findings".
+func TestTableTotalRow_SummaryNeverTruncated(t *testing.T) {
+	findings := make([]rules.Finding, 0, 9)
+	for i := 0; i < 9; i++ {
+		waste := 0.26
+		if i == 0 {
+			waste = 5.20 // 5.20 + 8×0.26 = 7.28, the real scan's total
+		}
+		project := "alpha-data-storage"
+		if i%2 == 1 {
+			project = "ib-testing-playground"
+		}
+		findings = append(findings, rules.Finding{
+			RuleID:          "old_snapshot",
+			Resource:        "snapshot/alpha-desktop",
+			Project:         project,
+			MonthlyWasteUSD: waste,
+		})
+	}
+	report := Report{
+		Scope:                "organizations/506691140800",
+		Provider:             "gcp",
+		WindowDays:           14,
+		Findings:             findings,
+		TotalMonthlyWasteUSD: 7.28,
+		FindingCount:         9,
+		MultiProject:         true,
+		ResourcesScanned:     17,
+		RulesEvaluated:       5,
+	}
+
+	var buf bytes.Buffer
+	if err := (tableRenderer{}).Render(&buf, report); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	got := buf.String()
+	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+
+	display := tableFindings(report)
+	l := layoutTable(report, display)
+	totalRow := lines[len(lines)-1]
+
+	// THE assertion that replaces the relaxed one ("findings" OR "findin"): the
+	// summary cell must equal the exact text. If the summary were squeezed back
+	// into the PROJECT column's width, this would render "9 findin…" and fail.
+	summaryCell := strings.TrimSpace(runeSlice(totalRow, l.resource+1, l.totalSummaryWidth()))
+	if summaryCell != "9 findings" {
+		t.Errorf("TOTAL row summary cell = %q, want %q — the finding count must span the columns left of the money cell and never be truncated", summaryCell, "9 findings")
+	}
+	moneyCell := strings.TrimSpace(runeSlice(totalRow, l.resource+1+l.totalSummaryWidth(), colMoney))
+	if moneyCell != "$7.28" {
+		t.Errorf("TOTAL row money cell = %q, want $7.28", moneyCell)
+	}
+	if !strings.Contains(got, "TOTAL") {
+		t.Errorf("TOTAL row missing the TOTAL label:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Feature — top 10 findings + link to the full report
+// ---------------------------------------------------------------------------
+
+// TestTableTop10_TotalReflectsAllFindingsNotJustShown is the acceptance test
+// for the top-10 limit. A report with 12 findings renders exactly ten data
+// rows (the largest by monthly waste), states how many were omitted and where
+// the full HTML report is, and — the invariant that matters — the TOTAL row
+// sums EVERY finding ($78.00), not the ten shown ($75.00). A total that
+// silently summed only the visible rows would be a worse bug than the one this
+// fixes.
+func TestTableTop10_TotalReflectsAllFindingsNotJustShown(t *testing.T) {
+	findings := make([]rules.Finding, 0, 12)
+	var total float64
+	for i := 1; i <= 12; i++ {
+		findings = append(findings, rules.Finding{
+			RuleID:          "old_snapshot",
+			Resource:        fmt.Sprintf("snapshot/snap-%02d", i),
+			Project:         "alpha-data-storage",
+			MonthlyWasteUSD: float64(i),
+		})
+		total += float64(i) // 78.00
+	}
+	report := Report{
+		Scope:                "organizations/506691140800",
+		Provider:             "gcp",
+		WindowDays:           14,
+		Findings:             findings,
+		TotalMonthlyWasteUSD: total,
+		FindingCount:         12,
+		MultiProject:         true,
+		ResourcesScanned:     17,
+		RulesEvaluated:       5,
+		ReportPath:           "/tmp/tellury-out/report.html",
+	}
+
+	var buf bytes.Buffer
+	if err := (tableRenderer{}).Render(&buf, report); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	got := buf.String()
+
+	// Exactly ten data rows: header + 10 + separator + TOTAL + omitted = 14.
+	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+	if len(lines) != 14 {
+		t.Fatalf("expected 14 lines (header + 10 rows + separator + TOTAL + omitted), got %d:\n%s", len(lines), got)
+	}
+
+	// The ten largest by monthly waste are shown; the two smallest are not.
+	for i := 3; i <= 12; i++ {
+		if !strings.Contains(got, fmt.Sprintf("$%d.00", i)) {
+			t.Errorf("table must show the $%d.00 finding (a top-10-by-waste row):\n%s", i, got)
+		}
+	}
+	for _, small := range []string{"$1.00", "$2.00", "snap-01", "snap-02"} {
+		if strings.Contains(got, small) {
+			t.Errorf("table must omit the smallest findings (%s); they are below the top 10:\n%s", small, got)
+		}
+	}
+
+	// The omitted line states the count and gives the clickable file:// URL.
+	if !strings.Contains(got, "2 of 12 findings omitted") {
+		t.Errorf("omitted line must state that 2 of 12 findings were omitted:\n%s", got)
+	}
+	if !strings.Contains(got, "full report: file:///tmp/tellury-out/report.html") {
+		t.Errorf("omitted line must give the HTML report as a clickable file:// URL:\n%s", got)
+	}
+
+	// THE invariant: the TOTAL row sums ALL 12 findings, not the ten shown.
+	display := tableFindings(report)
+	l := layoutTable(report, display)
+	assertTotalRow(t, lines[len(lines)-2], l, "12 findings", "$78.00")
+}
+
+// TestJSONAndCSV_CarryEveryFinding pins that the top-10 limit applies to the
+// human-facing table only: JSON and CSV are consumed by other tools, so they
+// must carry all 12 findings, and the JSON total must be the full sum — never
+// a sum of only the top ten.
+func TestJSONAndCSV_CarryEveryFinding(t *testing.T) {
+	findings := make([]rules.Finding, 0, 12)
+	var total float64
+	for i := 1; i <= 12; i++ {
+		findings = append(findings, rules.Finding{
+			RuleID:          "old_snapshot",
+			Resource:        fmt.Sprintf("snapshot/snap-%02d", i),
+			Project:         "alpha-data-storage",
+			MonthlyWasteUSD: float64(i),
+		})
+		total += float64(i) // 78.00
+	}
+	report := Report{
+		Scope:                "organizations/506691140800",
+		Provider:             "gcp",
+		WindowDays:           14,
+		Findings:             findings,
+		TotalMonthlyWasteUSD: total,
+		FindingCount:         12,
+		MultiProject:         true,
+		ResourcesScanned:     17,
+		RulesEvaluated:       5,
+	}
+
+	var jb, cb bytes.Buffer
+	if err := (jsonRenderer{}).Render(&jb, report); err != nil {
+		t.Fatalf("json Render: %v", err)
+	}
+	if err := (csvRenderer{}).Render(&cb, report); err != nil {
+		t.Fatalf("csv Render: %v", err)
+	}
+
+	for i := 1; i <= 12; i++ {
+		res := fmt.Sprintf("snapshot/snap-%02d", i)
+		if !strings.Contains(cb.String(), res) {
+			t.Errorf("CSV must carry every finding (missing %s); the top-10 limit applies to the table only", res)
+		}
+		if !strings.Contains(jb.String(), res) {
+			t.Errorf("JSON must carry every finding (missing %s); the top-10 limit applies to the table only", res)
+		}
+	}
+	// The JSON total must be the full sum of all 12 findings.
+	if !strings.Contains(jb.String(), `"total_monthly_waste_usd": 78`) {
+		t.Errorf("JSON total must sum every finding (78.00), not just the top ten:\n%s", jb.String())
+	}
+}
+
+// TestTableTop10_NoOmittedLineAtOrBelowLimit: with ten or fewer findings the
+// table shows them all and must not print an omitted note.
+func TestTableTop10_NoOmittedLineAtOrBelowLimit(t *testing.T) {
+	findings := make([]rules.Finding, 0, 10)
+	var total float64
+	for i := 1; i <= 10; i++ {
+		findings = append(findings, rules.Finding{
+			RuleID:          "old_snapshot",
+			Resource:        fmt.Sprintf("snapshot/snap-%02d", i),
+			Project:         "alpha-data-storage",
+			MonthlyWasteUSD: float64(i),
+		})
+		total += float64(i)
+	}
+	report := Report{
+		Scope:                "organizations/506691140800",
+		Provider:             "gcp",
+		WindowDays:           14,
+		Findings:             findings,
+		TotalMonthlyWasteUSD: total,
+		FindingCount:         10,
+		MultiProject:         true,
+		ResourcesScanned:     17,
+		RulesEvaluated:       5,
+		ReportPath:           "/tmp/tellury-out/report.html",
+	}
+
+	var buf bytes.Buffer
+	if err := (tableRenderer{}).Render(&buf, report); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	got := buf.String()
+	if strings.Contains(got, "omitted") {
+		t.Errorf("with 10 findings (at the limit) there must be no omitted note:\n%s", got)
+	}
+	if !strings.Contains(got, "10 findings") {
+		t.Errorf("TOTAL row must state 10 findings:\n%s", got)
+	}
+}
+
+// TestTableSingleProject_LayoutAndTotal: the single-project table has no
+// PROJECT column; the TOTAL row's summary spans the RULE column (the only
+// variable column left of the money cell) and is never truncated. Column
+// widths are content-sized here too, so a long resource name is shown in full.
+func TestTableSingleProject_LayoutAndTotal(t *testing.T) {
+	report := Report{
+		Scope:      "projects/my-project",
+		Provider:   "gcp",
+		WindowDays: 14,
+		Findings: []rules.Finding{
+			{RuleID: "detached_disk", Resource: "disk/pd-standard-01", Project: "my-project", MonthlyWasteUSD: 8.00},
+			{RuleID: "old_snapshot", Resource: "snapshot/backup-2023-01-01", Project: "my-project", MonthlyWasteUSD: 1.50},
+		},
+		TotalMonthlyWasteUSD: 9.50,
+		FindingCount:         2,
+		MultiProject:         false,
+		ResourcesScanned:     2,
+		RulesEvaluated:       3,
+	}
+
+	var buf bytes.Buffer
+	if err := (tableRenderer{}).Render(&buf, report); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+	if len(lines) != 5 { // header + 2 data + separator + TOTAL
+		t.Fatalf("expected 5 lines, got %d:\n%s", len(lines), buf.String())
+	}
+
+	display := tableFindings(report)
+	l := layoutTable(report, display)
+	for _, line := range lines[:3] {
+		assertRowSeparated(t, line, l)
+	}
+	assertTotalRow(t, lines[len(lines)-1], l, "2 findings", "$9.50")
+
+	if !strings.Contains(buf.String(), "snapshot/backup-2023-01-01") {
+		t.Errorf("single-project table must render the full resource name:\n%s", buf.String())
 	}
 }
 

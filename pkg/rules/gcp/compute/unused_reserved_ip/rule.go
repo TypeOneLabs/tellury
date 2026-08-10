@@ -8,7 +8,6 @@ package unused_reserved_ip
 
 import (
 	"context"
-	"fmt"
 	"math"
 
 	"github.com/TypeOneLabs/tellury/pkg/graph"
@@ -119,6 +118,8 @@ func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *r
 	// Stash the values ExtraEvidence needs. ExtraEvidence has no Pass, so
 	// the price-source entry is rendered here — the only place the pricer
 	// is reachable — and carried through nc.
+	// Stashed here because ExtraEvidence has no Pass to ask the pricer.
+	nc.Set("currency", rules.CurrencyOf(p))
 	nc.Set("unit_price_hourly", unit)
 	nc.Set("price_source", rules.PriceEvidence("price_source", p.Price, pricing.KindStaticIP, StaticIPSKU, resolvedRegion))
 
@@ -142,9 +143,11 @@ func (rule) EvidenceKeys() []string {
 }
 
 func (rule) ExtraEvidence(n *graph.Node, nc *rules.NodeContext, branch rules.CostBranch) []rules.Evidence {
+	cur, _ := nc.Get("currency")
+	curStr, _ := cur.(string)
 	unit, _ := nc.Get("unit_price_hourly")
 	ev := []rules.Evidence{
-		{Key: "unit_price_hourly", Value: fmt.Sprintf("$%.4f", unit.(float64))},
+		rules.EvMoneyIn("unit_price_hourly", curStr, unit.(float64), 4),
 	}
 	if purpose, ok := n.Str("address_purpose"); ok && purpose != "" {
 		ev = append(ev, rules.Evidence{Key: "address_purpose", Value: purpose})

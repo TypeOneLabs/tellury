@@ -374,6 +374,12 @@ func scopeKind(scope string) graph.ResourceKind {
 // RenderHTML writes a complete, self-contained HTML document for the report
 // and its rollup hierarchy. The timestamp is emitted in exactly one place —
 // the header — so the document is byte-identical for the same scan.
+//
+// Currency: a default USD scan renders exactly as before (every figure "$…").
+// A non-USD scan names its currency in a header disclosure paragraph and
+// renders every figure as "12.40 EUR"; when USD embedded-fallback prices
+// contaminated the scan, the disclosure is a loud warning so an operator
+// reading EUR figures is never silently handed USD numbers.
 func RenderHTML(w io.Writer, r Report, root *TreeNode) error {
 	if root == nil {
 		return fmt.Errorf("html: nil hierarchy root")
@@ -388,7 +394,9 @@ func RenderHTML(w io.Writer, r Report, root *TreeNode) error {
 	sb.WriteString("</head>\n")
 	sb.WriteString("<body>\n")
 
-	// Header — the ONE clearly-marked timestamp.
+	// Header — the ONE clearly-marked timestamp, plus the currency disclosure
+	// for a non-USD scan (an operator must see which currency the figures are
+	// in before reading a single number).
 	sb.WriteString("<header>\n")
 	sb.WriteString("<h1>Tellury waste report</h1>\n")
 	sb.WriteString("<p class=\"meta\">\n")
@@ -399,6 +407,16 @@ func RenderHTML(w io.Writer, r Report, root *TreeNode) error {
 		r.GeneratedAt.UTC().Format(time.RFC3339),
 		esc(r.GeneratedAt.UTC().Format(time.RFC3339)))
 	sb.WriteString("</p>\n")
+	if lines := currencyDisclosure(r); len(lines) > 0 {
+		sb.WriteString("<p class=\"currency\">\n")
+		for i, line := range lines {
+			if i > 0 {
+				sb.WriteString("<br>\n")
+			}
+			fmt.Fprintf(sb, "%s", esc(line))
+		}
+		sb.WriteString("\n</p>\n")
+	}
 	sb.WriteString("</header>\n")
 
 	// Part 1 — the hierarchy.
@@ -406,7 +424,7 @@ func RenderHTML(w io.Writer, r Report, root *TreeNode) error {
 	sb.WriteString("<h2>Where the waste is</h2>\n")
 	sb.WriteString("<p class=\"hint\">Expand a branch to reveal its children. " +
 		"Each figure is the sum of everything below it.</p>\n")
-	renderTree(sb, root)
+	renderTree(sb, root, r.Currency)
 	sb.WriteString("</section>\n")
 
 	// Part 2 — the findings table.
@@ -424,7 +442,7 @@ func RenderHTML(w io.Writer, r Report, root *TreeNode) error {
 		writeFindingsHeader(sb)
 		sb.WriteString("<tbody>\n")
 		for _, f := range sorted[:limit] {
-			writeFindingRow(sb, f)
+			writeFindingRow(sb, f, r.Currency)
 		}
 		sb.WriteString("</tbody>\n")
 		sb.WriteString("</table>\n")
@@ -436,7 +454,7 @@ func RenderHTML(w io.Writer, r Report, root *TreeNode) error {
 			writeFindingsHeader(sb)
 			sb.WriteString("<tbody>\n")
 			for _, f := range sorted {
-				writeFindingRow(sb, f)
+				writeFindingRow(sb, f, r.Currency)
 			}
 			sb.WriteString("</tbody>\n")
 			sb.WriteString("</table>\n")
@@ -470,13 +488,13 @@ func sortedFindings(fs []rules.Finding) []rules.Finding {
 	return out
 }
 
-func renderTree(sb *strings.Builder, root *TreeNode) {
+func renderTree(sb *strings.Builder, root *TreeNode, currency string) {
 	sb.WriteString("<ul class=\"tree\">\n")
-	renderNodeLi(sb, root)
+	renderNodeLi(sb, root, currency)
 	sb.WriteString("</ul>\n")
 }
 
-func renderNodeLi(sb *strings.Builder, tn *TreeNode) {
+func renderNodeLi(sb *strings.Builder, tn *TreeNode, currency string) {
 	sb.WriteString("<li>\n<details>\n<summary>\n")
 	fmt.Fprintf(sb, "<span class=\"kind\">%s</span> ", esc(string(tn.Kind)))
 	if tn.Label == "" {
@@ -484,31 +502,31 @@ func renderNodeLi(sb *strings.Builder, tn *TreeNode) {
 	} else {
 		fmt.Fprintf(sb, "<span class=\"name\">%s</span>", esc(tn.Label))
 	}
-	fmt.Fprintf(sb, "<span class=\"cost\">%s</span>\n", moneyHTML(tn.TotalUSD))
+	fmt.Fprintf(sb, "<span class=\"cost\">%s</span>\n", moneyHTML(tn.TotalUSD, currency))
 	sb.WriteString("</summary>\n")
 
 	if len(tn.Children) > 0 {
 		sb.WriteString("<ul>\n")
 		for _, c := range tn.Children {
-			renderNodeLi(sb, c)
+			renderNodeLi(sb, c, currency)
 		}
 		sb.WriteString("</ul>\n")
 	}
 	if len(tn.Findings) > 0 {
 		sb.WriteString("<ul class=\"findings\">\n")
 		for _, f := range tn.Findings {
-			renderFindingLi(sb, f)
+			renderFindingLi(sb, f, currency)
 		}
 		sb.WriteString("</ul>\n")
 	}
 	sb.WriteString("</details>\n</li>\n")
 }
 
-func renderFindingLi(sb *strings.Builder, f rules.Finding) {
+func renderFindingLi(sb *strings.Builder, f rules.Finding, currency string) {
 	sb.WriteString("<li class=\"finding\">\n")
 	fmt.Fprintf(sb, "<span class=\"rule\">%s</span>", esc(f.RuleID))
 	fmt.Fprintf(sb, "<span class=\"sev sev-%s\">%s</span>", esc(string(f.Severity)), esc(string(f.Severity)))
-	fmt.Fprintf(sb, "<span class=\"cost\">%s</span>/month\n", moneyHTML(f.MonthlyWasteUSD))
+	fmt.Fprintf(sb, "<span class=\"cost\">%s</span>/month\n", moneyHTML(f.MonthlyWasteUSD, currency))
 	if f.Project != "" {
 		fmt.Fprintf(sb, "<span class=\"proj\">in %s</span>\n", esc(f.Project))
 	}
@@ -533,12 +551,12 @@ func writeFindingsHeader(sb *strings.Builder) {
 	sb.WriteString("</tr>\n</thead>\n")
 }
 
-func writeFindingRow(sb *strings.Builder, f rules.Finding) {
+func writeFindingRow(sb *strings.Builder, f rules.Finding, currency string) {
 	sb.WriteString("<tr>\n")
 	fmt.Fprintf(sb, "<td>%s</td>\n", esc(f.Resource))
 	fmt.Fprintf(sb, "<td>%s</td>\n", esc(f.Project))
 	fmt.Fprintf(sb, "<td>%s</td>\n", esc(f.RuleID))
-	fmt.Fprintf(sb, "<td class=\"num\">%s</td>\n", moneyHTML(f.MonthlyWasteUSD))
+	fmt.Fprintf(sb, "<td class=\"num\">%s</td>\n", moneyHTML(f.MonthlyWasteUSD, currency))
 	sb.WriteString("<td><ul class=\"evidence\">\n")
 	if len(f.Evidence) == 0 {
 		sb.WriteString("<li>—</li>\n")
@@ -552,7 +570,17 @@ func writeFindingRow(sb *strings.Builder, f rules.Finding) {
 
 func esc(s string) string { return html.EscapeString(s) }
 
-func moneyHTML(v float64) string { return fmt.Sprintf("$%.2f", pricing.Round2(v)) }
+// moneyHTML renders an amount in the report's currency. USD (including the
+// empty default) keeps the historical "$12.40" form so a default scan renders
+// byte-identically; any other currency appends its code — "12.40 EUR" — so a
+// EUR figure can never be mistaken for dollars.
+func moneyHTML(v float64, currency string) string {
+	v = pricing.Round2(v)
+	if currency == "" || currency == "USD" {
+		return fmt.Sprintf("$%.2f", v)
+	}
+	return fmt.Sprintf("%.2f %s", v, currency)
+}
 
 // htmlCSS is the inline stylesheet. No external resource is referenced, so
 // the report is legible on an air-gapped machine and when printed to PDF.
@@ -567,6 +595,8 @@ h2 { font-size: 1.2rem; margin: 1.5rem 0 0.5rem; border-bottom: 1px solid #e1e4e
 header p.meta { color: #57606a; font-size: 0.9rem; margin: 0 0 1rem; }
 p.hint { color: #57606a; font-size: 0.85rem; margin: 0 0 0.75rem; }
 p.none { color: #57606a; font-style: italic; }
+p.currency { color: #0969da; font-size: 0.9rem; margin: -0.5rem 0 1rem;
+  border-left: 3px solid #0969da; padding: 0.35rem 0.6rem; background: #f6f8fa; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   background: #f6f8fa; padding: 0 0.25em; border-radius: 3px; font-size: 0.85em; }
 

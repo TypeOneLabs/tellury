@@ -134,6 +134,8 @@ func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *r
 
 	// Stash evidence inputs; the price-source entries are rendered here
 	// because ExtraEvidence has no Pass to reach the pricer.
+	// Stashed here because ExtraEvidence has no Pass to ask the pricer.
+	nc.Set("currency", rules.CurrencyOf(p))
 	nc.Set("delta_per_gb_month", deltaPerGiBMonth)
 	nc.Set("from_price_source", rules.PriceEvidence("from_price_source", p.Price, pricing.KindGCSStorage, FromClass, fromRegion))
 	nc.Set("to_price_source", rules.PriceEvidence("to_price_source", p.Price, pricing.KindGCSStorage, ToClass, toRegion))
@@ -160,6 +162,8 @@ func (rule) MinWasteUSD() float64 { return 0.0 }
 func (rule) EvidenceKeys() []string { return nil }
 
 func (rule) ExtraEvidence(n *graph.Node, nc *rules.NodeContext, branch rules.CostBranch) []rules.Evidence {
+	cur, _ := nc.Get("currency")
+	curStr, _ := cur.(string)
 	totalBytes, _ := nc.Get("total_bytes")
 	storageClass, _ := n.Str("storage_class")
 	lifecycleCount, _ := n.Num("lifecycle_rule_count")
@@ -170,7 +174,7 @@ func (rule) ExtraEvidence(n *graph.Node, nc *rules.NodeContext, branch rules.Cos
 		{Key: "storage_class", Value: storageClass},
 		{Key: "lifecycle_rules", Value: fmt.Sprintf("%.0f", lifecycleCount)},
 		{Key: "cold_fraction", Value: fmt.Sprintf("%.2f", ColdFraction)},
-		{Key: "delta_per_gb_month", Value: fmt.Sprintf("$%.4f", delta.(float64))},
+		rules.EvMoneyIn("delta_per_gb_month", curStr, delta.(float64), 4),
 	}
 	if v, ok := nc.Get("from_price_source"); ok {
 		ev = append(ev, v.(rules.Evidence))

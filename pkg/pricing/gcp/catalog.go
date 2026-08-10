@@ -2,6 +2,7 @@ package gcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -69,6 +70,29 @@ type CatalogPricer struct {
 	loadErr   error
 	skusByKey map[skuKey]resolvedSKU // (kind, sku, region) -> resolvedSKU, catalogue cache
 
+	// currencyCode is the ISO 4217 code the catalogue is fetched in
+	// (ListSkusRequest.CurrencyCode). "" means the API default, USD. It is
+	// set at construction from the explicit --currency/TELLURY_CURRENCY flag
+	// and may be overwritten by SetCurrency after best-effort billing-account
+	// detection (which needs the ingested graph and therefore runs after the
+	// provider is built). It MUST be final before the first UnitPrice call:
+	// the catalogue load is cached for the pricer's lifetime, so a late
+	// change would silently price the whole scan in the wrong currency.
+	currencyCode string
+
+	// loaded reports whether the live catalogue indexed at least one SKU. It
+	// is what distinguishes "the requested currency priced the answers" from
+	// "the embedded USD table priced them" in CurrencyInfo.
+	loaded bool
+	// mixed records that a USD embedded-fallback price was used while a
+	// non-USD currency was requested — the currency-mix trap. Read by
+	// CurrencyInfo for the report's currency_mixed disclosure.
+	mixed bool
+	// unsupported is non-nil when the live catalogue rejected the requested
+	// currency (InvalidArgument from ListSkus). Such a failure must surface
+	// to the scan, not silently fall back to the USD embedded table.
+	unsupported error
+
 	mu   sync.Mutex
 	last map[string]pricing.Provenance // provKey(kind,sku,region) -> last answer
 }
@@ -89,6 +113,9 @@ var (
 	_ pricing.Pricer           = (*CatalogPricer)(nil)
 	_ pricing.ProvenancePricer = (*CatalogPricer)(nil)
 	_ pricing.OverlayLoader    = (*CatalogPricer)(nil)
+	_ pricing.CurrencySetter   = (*CatalogPricer)(nil)
+	_ pricing.CurrencyReporter = (*CatalogPricer)(nil)
+	_ pricing.CatalogueErrorer = (*CatalogPricer)(nil)
 )
 
 // NewCatalogPricer builds a pricer that prefers the live Cloud Billing
@@ -101,6 +128,14 @@ var (
 // still returns a usable pricer, just one whose live path is permanently
 // unavailable.
 //
+// currencyCode is the ISO 4217 code the catalogue is fetched in ("" = USD).
+// The live Cloud Billing API prices the whole catalogue in this currency
+// (ListSkusRequest.CurrencyCode), so the snapshot SKU prices come back
+// converted. A well-formed but unsupported code makes ListSkus fail with
+// InvalidArgument; the pricer records that failure (CatalogueError) and
+// refuses to silently fall back to the USD embedded table, and UnitPrice
+// surfaces it so the scan cannot complete with wrong-currency figures.
+//
 // The pristine embedded baseline used to detect --price-file overrides is
 // built exactly once here and stored (see staticBaseline), so
 // overrideValue never pays a per-lookup rebuild/JSON-decode cost.
@@ -109,13 +144,14 @@ var (
 // under the scan's context and deadline (it is the `--timeout` derived from
 // internal/cli.runScan). Passing context.Background() is fine but loses that
 // guarantee; the CLI never does.
-func NewCatalogPricer(ctx context.Context, log *slog.Logger) (*CatalogPricer, error) {
+func NewCatalogPricer(ctx context.Context, log *slog.Logger, currencyCode string) (*CatalogPricer, error) {
 	if log == nil {
 		log = slog.Default()
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	currencyCode = strings.ToUpper(strings.TrimSpace(currencyCode))
 	static, err := NewStaticPricer()
 	if err != nil {
 		return nil, err
@@ -140,6 +176,7 @@ func NewCatalogPricer(ctx context.Context, log *slog.Logger) (*CatalogPricer, er
 		client:         client,
 		static:         static,
 		staticBaseline: staticBaseline,
+		currencyCode:   currencyCode,
 		skusByKey:      map[skuKey]resolvedSKU{},
 		last:           map[string]pricing.Provenance{},
 	}, nil
@@ -162,6 +199,54 @@ func (c *CatalogPricer) OverlayFile(path string) error {
 	return c.static.OverlayFile(path)
 }
 
+// SetCurrency implements pricing.CurrencySetter. It changes the catalogue
+// currency after construction (best-effort detection runs after graph
+// ingestion, which is after the provider is built). It MUST be called before
+// the first UnitPrice call: the catalogue load is cached for the pricer's
+// lifetime, so a late change would silently price the whole scan in the wrong
+// currency. Codes are normalized to uppercase; "" resets to the USD default.
+func (c *CatalogPricer) SetCurrency(code string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.currencyCode = strings.ToUpper(strings.TrimSpace(code))
+}
+
+// CurrencyInfo implements pricing.CurrencyReporter. Effective is the
+// requested currency when the live catalogue loaded (the only source that
+// prices in the requested currency), otherwise "USD" — the embedded table's
+// currency. Mixed is true when a non-USD currency was requested and any
+// embedded (USD) price was used, or when the requested currency could not
+// price the catalogue at all (so every answer came from the USD table).
+func (c *CatalogPricer) CurrencyInfo() pricing.CurrencyInfo {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	info := pricing.CurrencyInfo{Requested: c.currencyCode}
+	if c.loaded && c.currencyCode != "" {
+		info.Effective = c.currencyCode
+	} else {
+		info.Effective = "USD"
+	}
+	info.Mixed = c.mixed
+	if c.currencyCode != "" && c.currencyCode != "USD" && info.Effective == "USD" {
+		// The requested currency priced nothing: every figure the scan
+		// reports came from the USD embedded table. That is a full currency
+		// mismatch, not the quiet normal degradation of a USD-requesting scan
+		// losing live access.
+		info.Mixed = true
+	}
+	return info
+}
+
+// CatalogueError implements pricing.CatalogueErrorer. Non-nil only when the
+// live catalogue rejected the requested currency (an InvalidArgument from
+// ListSkus), which a scan must surface rather than silently fall back to the
+// USD embedded table.
+func (c *CatalogPricer) CatalogueError() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.unsupported
+}
+
 // UnitPrice implements pricing.Pricer with the documented precedence:
 // --price-file override > live Cloud Billing Catalog API > embedded table.
 func (c *CatalogPricer) UnitPrice(kind pricing.Kind, provider, sku, region string) (float64, string, error) {
@@ -179,16 +264,38 @@ func (c *CatalogPricer) UnitPrice(kind pricing.Kind, provider, sku, region strin
 		if v, res, err := c.liveUnitPrice(kind, sku, region); err == nil {
 			c.record(kind, sku, region, pricing.Provenance{Source: pricing.SourceLiveAPI, SKU: res.skuID, Region: res.region})
 			return v, res.region, nil
+		} else {
+			// A well-formed-but-unsupported currency is an operator error to
+			// surface, not a degradation to absorb: falling back here would
+			// silently answer the EUR-asking scan in USD.
+			var ue *unsupportedCurrencyError
+			if errors.As(err, &ue) {
+				return 0, "", ue
+			}
 		}
 	}
 
-	// 3. Embedded fallback.
+	// 3. Embedded fallback. This table is USD only, so an answer here is
+	// always in USD — record that so CurrencyInfo can flag the mix when a
+	// non-USD currency was requested.
 	v, resolvedRegion, err := c.static.UnitPrice(kind, provider, sku, region)
 	if err != nil {
 		return 0, "", err
 	}
+	c.noteEmbeddedUSD()
 	c.record(kind, sku, region, pricing.Provenance{Source: pricing.SourceEmbedded, SKU: sku, Region: resolvedRegion})
 	return v, resolvedRegion, nil
+}
+
+// noteEmbeddedUSD records that the embedded USD table answered a lookup. When
+// a non-USD currency was requested this is the currency-mix trap and must be
+// disclosed on the report (via CurrencyInfo).
+func (c *CatalogPricer) noteEmbeddedUSD() {
+	c.mu.Lock()
+	if c.currencyCode != "" && c.currencyCode != "USD" {
+		c.mixed = true
+	}
+	c.mu.Unlock()
 }
 
 // MonthlyCost implements pricing.Pricer: price * quantity, using UnitPrice so
@@ -304,6 +411,13 @@ func regionCandidates(region string) []string {
 	return out
 }
 
+// listSkusRequest builds the ListSkus request for one service, carrying the
+// pricer's currency. Kept as its own method so a unit test can assert the
+// currency reaches the request without a gRPC round trip.
+func (c *CatalogPricer) listSkusRequest(serviceID string) *billingpb.ListSkusRequest {
+	return &billingpb.ListSkusRequest{Parent: serviceID, CurrencyCode: c.currencyCode}
+}
+
 // loadCatalogue fetches every SKU of every service this pricer cares about,
 // exactly once, and indexes it into skusByKey. This is the only place the
 // Cloud Billing API is called - everything else in this file reads the
@@ -313,6 +427,11 @@ func regionCandidates(region string) []string {
 // logged once as a warning and returned so liveUnitPrice's caller (UnitPrice)
 // falls back to the embedded table for every subsequent lookup too, since
 // c.loadErr is cached in c.once.Do.
+//
+// A well-formed but unsupported currency (ListSkus InvalidArgument) is NOT
+// absorbed: it is recorded on the pricer (CatalogueError) and returned, so
+// UnitPrice surfaces it instead of silently answering the non-USD scan in
+// USD.
 //
 // ctx is the scan's context (see CatalogPricer.ctx): every ListServices /
 // ListSkus RPC inherits its deadline, so the CLI --timeout bounds this load.
@@ -332,13 +451,23 @@ func (c *CatalogPricer) loadCatalogue(ctx context.Context) error {
 	for displayName, serviceID := range serviceIDs {
 		n, err := c.indexServiceSKUs(ctx, displayName, serviceID)
 		if err != nil {
+			var ue *unsupportedCurrencyError
+			if errors.As(err, &ue) {
+				c.mu.Lock()
+				c.unsupported = ue
+				c.mu.Unlock()
+				return ue
+			}
 			c.log.Warn("gcp: could not list SKUs for billing service; pricing for it will use the embedded fallback table",
 				"service", displayName, "err", err)
 			continue
 		}
 		total += n
 	}
-	c.log.Debug("cloud billing catalogue loaded", "skus_indexed", total, "services", len(serviceIDs))
+	c.mu.Lock()
+	c.loaded = total > 0
+	c.mu.Unlock()
+	c.log.Debug("cloud billing catalogue loaded", "skus_indexed", total, "services", len(serviceIDs), "currency", c.currencyCode)
 	return nil
 }
 
@@ -366,16 +495,26 @@ func (c *CatalogPricer) resolveServiceIDs(ctx context.Context, want map[string]b
 }
 
 // indexServiceSKUs pages ListSkus for one service and indexes every SKU this
-// pricer can match onto a pricing.Kind (via matchSKU) into skusByKey.
+// pricer can match onto a pricing.Kind (via matchSKU) into skusByKey. The
+// request carries the pricer's currency, so the prices indexed here are
+// already in that currency (the API converts the whole catalogue on the
+// server side).
 func (c *CatalogPricer) indexServiceSKUs(ctx context.Context, displayName, serviceID string) (int, error) {
 	n := 0
-	it := c.client.ListSkus(ctx, &billingpb.ListSkusRequest{Parent: serviceID})
+	it := c.client.ListSkus(ctx, c.listSkusRequest(serviceID))
 	for {
 		sk, err := it.Next()
 		if err == iterator.Done {
 			break
 		}
 		if err != nil {
+			// A well-formed but unsupported currency code is rejected by
+			// ListSkus with InvalidArgument. This is an operator error to
+			// surface (naming the currency), not a permission-style
+			// degradation to absorb.
+			if st, ok := status.FromError(err); ok && st.Code() == codes.InvalidArgument {
+				return n, &unsupportedCurrencyError{currency: c.currencyCode, err: err}
+			}
 			return n, mapBillingError("ListSkus", err)
 		}
 		kind, skuToken, ok := matchSKU(sk)
@@ -397,6 +536,25 @@ func (c *CatalogPricer) indexServiceSKUs(ctx context.Context, displayName, servi
 	}
 	return n, nil
 }
+
+// unsupportedCurrencyError wraps the InvalidArgument a ListSkus call returns
+// for a well-formed but unsupported ISO 4217 currency code. A scan must
+// surface it (naming the currency) rather than silently fall back to the USD
+// embedded table: an operator who asked for EUR figures must not get USD
+// numbers without being told the request was impossible.
+type unsupportedCurrencyError struct {
+	currency string
+	err      error
+}
+
+func (e *unsupportedCurrencyError) Error() string {
+	if e.currency == "" {
+		return fmt.Sprintf("gcp: cloud billing catalogue rejected the currency request: %v", e.err)
+	}
+	return fmt.Sprintf("gcp: cloud billing catalogue does not support currency %q: %v", e.currency, e.err)
+}
+
+func (e *unsupportedCurrencyError) Unwrap() error { return e.err }
 
 // matchSKU derives tellury's (Kind, sku-token) pair from a Cloud Billing SKU's
 // category/description, so the live catalogue lines up with the same SKU
@@ -501,11 +659,18 @@ func matchSKU(sk *billingpb.Sku) (pricing.Kind, string, bool) {
 // machineFamilyFromDescription recovers a machine-family token from a
 // Compute Engine predefined-instance SKU description, e.g. "N1 Instance
 // Core running in Americas" -> "n1-standard". Cloud Billing prices
-// predefined shapes per-core/per-GB, the same as custom shapes, so
-// KindVMInstance entries resolved this way are combined with vCPU/RAM counts
-// exactly like instanceMonthlyCost's existing custom-shape formula
-// ((vcpu*cpuUnit + memGiB*ramUnit) * HoursPerMonth) - not as a single flat
-// per-instance rate.
+// predefined shapes per-core/per-GB, the same as custom shapes, so the live
+// catalogue carries no single per-instance rate for a machine type.
+//
+// KNOWN GAP (flagged in the catalog audit as unverified): no rule consumes
+// these family-granular tokens. Rules query KindVMInstance with the full
+// machine type ("n1-standard-4"), which the per-core live SKUs cannot
+// produce, so predefined-instance lookups always fall back to the embedded
+// per-instance table. Closing the gap is a rule-side cost-model change
+// (vCPU × family-core-rate + RAM × family-ram-rate — the formula
+// instanceMonthlyCost already applies to custom shapes) and must be verified
+// against the live catalogue; it is not a token alignment and is out of
+// scope for the fixes here.
 func machineFamilyFromDescription(desc string) (string, bool) {
 	fields := strings.Fields(desc)
 	if len(fields) == 0 {
@@ -536,15 +701,16 @@ func customFamilyFromDescription(desc string) (string, bool) {
 	return family + "-custom", true
 }
 
-// unitPriceOf extracts the current tier's USD unit price, in dollars, from a
-// SKU's PricingInfo. Cloud Billing expresses money as (units, nanos) pairs;
-// tellury keeps money in integer cents on the cost path, so the conversion
-// goes through whole cents (units*100 + nanos/1e7) rather than through a
-// float dollar intermediate, matching the convention pricing.Round2 and the
-// embedded/overlay JSON tables already use. The result is still returned as
-// float64 dollars because that is pricing.Pricer's existing return type
-// (shared with StaticPricer) - only the conversion arithmetic itself avoids
-// float money math.
+// unitPriceOf extracts the current tier's unit price, in the catalogue's
+// currency (the currency requested via ListSkusRequest.CurrencyCode, or USD
+// by default), from a SKU's PricingInfo. Cloud Billing expresses money as
+// (units, nanos) pairs; tellury keeps money in integer cents on the cost
+// path, so the conversion goes through whole cents (units*100 + nanos/1e7)
+// rather than through a float dollar intermediate, matching the convention
+// pricing.Round2 and the embedded/overlay JSON tables already use. The
+// result is still returned as float64 because that is pricing.Pricer's
+// existing return type (shared with StaticPricer) - only the conversion
+// arithmetic itself avoids float money math.
 func unitPriceOf(sk *billingpb.Sku) (float64, bool) {
 	infos := sk.GetPricingInfo()
 	if len(infos) == 0 {
@@ -566,8 +732,14 @@ func unitPriceOf(sk *billingpb.Sku) (float64, bool) {
 	if money == nil {
 		return 0, false
 	}
-	cents := money.GetUnits()*100 + int64(money.GetNanos())/10_000_000
-	return float64(cents) / 100.0, true
+	// Full precision, NOT cents. Cloud Billing expresses a price as whole units
+	// plus nanos, and cloud unit prices are routinely far finer than a cent:
+	// coldline storage is $0.004/GiB-month and custom RAM $0.004446/GiB-hour.
+	// Truncating to cents rounded both to ZERO, silently pricing them free, and
+	// cost a vCPU-hour about 10% of its value. It also broke every non-USD
+	// scan wholesale, since a converted price almost never lands on a round
+	// cent — EUR 0.043890 became 0.04, understating a real bill by 9%.
+	return float64(money.GetUnits()) + float64(money.GetNanos())/1e9, true
 }
 
 // regionsOf renders the lowercase region tokens a SKU is offered in, or

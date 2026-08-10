@@ -31,7 +31,9 @@ address/idle-ip               unused_reserved_ip                $7.30
 TOTAL                         2 findings                       $15.30
 ```
 
-Read-only access is enough: `roles/cloudasset.viewer` and `roles/monitoring.viewer`.
+Read-only access is enough: `roles/cloudasset.viewer` and `roles/monitoring.viewer`, plus
+`roles/billing.viewer` on the billing account if you want figures in your own currency
+rather than USD ([full table](#permissions)).
 No credentials at hand? `./tellury scan --gcp-project demo --fixture assets.json` runs the
 whole pipeline offline (see [Offline mode](#offline-mode) for exactly what that replay can
 and cannot evaluate).
@@ -86,6 +88,13 @@ Working:
 - **Live pricing** — Cloud Billing Catalog via `cloud.google.com/go/billing`, cached per
   scan. Precedence: `--price-file` override, then the live API, then an embedded fallback
   table. Every figure records which of the three produced it.
+- **Pricing currency** — `--currency` (or `TELLURY_CURRENCY`) prices a scan in any ISO 4217
+  currency the Cloud Billing Catalog supports: the API converts the whole catalogue
+  server-side, so the snapshot SKU price of 0.050000 USD comes back as 0.043890 EUR.
+  Without a flag, tellury best-effort detects the billing account's currency (a billing
+  account's currency is fixed at creation) from any project in scope and falls back to
+  USD; the report always states which currency the figures are actually in and how it was
+  decided. See [Pricing currency](#pricing-currency).
 - **Resource graph** — compute instances, disks, snapshots, addresses, networks, and GCS
   buckets, with edges linking related resources. The graph also carries the resource
   hierarchy as container nodes — organization, folder, and project — joined by
@@ -188,10 +197,45 @@ The scope is the SearchAllResources parent: `projects/<id>`, `folders/<n>`, or
 builds the full hierarchy up from the SearchAllResources result — no separate Cloud
 Resource Manager calls are made.
 
-Read-only roles are enough: `roles/cloudasset.viewer` and `roles/monitoring.viewer`, plus
-the `cloudasset`, `monitoring`, and `cloudbilling` APIs enabled. Without billing access the
-scan still runs and prices from the embedded table. Without monitoring access it still
-runs; only metric-dependent rules skip, each explaining why.
+#### Permissions
+
+Everything `tellury` does is read-only. Each role unlocks one capability, and only the first
+is required — without any of the others the scan still runs and says what it could not do.
+
+| Role | Granted on | Enables | Without it |
+|---|---|---|---|
+| `roles/cloudasset.viewer` | the scanned org, folder or project | Resource discovery | Nothing to scan; required |
+| `roles/monitoring.viewer` | each project in scope | Metric enrichment | Metric-dependent rules skip, each saying why |
+| `roles/billing.viewer` | the billing account | Reading the account's currency | Figures are reported in USD |
+
+Live pricing needs **no** billing role: the Cloud Billing Catalog is readable by any
+authenticated caller. `roles/billing.viewer` buys only the ability to read which currency
+your billing account is denominated in, so figures come back in the currency you are
+actually invoiced in. Without it, pricing is still live — just quoted in USD.
+
+Enable the `cloudasset`, `monitoring` and `cloudbilling` APIs on the project the credentials
+belong to.
+
+If you authenticate by impersonating a service account, the **caller** additionally needs
+`roles/iam.serviceAccountTokenCreator` on that service account. This one catches people out:
+the service account can hold every role above and impersonation still fails with a 403 on
+`iam.serviceAccounts.getAccessToken`, because that permission governs who may borrow the
+identity rather than what the identity is allowed to do.
+
+```bash
+gcloud organizations add-iam-policy-binding ORG_ID \
+  --member="serviceAccount:SA_EMAIL" --role="roles/cloudasset.viewer"
+gcloud organizations add-iam-policy-binding ORG_ID \
+  --member="serviceAccount:SA_EMAIL" --role="roles/monitoring.viewer"
+
+# Currency detection.
+gcloud billing accounts add-iam-policy-binding BILLING_ACCOUNT_ID \
+  --member="serviceAccount:SA_EMAIL" --role="roles/billing.viewer"
+
+# Only when impersonating rather than authenticating as the service account.
+gcloud iam service-accounts add-iam-policy-binding SA_EMAIL \
+  --member="user:YOU@example.com" --role="roles/iam.serviceAccountTokenCreator"
+```
 
 ### Scan artifacts
 
@@ -240,6 +284,32 @@ The HTML report has two parts:
    API / embedded table answered each SKU). The same scan renders a byte-identical report,
    and every value that came from a cloud API is HTML-escaped, so a hostile resource name
    cannot turn the report into an attack surface.
+
+### Pricing currency
+
+By default a scan prices in **USD**. Pass `--currency EUR` (or `TELLURY_CURRENCY=EUR`) to
+price the whole scan in that currency: the Cloud Billing Catalog API converts the
+catalogue on the server side, so every figure — findings, totals, rollups — is expressed
+in EUR, not converted afterwards by the tool.
+
+```bash
+tellury scan --gcp-project my-project --currency EUR
+```
+
+When no flag is given, tellury **auto-detects** the currency from the billing account of a
+project in scope (a billing account's currency is fixed at creation, so it is a reliable
+answer). Detection is best effort — it needs billing permission that a scan may
+legitimately lack — so every detection failure degrades quietly to USD, and the report
+always states which currency the figures are actually in and how it was decided
+(`requested via --currency` / `detected from the billing account`). Precedence, highest
+first: **explicit flag, then detection, then USD**.
+
+A malformed code (not three letters) is rejected before the scan starts. A well-formed but
+unsupported code fails at the Cloud Billing API with the currency named — never silently
+falls back. The embedded fallback price table is **USD-only**: if it answers a non-USD
+request (for example an offline `--fixture` replay asked for EUR), the report says so
+loudly with a WARNING in every output format rather than handing you EUR-labelled figures
+that are actually dollars.
 
 ### Offline mode
 
@@ -353,6 +423,7 @@ Useful flags:
 | Flag | Purpose |
 |---|---|
 | `--gcp-project` / `--gcp-folder` / `--gcp-organization` | Scope the scan (GCP's vocabulary: project, folder, or organization) |
+| `--currency` | ISO 4217 code to price the scan in, e.g. `EUR` (or `TELLURY_CURRENCY`); overrides billing-account auto-detection, default USD |
 | `--rules` / `--skip-rules` | Run or exclude specific rule IDs |
 | `--min-waste` / `--min-confidence` | Hide findings below a threshold |
 | `--sort` | `waste` (default), `resource`, or `rule` |
@@ -363,6 +434,13 @@ Useful flags:
 | `--fixture` | Read raw CAI assets from local JSON (topology-only; metric rules stated as unevaluated) |
 | `--price-file` | Override the embedded price table |
 | `--out-dir` | Directory to write scan artifacts into (created if absent; default `tellury-out/`) |
+
+In machine-readable output the currency is always named: the JSON report carries a
+top-level `currency` field (plus `currency_source`, `currency_requested`, and
+`currency_mixed` when relevant), the CSV renames its money column to `monthly_waste_<code>`
+for non-USD scans and appends `currency`, `currency_source`, `currency_requested`,
+`currency_mixed` columns, and amounts keep the code next to the number in the table and
+HTML forms.
 
 Exit codes: `0` clean, `3` findings present (disable with `--fail-on-findings=false`),
 non-zero otherwise on error.

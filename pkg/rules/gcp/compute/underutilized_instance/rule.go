@@ -248,6 +248,8 @@ func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *r
 
 	// Stash evidence inputs; price-source entries are rendered here because
 	// ExtraEvidence has no Pass to reach the pricer.
+	// Stashed here because ExtraEvidence has no Pass to ask the pricer.
+	nc.Set("currency", rules.CurrencyOf(p))
 	nc.Set("recommended_machine_type", recMachine)
 	nc.Set("current_monthly", current.cost)
 	nc.Set("recommended_monthly", recMonthly)
@@ -273,6 +275,8 @@ func (rule) MinWasteUSD() float64 { return MinMonthlyWasteUSD }
 func (rule) EvidenceKeys() []string { return nil }
 
 func (rule) ExtraEvidence(n *graph.Node, nc *rules.NodeContext, branch rules.CostBranch) []rules.Evidence {
+	cur, _ := nc.Get("currency")
+	curStr, _ := cur.(string)
 	machineType, _ := n.Str("machine_type")
 	p95, _ := nc.Get("p95_cpu")
 	samples, _ := nc.Get("cpu_samples")
@@ -284,8 +288,8 @@ func (rule) ExtraEvidence(n *graph.Node, nc *rules.NodeContext, branch rules.Cos
 		{Key: "p95_cpu", Value: fmt.Sprintf("%.2f%%", p95.(float64)*100)},
 		{Key: "machine_type", Value: machineType},
 		{Key: "recommended_machine_type", Value: recMachine.(string)},
-		{Key: "current_monthly", Value: fmt.Sprintf("$%.2f", currentMonthly.(float64))},
-		{Key: "recommended_monthly", Value: fmt.Sprintf("$%.2f", recMonthly.(float64))},
+		rules.EvMoneyIn("current_monthly", curStr, currentMonthly.(float64), 2),
+		rules.EvMoneyIn("recommended_monthly", curStr, recMonthly.(float64), 2),
 		{Key: "samples", Value: fmt.Sprintf("%d", samples.(int))},
 	}
 	if v, ok := nc.Get("current_price_source"); ok {

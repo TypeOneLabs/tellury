@@ -3,86 +3,171 @@ package output
 import (
 	"fmt"
 	"io"
+	"path/filepath"
+	"sort"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/TypeOneLabs/tellury/pkg/rules"
 )
 
-// Column widths reproduce the mandated layout exactly:
-//
-//	RESOURCE                      RULE                      MONTHLY WASTE
-//	disk/pd-standard-01           detached_disk                    $12.40
-//	------------------------------------------------------------------
-//	TOTAL                         3 findings                      $128.25
-//
-// RESOURCE is left-aligned in 30, RULE left-aligned in 26, MONTHLY WASTE
-// right-aligned in 13 — which is exactly the width of the header text, so the
-// header and the money column share a right edge.
-//
-// When a scan spans more than one project (MultiProject), a PROJECT column is
-// inserted between RESOURCE and RULE so an operator can tell where each
-// resource lives. The resource column cedes cells to fund the new PROJECT
-// width AND a hard separator after each variable column. That hard separator
-// is the point of this layout: a value that fills its column (padded exactly
-// at the boundary, or truncated down to it) must never run straight into the
-// next column. Total width stays constant at 69 cells across single- and
-// multi-project scans, so the table never grows past its single-project width
-// even on an organization-wide scan.
-const (
-	colResource       = 30
-	colResourceNarrow = 19
-	colProject        = 9
-	colRule           = 26
-	colMoney          = 13
-	sepWidth          = 66
-)
+// maxTableFindings caps the human-facing table at the ten largest findings by
+// monthly waste. Organization-wide scans can produce hundreds of rows that
+// flood a terminal; the table shows the top ten and points at the HTML report
+// the scan already wrote for the rest. The TOTAL row still reflects EVERY
+// finding — FindingCount and TotalMonthlyWasteUSD are computed from all
+// findings in NewReport, never from the ten displayed — and JSON/CSV remain
+// complete: they are consumed by other tools, so the limit applies to the
+// table only.
+const maxTableFindings = 10
+
+// colMoney is the width of the right-aligned money column — exactly the width
+// of its header, "MONTHLY WASTE", so the header and the money share a right
+// edge. Unlike the variable columns (resource, project, rule), which are sized
+// to their widest displayed value for each scan, the money column is fixed so
+// the table's right edge never shifts with the amounts.
+const colMoney = 13
+
+// tableLayout is the per-scan column layout. The variable columns (resource,
+// project, rule) are sized to their widest displayed value, so a 30-character
+// GCP project ID or a long resource name is rendered in full — never
+// truncated — and can be copied straight into a gcloud command. A literal
+// space separates every variable column, so a value that fills its cell
+// (padded exactly at the boundary) can never run into the column to its right.
+type tableLayout struct {
+	resource int
+	project  int // 0 for a single-project table (no PROJECT column)
+	rule     int
+	money    int
+}
+
+// layoutTable computes the column layout for a report from the findings the
+// table will actually print (tableFindings) plus the headers. Because every
+// variable column is as wide as its widest value, truncation is structurally
+// impossible for displayed values.
+func layoutTable(r Report, display []rules.Finding) tableLayout {
+	l := tableLayout{
+		resource: runeLen("RESOURCE"),
+		rule:     runeLen("RULE"),
+		money:    colMoney,
+	}
+	if r.MultiProject {
+		l.project = runeLen("PROJECT")
+	}
+	for _, f := range display {
+		if n := runeLen(f.Resource); n > l.resource {
+			l.resource = n
+		}
+		if r.MultiProject {
+			if n := runeLen(f.Project); n > l.project {
+				l.project = n
+			}
+		}
+		if n := runeLen(f.RuleID); n > l.rule {
+			l.rule = n
+		}
+	}
+	return l
+}
+
+// separatorWidth is the width of the dashed separator row — one full data
+// row: the variable columns, their separator spaces, and the money column.
+func (l tableLayout) separatorWidth() int {
+	w := l.resource + 1 + l.rule + l.money
+	if l.project > 0 {
+		w += 1 + l.project
+	}
+	return w
+}
+
+// totalSummaryWidth is the width the TOTAL row gives its finding summary:
+// every column left of the money cell except the resource label column,
+// separator spaces included. The summary is not a project, so it must never
+// be squeezed into the PROJECT column's width.
+func (l tableLayout) totalSummaryWidth() int {
+	if l.project > 0 {
+		return 1 + l.project + l.rule
+	}
+	return l.rule
+}
 
 type tableRenderer struct{}
 
 func (tableRenderer) Format() string { return "table" }
 
 func (t tableRenderer) Render(w io.Writer, r Report) error {
+	// Currency disclosure, before anything else: an operator reading non-USD
+	// figures must see which currency they are in and how it was decided
+	// before they read a single number. The default USD scan emits nothing,
+	// keeping its output byte-identical to the pre-currency build.
+	if lines := currencyDisclosure(r); len(lines) > 0 {
+		for _, line := range lines {
+			if _, err := fmt.Fprintln(w, line); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
+	}
+
 	if len(r.Findings) == 0 {
 		if _, err := fmt.Fprintf(w, "No waste found in %s (%d resources, %d rules).\n",
 			r.Scope, r.ResourcesScanned, r.RulesEvaluated); err != nil {
 			return err
 		}
 	} else {
+		// The table shows at most the ten largest findings by monthly waste
+		// (tableFindings); the TOTAL row below still sums every finding.
+		display := tableFindings(r)
+		layout := layoutTable(r, display)
+
 		if r.MultiProject {
-			if err := writeRowProject(w, "RESOURCE", "PROJECT", "RULE", "MONTHLY WASTE"); err != nil {
+			if err := writeRowProject(w, layout, "RESOURCE", "PROJECT", "RULE", "MONTHLY WASTE"); err != nil {
 				return err
 			}
-			for _, f := range r.Findings {
-				if err := writeRowProject(w, f.Resource, f.Project, f.RuleID, money(f.MonthlyWasteUSD)); err != nil {
+			for _, f := range display {
+				if err := writeRowProject(w, layout, f.Resource, f.Project, f.RuleID, r.money(f.MonthlyWasteUSD)); err != nil {
 					return err
 				}
 			}
 		} else {
-			if err := writeRow(w, "RESOURCE", "RULE", "MONTHLY WASTE"); err != nil {
+			if err := writeRow(w, layout, "RESOURCE", "RULE", "MONTHLY WASTE"); err != nil {
 				return err
 			}
-			for _, f := range r.Findings {
-				if err := writeRow(w, f.Resource, f.RuleID, money(f.MonthlyWasteUSD)); err != nil {
+			for _, f := range display {
+				if err := writeRow(w, layout, f.Resource, f.RuleID, r.money(f.MonthlyWasteUSD)); err != nil {
 					return err
 				}
 			}
 		}
-		if _, err := fmt.Fprintln(w, strings.Repeat("-", sepWidth)); err != nil {
+
+		if _, err := fmt.Fprintln(w, strings.Repeat("-", layout.separatorWidth())); err != nil {
 			return err
 		}
-		// The TOTAL row mirrors whatever column layout the header used, so a
-		// four-column header gets a four-column total: RESOURCE, PROJECT (the
-		// finding count), RULE (blank — project is not a summing dimension),
-		// and MONTHLY WASTE.
-		if r.MultiProject {
-			if err := writeRowProject(w, "TOTAL",
-				fmt.Sprintf("%d findings", r.FindingCount),
-				"",
-				money(r.TotalMonthlyWasteUSD)); err != nil {
+
+		// The TOTAL row's finding summary spans the columns left of the money
+		// cell: it is not a project, so it must not inherit the PROJECT column's
+		// width (the old fixed 9-rune width truncated it to "9 findin…"). The
+		// summary is left-aligned in that full span and is therefore never
+		// truncated.
+		summary := fmt.Sprintf("%d findings", r.FindingCount)
+		if err := writeTotalRow(w, layout, "TOTAL", summary, r.money(r.TotalMonthlyWasteUSD)); err != nil {
+			return err
+		}
+
+		// The table shows only the top ten: say plainly how many findings were
+		// omitted and where the complete report lives, as a file:// URL so a
+		// terminal makes it clickable. The TOTAL above already summed every
+		// finding, not just the ten shown.
+		if omitted := len(r.Findings) - len(display); omitted > 0 {
+			note := fmt.Sprintf("%d of %d findings omitted", omitted, len(r.Findings))
+			if r.ReportPath != "" {
+				note += "; full report: " + reportURL(r.ReportPath)
+			}
+			if _, err := fmt.Fprintln(w, note); err != nil {
 				return err
 			}
-		} else if err := writeRow(w, "TOTAL",
-			fmt.Sprintf("%d findings", r.FindingCount),
-			money(r.TotalMonthlyWasteUSD)); err != nil {
-			return err
 		}
 	}
 
@@ -101,41 +186,78 @@ func (t tableRenderer) Render(w io.Writer, r Report) error {
 	return nil
 }
 
-// writeRow emits one fixed-width row. Fixed widths (rather than tabwriter's
-// content-derived widths) are what make the layout stable across scans: a long
-// resource name must not shift the money column.
-func writeRow(w io.Writer, resource, rule, amount string) error {
-	_, err := fmt.Fprintf(w, "%-*s%-*s%*s\n",
-		colResource, truncate(resource, colResource),
-		colRule, truncate(rule, colRule),
-		colMoney, amount)
+// writeRow emits one single-project row. A literal space separates the two
+// variable columns so a value that fills its cell (padded exactly at the
+// boundary) can never touch its neighbour; the money column is right-aligned
+// at its fixed width.
+func writeRow(w io.Writer, l tableLayout, resource, rule, amount string) error {
+	_, err := fmt.Fprintf(w, "%-*s %-*s%*s\n",
+		l.resource, resource,
+		l.rule, rule,
+		l.money, amount)
 	return err
 }
 
-// writeRowProject emits one row of the multi-project layout. A literal space
-// separates each left-aligned variable column (resource, project, rule), so a
-// value that fills or truncates to its width can never touch its right-hand
-// neighbour; colResourceNarrow and colProject already cede those cells from
-// the content widths to keep the total width at 69. The total row leaves the
-// rule cell empty (project is not a summing dimension).
-func writeRowProject(w io.Writer, resource, project, rule, amount string) error {
+// writeRowProject emits one multi-project row, with a literal space between
+// every variable column so no cell can touch its right-hand neighbour.
+func writeRowProject(w io.Writer, l tableLayout, resource, project, rule, amount string) error {
 	_, err := fmt.Fprintf(w, "%-*s %-*s %-*s%*s\n",
-		colResourceNarrow, truncate(resource, colResourceNarrow),
-		colProject, truncate(project, colProject),
-		colRule, truncate(rule, colRule),
-		colMoney, amount)
+		l.resource, resource,
+		l.project, project,
+		l.rule, rule,
+		l.money, amount)
 	return err
 }
 
-// truncate keeps the column intact, reserving one cell for the ellipsis. It is
-// rune-safe so a multi-byte name cannot be cut mid-character.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	runes := []rune(s)
-	if len(runes) <= n {
-		return s
-	}
-	return string(runes[:n-1]) + "…"
+// writeTotalRow emits the TOTAL row: the "TOTAL" label in the resource cell,
+// the finding summary left-aligned in the full width of the columns left of
+// the money cell, and the total right-aligned in the money column. The summary
+// width (totalSummaryWidth) spans the project and rule columns, so "N
+// findings" is never truncated the way it was when squeezed into the PROJECT
+// column.
+func writeTotalRow(w io.Writer, l tableLayout, label, summary, amount string) error {
+	_, err := fmt.Fprintf(w, "%-*s %-*s%*s\n",
+		l.resource, label,
+		l.totalSummaryWidth(), summary,
+		l.money, amount)
+	return err
 }
+
+// tableFindings returns the findings the table prints: the full list when it
+// fits in maxTableFindings, otherwise the ten largest by monthly waste. The
+// report's FindingCount and TotalMonthlyWasteUSD — which the TOTAL row uses —
+// are computed from ALL findings in NewReport, never from this slice, so the
+// limit can never silently shrink the total.
+func tableFindings(r Report) []rules.Finding {
+	if len(r.Findings) <= maxTableFindings {
+		return r.Findings
+	}
+	fs := append([]rules.Finding(nil), r.Findings...)
+	sort.SliceStable(fs, func(i, j int) bool {
+		a, b := fs[i], fs[j]
+		switch {
+		case a.MonthlyWasteUSD != b.MonthlyWasteUSD:
+			return a.MonthlyWasteUSD > b.MonthlyWasteUSD
+		case a.Resource != b.Resource:
+			return a.Resource < b.Resource
+		default:
+			return a.RuleID < b.RuleID
+		}
+	})
+	return fs[:maxTableFindings]
+}
+
+// reportURL renders an absolute HTML report path as a file:// URL so a
+// terminal can make it clickable. A Windows drive path ("C:\...") gets the
+// scheme's required extra leading slash.
+func reportURL(path string) string {
+	p := filepath.ToSlash(filepath.Clean(path))
+	if len(p) >= 2 && p[1] == ':' {
+		return "file:///" + p
+	}
+	return "file://" + p
+}
+
+// runeLen returns the display width of s in runes, so a multi-byte character
+// counts as one cell and columns are sized consistently with rune rendering.
+func runeLen(s string) int { return utf8.RuneCountInString(s) }

@@ -29,6 +29,14 @@ type Provider struct {
 	sizer        pricing.Sizer
 	log          *slog.Logger
 
+	// currency is the ISO 4217 code the live pricing catalogue is fetched in
+	// ("" = USD). It comes from --currency/TELLURY_CURRENCY (the explicit
+	// flag) and is threaded into NewCatalogPricer at construction so every
+	// ListSkus request carries it. Best-effort detection of a billing
+	// account's currency happens later, in the CLI, after the graph is
+	// ingested, and is applied to the pricer via pricing.CurrencySetter.
+	currency string
+
 	// offline marks a provider built for a scan that never needs cloud access
 	// (a --fixture replay or a --cache-file hit). New skips constructing every
 	// cloud SDK client when this is set, so an offline scan runs on a host
@@ -59,6 +67,14 @@ func WithPricer(pr pricing.Pricer) Option { return func(p *Provider) { p.pricer 
 
 // WithLogger sets the provider logger.
 func WithLogger(l *slog.Logger) Option { return func(p *Provider) { p.log = l } }
+
+// WithCurrency sets the ISO 4217 currency code the live pricing catalogue is
+// fetched in. "" (the default) prices the catalogue in USD. Detection of a
+// billing account's currency happens later, in the CLI, and is applied to the
+// pricer via pricing.CurrencySetter after the graph is ingested; the explicit
+// flag value is threaded here at construction so NewCatalogPricer's ListSkus
+// requests carry it even before detection runs.
+func WithCurrency(code string) Option { return func(p *Provider) { p.currency = code } }
 
 // WithOffline builds a provider that never constructs any cloud SDK client:
 // no Cloud Asset Inventory, no Cloud Monitoring, no Cloud Billing. It is for
@@ -126,7 +142,7 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 			}
 			p.pricer = static
 		} else {
-			c, err := pricinggcp.NewCatalogPricer(ctx, p.log)
+			c, err := pricinggcp.NewCatalogPricer(ctx, p.log, p.currency)
 			if err != nil {
 				return nil, err
 			}

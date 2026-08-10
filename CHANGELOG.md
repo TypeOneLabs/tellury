@@ -8,6 +8,32 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
+### Fixed
+
+- Live prices were truncated to whole cents. Cloud Billing expresses a price as whole units
+  plus nanos, and the catalogue parser discarded everything below a cent — so coldline
+  storage ($0.004/GiB-month) and custom RAM ($0.004446/GiB-hour) both truncated to ZERO and
+  were priced free, and a vCPU-hour lost about 10% of its value. It went unnoticed because
+  the USD SKUs anyone happened to verify land on round cents; every non-USD scan was wrong
+  by construction, since a converted rate almost never does. A real EUR snapshot rate of
+  0.043890 became 0.04, understating the bill by 9%.
+- Evidence hardcoded a `$` into every money value, so a scan priced in EUR rendered its
+  table correctly as `1.25 EUR` while its own evidence read `$0.0439` for the same figure.
+  Money in evidence now follows the currency the prices are actually in.
+
+### Added
+
+- `--currency` (and `TELLURY_CURRENCY`) prices a scan in an ISO 4217 currency: the Cloud
+  Billing Catalog API converts the whole catalogue server-side (`ListSkusRequest.
+  CurrencyCode`), so every figure — findings, totals, rollups — is expressed in that
+  currency rather than converted afterwards. Without a flag, tellury best-effort detects a
+  billing account's currency (fixed at creation) from any project in scope and falls back
+  to USD. Every output format names the currency actually in use and how it was decided;
+  the embedded USD fallback table answering a non-USD request is disclosed loudly as a
+  WARNING. A malformed code is rejected before the scan starts; a well-formed but
+  unsupported code fails at the API naming the currency. Default behaviour (no flag) is
+  unchanged: USD, byte-identical output.
+
 ## [0.1.2] — 2026-08-09
 
 Snapshot pricing corrections. `old_snapshot` shipped in 0.1.1 reporting figures that were

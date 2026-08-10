@@ -35,6 +35,7 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 		Args:  cobra.NoArgs,
 		Example: "  tellury scan --gcp-project my-gcp-project\n" +
 			"  tellury scan --gcp-project p --rules detached_disk --format json\n" +
+			"  tellury scan --currency EUR --gcp-project my-gcp-project   # price in EUR\n" +
 			"  tellury scan --cache-file snap.json   # offline replay (full fidelity)\n" +
 			"  tellury scan --fixture cai-assets.json   # offline replay (topology only)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -71,6 +72,10 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 		"precedence, highest first: --price-file override > live Cloud Billing Catalog API "+
 		"(cached for this scan) > embedded fallback table used when the API is unreachable or "+
 		"billing access is missing")
+	f.StringVar(&cfg.Currency, "currency", "", "ISO 4217 currency code to price the scan in, e.g. EUR. "+
+		"Overrides auto-detection from the billing account; the default (also "+
+		config.CurrencyEnvVar+") is USD. A well-formed but unsupported code fails at the "+
+		"Cloud Billing API with the currency named, never silently falling back to USD")
 	f.BoolVar(&cfg.FailOnFindings, "fail-on-findings", true, "exit 3 when findings exist")
 	f.BoolVar(&cfg.ExplainSkips, "explain-skips", false, "print the per-rule skip tally to stderr")
 	f.StringVar(&at, "at", "", "evaluation instant (RFC3339); default now. Makes age predicates reproducible")
@@ -136,7 +141,10 @@ func runScan(
 	cacheHit := cacheErr == nil
 	offline := len(cfg.Fixture) > 0 || cacheHit
 
-	// 5. Provider. Offline providers build no cloud clients.
+	// 5. Provider. Offline providers build no cloud clients. The explicit
+	// --currency flag is threaded in at construction so the pricer's ListSkus
+	// requests carry it; best-effort detection (which needs the ingested
+	// graph) is applied after buildGraph below.
 	provider, err := newProvider(ctx, cfg, log, offline, cacheHit)
 	if err != nil {
 		return err
@@ -170,6 +178,15 @@ func runScan(
 	}
 	gr.Freeze()
 
+	// 8b. Currency. Precedence, highest first: the explicit
+	// --currency/TELLURY_CURRENCY flag, then best-effort detection of a
+	// billing account's currency, then USD. Detection needs the ingested
+	// graph for a folder/organization scope (no single project to ask), so it
+	// runs here, after ingestion and before rule evaluation — the pricer's
+	// catalogue loads lazily on the first UnitPrice call, so the currency set
+	// here still reaches every ListSkus request.
+	currencyState := resolveScanCurrency(ctx, cfg, pricer, gr, log, offline)
+
 	// 9. Rule evaluation.
 	pass := &rules.Pass{
 		Graph:  gr,
@@ -188,21 +205,41 @@ func runScan(
 		log.Warn("rule failed", "rule", id, "err", rerr)
 	}
 
+	// A well-formed but unsupported currency makes the Cloud Billing
+	// catalogue reject every ListSkus call with InvalidArgument. That is an
+	// operator error to surface — naming the currency — never a degradation
+	// to absorb by silently pricing the scan from the USD embedded table.
+	if ce, ok := pricer.(pricing.CatalogueErrorer); ok {
+		if cerr := ce.CatalogueError(); cerr != nil {
+			return cerr
+		}
+	}
+
 	// 10. Filters and ordering, then the report.
 	res.Findings = filterFindings(res.Findings, cfg)
 	rules.SortFindings(res.Findings, cfg.SortOrder())
+
+	// What the figures are ACTUALLY in: the requested currency when the live
+	// catalogue answered, otherwise USD (the embedded table's currency). A
+	// scan that mixed USD fallback prices into a non-USD request must say so
+	// loudly in every output format.
+	effectiveCurrency, currencyMixed := reportCurrency(pricer, currencyState)
 
 	// The report's ResourcesScanned is the number of real resources, so
 	// container nodes (project/folder/organization hierarchy scaffolding)
 	// never inflate the operator-facing "N resources" figure.
 	report := output.NewReport(res, output.Meta{
-		Scope:            scope.String(),
-		Provider:         cfg.Provider,
-		GeneratedAt:      now,
-		WindowDays:       cfg.WindowDays,
-		ResourcesScanned: gr.ResourceNodeCount(),
-		RulesEvaluated:   len(selected),
-		MultiProject:     gr.ProjectCount() > 1,
+		Scope:             scope.String(),
+		Provider:          cfg.Provider,
+		GeneratedAt:       now,
+		WindowDays:        cfg.WindowDays,
+		ResourcesScanned:  gr.ResourceNodeCount(),
+		RulesEvaluated:    len(selected),
+		MultiProject:      gr.ProjectCount() > 1,
+		Currency:          effectiveCurrency,
+		CurrencySource:    currencyState.source,
+		CurrencyRequested: requestedCurrency(currencyState),
+		CurrencyMixed:     currencyMixed,
 	})
 
 	// Offline honesty: when the scan's data carried no metric series (a raw
@@ -220,9 +257,19 @@ func runScan(
 	// and a scan that cannot produce them must say so rather than pretend it
 	// succeeded with only terminal output.
 	artifactDir := artifactDirName(cfg.OutDir, scope.String())
-	if err := writeArtifacts(artifactDir, cfg, gr, scope.String(), report); err != nil {
+	reportPath, err := writeArtifacts(artifactDir, cfg, gr, scope.String(), report)
+	if err != nil {
 		return err
 	}
+	// The table renderer's "N of M findings omitted; full report: file://..."
+	// footer needs a path a terminal can make clickable from any working
+	// directory, so hand it the absolute HTML report path. The field itself is
+	// excluded from the JSON serialization, so the machine-readable findings
+	// are unaffected.
+	if abs, aerr := filepath.Abs(reportPath); aerr == nil {
+		reportPath = abs
+	}
+	report.ReportPath = reportPath
 
 	// 12. Render. Terminal output is byte-for-byte unchanged by the artifact
 	// writing above: artifact names are only logged to stderr, stdout gets the
@@ -242,6 +289,16 @@ func runScan(
 		return errFindings
 	}
 	return nil
+}
+
+// requestedCurrency renders the currency the scan was asked/detected to price
+// in, defaulting to USD so a report field is never empty when the source says
+// flag or detected (the two non-default cases always carry a requested code).
+func requestedCurrency(state currencyResolution) string {
+	if state.requested != "" {
+		return state.requested
+	}
+	return "USD"
 }
 
 // artifactDirName renders the per-scan artifact subdirectory: the --out-dir
@@ -274,7 +331,8 @@ func sanitizeSegment(s string) string {
 	return b.String()
 }
 
-// writeArtifacts emits the three required files into dir:
+// writeArtifacts emits the three required files into dir and returns the path
+// of the HTML report (for the table renderer's file:// footer):
 //
 //   - graph-<scope>.json — the enriched graph snapshot, serialized with
 //     WriteSnapshot exactly as --cache-file produces it, so it is replayable
@@ -288,29 +346,29 @@ func sanitizeSegment(s string) string {
 //
 // All three names carry the scope so an artifact directory containing many
 // scans stays navigable.
-func writeArtifacts(dir string, cfg config.Scan, gr *graph.Graph, scope string, report output.Report) error {
+func writeArtifacts(dir string, cfg config.Scan, gr *graph.Graph, scope string, report output.Report) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return "", err
 	}
 
 	// 1. Graph snapshot (full fidelity, replayable).
 	graphPath := filepath.Join(dir, "graph-"+sanitizeSegment(scope)+".json")
 	if err := writeGraphSnapshot(graphPath, gr, cfg.Provider, scope); err != nil {
-		return err
+		return "", err
 	}
 
 	// 2. Findings JSON.
 	findingsPath := filepath.Join(dir, "findings-"+sanitizeSegment(scope)+".json")
 	if err := writeFindingsJSON(findingsPath, report); err != nil {
-		return err
+		return "", err
 	}
 
 	// 3. Self-contained HTML report.
 	reportPath := filepath.Join(dir, "report-"+sanitizeSegment(scope)+".html")
 	if err := writeHTMLReport(reportPath, gr, report, scope); err != nil {
-		return err
+		return "", err
 	}
-	return nil
+	return reportPath, nil
 }
 
 // writeHTMLReport renders the self-contained HTML report into path. The
@@ -376,7 +434,7 @@ func cacheIfPresent(path string) (*graph.Graph, *graph.Snapshot, error) {
 //   - cacheHit=true => the graph already came from the cache file, so there
 //     is no asset source to build; this is only used for the log line.
 func newProvider(ctx context.Context, cfg config.Scan, log *slog.Logger, offline, cacheHit bool) (*gcp.Provider, error) {
-	opts := []gcp.Option{gcp.WithLogger(log)}
+	opts := []gcp.Option{gcp.WithLogger(log), gcp.WithCurrency(cfg.Currency)}
 	if len(cfg.Fixture) > 0 {
 		lister, err := gcp.LoadFakeLister(cfg.Fixture...)
 		if err != nil {

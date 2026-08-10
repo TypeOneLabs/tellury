@@ -24,9 +24,11 @@ const ID = "old_snapshot"
 
 // SnapshotStorageSKU is the pricing catalogue SKU token for standard
 // snapshot storage, priced per GiB-month (pricing.KindSnapshotStorage). Both
-// the embedded price table and the live Cloud Billing Catalog lookup
-// (pkg/pricing/gcp/catalog.go matchSKU's "storagesnapshot" resource group)
-// index it under this token.
+// the embedded price table and the live Cloud Billing Catalog lookup index it
+// under this token: the live side matches the PDSnapshot resource group
+// (ResourceFamily "Storage") in pkg/pricing/gcp/catalog.go's matchSKU, and
+// pkg/pricing/gcp/catalog_test.go's TestMatchSKU_SnapshotTokenPinned pins the
+// two together so they can never drift.
 const SnapshotStorageSKU = "standard"
 
 // Rule constants.
@@ -130,6 +132,8 @@ func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *r
 	// Stash the values ExtraEvidence needs. ExtraEvidence has no Pass, so the
 	// price-source entry is rendered here — the only place the pricer is
 	// reachable — and carried through nc.
+	// Stashed here because ExtraEvidence has no Pass to ask the pricer.
+	nc.Set("currency", rules.CurrencyOf(p))
 	nc.Set("unit_price_gib_month", unit)
 	nc.Set("price_source", rules.PriceEvidence("price_source", p.Price, pricing.KindSnapshotStorage, SnapshotStorageSKU, resolvedRegion))
 
@@ -153,17 +157,19 @@ func (rule) MinWasteUSD() float64 { return MinMonthlyWasteUSD }
 // ExtraEvidence.
 func (rule) EvidenceKeys() []string {
 	// source_disk_size_gb is surfaced alongside the billable bytes because it
-	// is the number the console shows, so a reader comparing tellury's figure
+	// is the figure the console shows, so a reader comparing tellury's figure
 	// against the UI can see immediately why they differ.
 	return []string{"storage_bytes", "source_disk_size_gb", "creation_timestamp"}
 }
 
 func (rule) ExtraEvidence(n *graph.Node, nc *rules.NodeContext, branch rules.CostBranch) []rules.Evidence {
+	cur, _ := nc.Get("currency")
+	curStr, _ := cur.(string)
 	ageDays, _ := nc.Get("age_days")
 	unit, _ := nc.Get("unit_price_gib_month")
 	ev := []rules.Evidence{
 		{Key: "age_days", Value: fmt.Sprintf("%.0f", ageDays.(float64))},
-		{Key: "unit_price_gib_month", Value: fmt.Sprintf("$%.4f", unit.(float64))},
+		rules.EvMoneyIn("unit_price_gib_month", curStr, unit.(float64), 4),
 	}
 	if v, ok := nc.Get("price_source"); ok {
 		ev = append(ev, v.(rules.Evidence))

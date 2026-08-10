@@ -182,6 +182,8 @@ func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *r
 	// Stash the values ExtraEvidence needs. The price-source entries are
 	// rendered here because ExtraEvidence has no Pass to reach the pricer.
 	comps := diskPricedComponents(sku, region, capRegion, iopsPrice, iopsRegion, thrPrice, thrRegion, sizeGB, iops, mbps)
+	// Stashed here because ExtraEvidence has no Pass to ask the pricer.
+	nc.Set("currency", rules.CurrencyOf(p))
 	nc.Set("disk_sku", sku)
 	nc.Set("cap_price", capPrice)
 	nc.Set("price_source_evidence", rules.PriceEvidenceFor("price_source", p.Price, comps...))
@@ -205,6 +207,8 @@ func (rule) MinWasteUSD() float64 { return MinMonthlyWasteUSD }
 func (rule) EvidenceKeys() []string { return nil }
 
 func (rule) ExtraEvidence(n *graph.Node, nc *rules.NodeContext, branch rules.CostBranch) []rules.Evidence {
+	cur, _ := nc.Get("currency")
+	curStr, _ := cur.(string)
 	sizeGB, _ := n.Num("size_gb")
 	diskType, _ := n.Str("disk_type")
 	status, _ := n.Str("status")
@@ -222,7 +226,7 @@ func (rule) ExtraEvidence(n *graph.Node, nc *rules.NodeContext, branch rules.Cos
 		{Key: "attached_instances", Value: "0"},
 		{Key: "detached_days", Value: fmt.Sprintf("%.0f", detachedDays.(float64))},
 		{Key: "age_basis", Value: ageBasis.(string)},
-		{Key: "unit_price_gib_month", Value: fmt.Sprintf("$%.4f", capPrice.(float64))},
+		rules.EvMoneyIn("unit_price_gib_month", curStr, capPrice.(float64), 4),
 	}
 	if v, ok := nc.Get("price_source_evidence"); ok {
 		ev = append(ev, v.([]rules.Evidence)...)

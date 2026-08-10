@@ -39,6 +39,12 @@ const (
 // files across the working directory.
 const DefaultOutDir = "tellury-out"
 
+// CurrencyEnvVar is the environment-variable fallback for the --currency
+// flag, following the flag-beats-environment convention every other scan
+// option uses. Currency is provider-agnostic (not a cloud scope), so it is
+// read directly here rather than through the provider scope registry.
+const CurrencyEnvVar = "TELLURY_CURRENCY"
+
 // Scan is the fully-resolved `tellury scan` configuration.
 type Scan struct {
 	Project      string
@@ -63,6 +69,12 @@ type Scan struct {
 	OutDir         string
 	FailOnFindings bool
 	ExplainSkips   bool
+
+	// Currency is the ISO 4217 code the scan's prices are expressed in. ""
+	// means "not requested": the tool auto-detects a billing account's
+	// currency, and falls back to USD when detection cannot answer. A
+	// non-empty value (--currency or TELLURY_CURRENCY) overrides detection.
+	Currency string
 }
 
 // Scope renders the cloud scope.
@@ -119,6 +131,17 @@ func (c *Scan) Validate() error {
 		return fmt.Errorf("invalid --min-waste %.2f (want >= 0)", c.MinWaste)
 	}
 
+	// Currency: flag beats TELLURY_CURRENCY, then the value is normalized to
+	// an uppercase 3-letter ISO 4217 code. A malformed code fails here, before
+	// the scan starts — never after ingestion. A well-formed but unsupported
+	// code passes this check and fails at the Cloud Billing API, which the
+	// scan surfaces plainly (naming the currency) rather than silently
+	// falling back to the USD embedded table.
+	c.Currency = resolveCurrency(c.Currency)
+	if c.Currency != "" && !validCurrencyCode(c.Currency) {
+		return fmt.Errorf("invalid --currency %q: want a 3-letter ISO 4217 currency code such as EUR or USD", c.Currency)
+	}
+
 	if c.OutDir == "" {
 		c.OutDir = DefaultOutDir
 	}
@@ -126,6 +149,35 @@ func (c *Scan) Validate() error {
 	c.Rules = cleanList(c.Rules)
 	c.SkipRules = cleanList(c.SkipRules)
 	return nil
+}
+
+// resolveCurrency applies the flag-beats-environment convention to the
+// --currency flag: a non-empty flag wins, otherwise TELLURY_CURRENCY is read.
+// The result is normalized (trimmed, uppercased) so "eur" and " EUR " both
+// resolve to "EUR" before validation.
+func resolveCurrency(flagValue string) string {
+	v := flagValue
+	if v == "" {
+		v = os.Getenv(CurrencyEnvVar)
+	}
+	return strings.ToUpper(strings.TrimSpace(v))
+}
+
+// validCurrencyCode reports whether code is a well-formed ISO 4217 currency
+// code: exactly three ASCII uppercase letters. It deliberately does NOT check
+// that the code exists — that is the Cloud Billing API's job, and an
+// unsupported-but-well-formed code must surface as an API error naming the
+// currency rather than being rejected here.
+func validCurrencyCode(code string) bool {
+	if len(code) != 3 {
+		return false
+	}
+	for i := 0; i < len(code); i++ {
+		if code[i] < 'A' || code[i] > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 // scopeHint renders the flag/env pair the provider publishes for its first
