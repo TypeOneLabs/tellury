@@ -76,3 +76,47 @@ func TestMetricsBlocked_SampleZeroIsAbsent(t *testing.T) {
 		t.Fatalf("a Samples==0 metric entry must count as absent; blocked=%v", blocked)
 	}
 }
+
+// TestMetricsBlocked_NoCandidatesIsNotBlocked separates "nothing to look at"
+// from "blocked for want of data".
+//
+// A real organization with no compute instances was told
+// "underutilized_instance could not be evaluated for lack of metric data".
+// That is false and actively misleading: no metric would have changed the
+// answer, because there was nothing to measure, and the message sends an
+// operator hunting for a monitoring permission they do not need.
+func TestMetricsBlocked_NoCandidatesIsNotBlocked(t *testing.T) {
+	metricRule := RuleFunc{M: Meta{
+		ID:              "needs_cpu",
+		TargetKind:      graph.KindInstance,
+		RequiredMetrics: []string{"cpu_utilization_p95"},
+	}}
+
+	// A graph holding a bucket and no instance at all.
+	withoutInstances := graph.New()
+	if err := withoutInstances.AddNode(&graph.Node{
+		ID: graph.Ref("//storage.googleapis.com/b1"), Kind: graph.KindBucket, Name: "b1",
+	}); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	withoutInstances.Freeze()
+
+	if got := MetricsBlocked([]Rule{metricRule}, withoutInstances); len(got) != 0 {
+		t.Errorf("a rule with no candidate resources must not be reported as blocked, got %v", got)
+	}
+
+	// The same rule over a graph that HAS an instance carrying no metrics is
+	// genuinely blocked: here the missing data really did cost an answer.
+	withInstance := graph.New()
+	if err := withInstance.AddNode(&graph.Node{
+		ID: graph.Ref("//compute.googleapis.com/i1"), Kind: graph.KindInstance, Name: "i1",
+	}); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	withInstance.Freeze()
+
+	got := MetricsBlocked([]Rule{metricRule}, withInstance)
+	if len(got) != 1 || got[0] != "needs_cpu" {
+		t.Errorf("a rule whose candidates carry no metrics IS blocked; got %v", got)
+	}
+}

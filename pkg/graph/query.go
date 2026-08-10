@@ -41,6 +41,11 @@ func (g *Graph) HasMetric(key string) bool {
 // never do — rule evaluation only ever enters through these leaf kinds, which
 // makes container exclusion structural rather than a convention each rule
 // must remember.
+// CountByKind reports how many nodes of kind k the graph holds. It answers
+// "did this rule have anything to look at", which is a different question from
+// "was the data it needed present" — see rules.MetricsBlocked.
+func (g *Graph) CountByKind(k ResourceKind) int { return len(g.byKind[k]) }
+
 func (g *Graph) ByKind(k ResourceKind, fn func(*Node) bool) {
 	for _, id := range g.byKind[k] {
 		if !fn(g.nodes[id]) {

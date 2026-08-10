@@ -13,8 +13,12 @@ import (
 // cross-node Rule at the engine level — so both styles coexist in one registry
 // and `tellury rules list` shows them all.
 func AdaptNodeRule(nr NodeRule) Rule {
+	m := nr.Meta()
+	// Stamp the target kind so MetricsBlocked can tell a rule with no
+	// candidate resources from one that was actually blocked for want of data.
+	m.TargetKind = nr.Kind()
 	return RuleFunc{
-		M: nr.Meta(),
+		M: m,
 		Fn: func(ctx context.Context, p *Pass) ([]Finding, error) {
 			return evalNodeRule(ctx, nr, p)
 		},

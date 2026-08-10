@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/TypeOneLabs/tellury/pkg/graph"
 	"github.com/TypeOneLabs/tellury/pkg/pricing"
 )
 
@@ -37,6 +38,14 @@ type Meta struct {
 	Remediation string
 	// Origin records how the rule came to exist: "native".
 	Origin string
+
+	// TargetKind is the node kind a NodeRule iterates. AdaptNodeRule fills it
+	// in from NodeRule.Kind, so a rule author never states it twice; it is
+	// empty for cross-node rules implementing Rule directly.
+	//
+	// It exists so the engine can tell "this rule found no resources to look
+	// at" apart from "this rule was blocked for want of data".
+	TargetKind graph.ResourceKind
 }
 
 // Rule is the only extension point of the engine.

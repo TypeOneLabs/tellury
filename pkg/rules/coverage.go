@@ -26,6 +26,21 @@ func MetricsBlocked(selected []Rule, g *graph.Graph) []string {
 		if len(reqs) == 0 {
 			continue
 		}
+		// A rule with no candidate resources was not blocked — there was
+		// simply nothing for it to look at, and reporting it as blocked
+		// invites the operator to go hunting for a permission or an API they
+		// do not need. An organization with no compute instances at all was
+		// told "underutilized_instance could not be evaluated for lack of
+		// metric data", which is false: no metric would have changed the
+		// answer, because there was nothing to measure.
+		//
+		// TargetKind is empty for cross-node rules implementing Rule directly.
+		// Those keep the metric-only test, since the engine cannot know what
+		// they iterate.
+		if kind := r.Meta().TargetKind; kind != "" && g.CountByKind(kind) == 0 {
+			continue
+		}
+
 		present := false
 		for _, k := range reqs {
 			if g.HasMetric(k) {
