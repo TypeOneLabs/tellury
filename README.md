@@ -206,12 +206,20 @@ is required — without any of the others the scan still runs and says what it c
 |---|---|---|---|
 | `roles/cloudasset.viewer` | the scanned org, folder or project | Resource discovery | Nothing to scan; required |
 | `roles/monitoring.viewer` | each project in scope | Metric enrichment | Metric-dependent rules skip, each saying why |
-| `roles/billing.viewer` | the billing account | Reading the account's currency | Figures are reported in USD |
+| `roles/browser` | the org, folder or project | Resolving a project to its billing account | Currency detection stops at its first step; figures are USD |
+| `roles/billing.viewer` | the billing account | Reading that account's currency | Figures are reported in USD |
 
 Live pricing needs **no** billing role: the Cloud Billing Catalog is readable by any
-authenticated caller. `roles/billing.viewer` buys only the ability to read which currency
-your billing account is denominated in, so figures come back in the currency you are
-actually invoiced in. Without it, pricing is still live — just quoted in USD.
+authenticated caller. The last two rows buy only the ability to report figures in the
+currency you are actually invoiced in. Without them, pricing is still live — just quoted in
+USD.
+
+Currency detection takes two hops and each needs a different grant, which is why both rows
+are listed: `roles/browser` supplies the `resourcemanager.projects.get` that resolves a
+project to its billing account, and `roles/billing.viewer` then reads that account's
+currency code. Missing either one falls back to USD. Note that GCP reports a project you
+cannot see and a project that does not exist identically, as `PermissionDenied`, so a
+fallback to USD is not by itself proof that a role is missing — check the project name too.
 
 Enable the `cloudasset`, `monitoring` and `cloudbilling` APIs on the project the credentials
 belong to.
@@ -228,7 +236,9 @@ gcloud organizations add-iam-policy-binding ORG_ID \
 gcloud organizations add-iam-policy-binding ORG_ID \
   --member="serviceAccount:SA_EMAIL" --role="roles/monitoring.viewer"
 
-# Currency detection.
+# Currency detection: hierarchy read, then the billing account's currency.
+gcloud organizations add-iam-policy-binding ORG_ID \
+  --member="serviceAccount:SA_EMAIL" --role="roles/browser"
 gcloud billing accounts add-iam-policy-binding BILLING_ACCOUNT_ID \
   --member="serviceAccount:SA_EMAIL" --role="roles/billing.viewer"
 
