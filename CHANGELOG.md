@@ -8,18 +8,11 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
-### Fixed
+## [0.1.3] — 2026-08-10
 
-- Live prices were truncated to whole cents. Cloud Billing expresses a price as whole units
-  plus nanos, and the catalogue parser discarded everything below a cent — so coldline
-  storage ($0.004/GiB-month) and custom RAM ($0.004446/GiB-hour) both truncated to ZERO and
-  were priced free, and a vCPU-hour lost about 10% of its value. It went unnoticed because
-  the USD SKUs anyone happened to verify land on round cents; every non-USD scan was wrong
-  by construction, since a converted rate almost never does. A real EUR snapshot rate of
-  0.043890 became 0.04, understating the bill by 9%.
-- Evidence hardcoded a `$` into every money value, so a scan priced in EUR rendered its
-  table correctly as `1.25 EUR` while its own evidence read `$0.0439` for the same figure.
-  Money in evidence now follows the currency the prices are actually in.
+Output you can read and figures you can reconcile. Terminal output no longer truncates the
+identifiers you need to act on, and prices are reported in your billing account's own
+currency at full precision.
 
 ### Added
 
@@ -33,6 +26,35 @@ version is `0`, the CLI surface and the rule interface may change between minor 
   WARNING. A malformed code is rejected before the scan starts; a well-formed but
   unsupported code fails at the API naming the currency. Default behaviour (no flag) is
   unchanged: USD, byte-identical output.
+- The table prints the ten largest findings, then names how many were omitted and gives a
+  `file://` link to the HTML report. The total still sums every finding, not the ten shown.
+  `json` and `csv` output remain complete, since tools consume them.
+
+### Changed
+
+- Table columns size to their widest value instead of fixed widths, so project and resource
+  identifiers appear in full. A truncated project id is not merely ugly — `alpha-da…` cannot
+  be pasted into a `gcloud` command, and during this project a truncated name was misread as
+  a project that does not exist.
+- Documented every IAM role tellury uses and what each one buys, including that live pricing
+  needs no billing role at all, and that impersonation additionally requires
+  `roles/iam.serviceAccountTokenCreator` on the caller.
+
+### Fixed
+
+- Live prices were truncated to whole cents. Cloud Billing expresses a price as whole units
+  plus nanos, and the catalogue parser discarded everything below a cent — so coldline
+  storage ($0.004/GiB-month) and custom RAM ($0.004446/GiB-hour) both truncated to ZERO and
+  were priced free, and a vCPU-hour lost about 10% of its value. It went unnoticed because
+  the USD SKUs anyone happened to verify land on round cents; every non-USD scan was wrong
+  by construction, since a converted rate almost never does. A real EUR snapshot rate of
+  0.043890 became 0.04, understating the bill by 9%.
+- Evidence hardcoded a `$` into every money value, so a scan priced in EUR rendered its
+  table correctly as `1.25 EUR` while its own evidence read `$0.0439` for the same figure.
+  Money in evidence now follows the currency the prices are actually in.
+- The TOTAL row squeezed its finding count into the PROJECT column and truncated it to
+  `9 findin…`. The test covering it had been widened to accept the truncation rather than
+  the defect being fixed; it now asserts the exact cell contents.
 
 ## [0.1.2] — 2026-08-09
 
@@ -184,7 +206,8 @@ First release. GCP only.
   documentation rather than captured from the API normalizes to a node with empty
   attributes rather than failing loudly.
 
-[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/TypeOneLabs/tellury/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/TypeOneLabs/tellury/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/TypeOneLabs/tellury/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/TypeOneLabs/tellury/releases/tag/v0.1.0
