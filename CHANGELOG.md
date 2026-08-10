@@ -8,6 +8,46 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-08-10
+
+A scan now says what it looked at and shows its progress while it runs, and the HTML report
+has been rebuilt around how a cost report is actually read.
+
+### Added
+
+- Every scan prints a summary: projects analyzed, resources scanned, rules evaluated,
+  findings, resources skipped, and wall-clock duration — in the table and in JSON. A waste
+  total means little without the denominator, and an empty result reads very differently
+  once you can see whether the scope resolved 4 resources or 4,000.
+- `--progress auto|on|off` reports each phase of a scan on stderr while it runs: asset
+  discovery, metric enrichment, pricing catalogue, rule evaluation. Stdout stays clean, so
+  `--format json` still pipes into a parser; no ANSI or carriage returns are written when
+  stderr is not a terminal, so redirected logs stay readable. Default `auto` means
+  interactive terminals only.
+- The HTML report's findings table carries severity, confidence, evidence and remediation
+  inline, with text search, severity filters and sorting. Every finding is in the table —
+  the row limit is a display convenience that printing and `<noscript>` both override, so a
+  printed report never silently omits findings.
+
+### Changed
+
+- The HTML report is rebuilt. It leads with the total, then where the waste is concentrated
+  (waste by project, waste by rule), then every finding with the reasoning behind it. The
+  collapsible hierarchy tree is gone: it answered the same question as a ranked list while
+  taking longer to read, and the summaries are derived from the findings alone rather than a
+  graph traversal — which also removes the rendering path responsible for both
+  total-mismatch defects fixed in 0.1.1.
+- README examples are regenerated from real runs rather than retyped.
+
+### Fixed
+
+- A rule with no resources to evaluate was reported as blocked for lack of metric data. An
+  organization with no compute instances was told `underutilized_instance` could not be
+  evaluated, which is false — no metric would have changed the answer, because there was
+  nothing to measure — and it sends an operator hunting for a Monitoring permission they do
+  not need. A rule is now reported as blocked only when it had candidate resources and the
+  data they needed was absent.
+
 ## [0.1.3] — 2026-08-10
 
 Output you can read and figures you can reconcile. Terminal output no longer truncates the
@@ -206,7 +246,8 @@ First release. GCP only.
   documentation rather than captured from the API normalizes to a node with empty
   attributes rather than failing loudly.
 
-[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/TypeOneLabs/tellury/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/TypeOneLabs/tellury/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/TypeOneLabs/tellury/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/TypeOneLabs/tellury/compare/v0.1.0...v0.1.1

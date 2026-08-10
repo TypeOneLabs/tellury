@@ -368,29 +368,30 @@ The three files are:
   `metrics_blocked`, `projects_analyzed`, `resources_skipped`, `duration`) in the same
   shape `--format json` prints, saved to disk.
 - **`report-<scope>.html`** — a **self-contained** HTML report. All CSS is inlined, there
-  is no JavaScript, no CDN reference, and no runtime network fetch: an operator can open it
-  on an air-gapped machine, email it, or attach it to a ticket and it renders identically.
+  is no CDN reference and no runtime network fetch — the only JavaScript is inlined in the
+  document itself. An operator can open it on an air-gapped machine, email it, or attach it
+  to a ticket and it renders identically, and it stays readable with scripting disabled.
 
-The HTML report has three parts:
+The HTML report reads in the order the questions occur:
 
-1. A **waste-flow overview** — a Sankey diagram computed entirely in Go and emitted as
-   inline SVG (no `<script>` element anywhere, so the no-JS guarantee is structural, not a
-   policy). Waste flows down the resource hierarchy — organization to folder to project to
-   rule — and **each band's width is proportional to its monthly waste**, so the diagram
-   is a faithful picture, not a decoration. It degrades honestly: a tier with no nodes is
-   skipped (a single-project scan draws just `project → rule`), a tier with more than 12
-   nodes keeps the biggest and aggregates the rest into an explicit `other (N projects)`
-   band without dropping a cent of flow, and a zero-findings scan omits the diagram
-   entirely. Hover a node for its full, untruncated name and amount; labels are truncated
-   to fit their band, never the reverse.
-2. A **collapsible hierarchy** built from the graph's container nodes and containment
-   edges. Waste rolls **up**: each organization, folder, and project branch shows the sum
-   of everything beneath it, so a folder-sized or organization-wide scan surfaces where
-   the money is without scrolling a flat list. Expand a branch to walk down to the
-   individual findings.
-3. A **top-findings table**, ordered by monthly waste, where each row carries the evidence
-   behind its figure — including the **price provenance** (which of `--price-file` / live
-   API / embedded table answered each SKU).
+1. **How much** — the total monthly waste as the headline figure, with the scan's scope,
+   provider and window beneath it, and a banner for anything that qualifies the number: a
+   non-USD currency, rules that could not be evaluated, or rule errors.
+2. **Where it is concentrated** — waste by project as proportional bars, and waste by rule
+   as a compact table. Both are aggregated from the findings themselves, so what they show
+   always sums to the headline. A single-project scan omits the bars, where one full-width
+   bar would carry no information.
+3. **Why, and what to do** — every finding in one table, carrying its severity, confidence,
+   the evidence behind its figure (including **price provenance**: which of `--price-file`,
+   the live API, or the embedded table answered each SKU), and the remediation command.
+   Text search, severity filters and a sort control are inline JavaScript; the table is
+   fully written into the document, so filtering hides rows rather than fetching them.
+4. **How much to trust it** — a collapsed scan-details block with the denominators:
+   resources scanned, rules evaluated, resources skipped with their reasons, and duration.
+
+Long reports show the first 50 rows with a button to reveal the rest; printing and
+`<noscript>` both override that, so a printed or script-less report never silently omits a
+finding.
 
 The report header also carries the scan summary denominators (`N projects analyzed · N
 resources scanned · N rules evaluated · N findings · N resources skipped · duration`), and
