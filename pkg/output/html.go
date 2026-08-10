@@ -2,9 +2,15 @@
 //
 // The HTML report is a single self-contained file (inline CSS, no JavaScript,
 // no CDN, no network fetch at runtime) that is written INTO the artifact
-// directory alongside the graph and findings JSON. It has two parts:
+// directory alongside the graph and findings JSON. It has three parts:
 //
-//   - Part 1: a collapsible rollup hierarchy built from the graph's
+//   - Part 1: a Sankey flow overview (computed in Go, emitted as inline SVG)
+//     showing the scan's monthly waste flowing through the resource hierarchy
+//     — organization to folder to project to rule. A band's width is
+//     proportional to its monthly waste. There is no script anywhere in the
+//     document: the layout is computed at build time and rendered as static
+//     SVG, so the report still opens on an air-gapped machine.
+//   - Part 2: a collapsible rollup hierarchy built from the graph's
 //     organization / folder / project container nodes and containment edges.
 //     Waste rolls UP: a container's figure is the sum of everything beneath
 //     it (structurally, containers can never themselves carry an amount —
@@ -13,7 +19,7 @@
 //     beneath it — including containers that live outside the scope root's own
 //     subtree, so a scan whose fixture spans projects beyond the scope token
 //     still renders all of its waste exactly once.
-//   - Part 2: a table of the top findings by monthly waste, each row carrying
+//   - Part 3: a table of the top findings by monthly waste, each row carrying
 //     the evidence behind the figure — including which price source produced
 //     it.
 //
@@ -24,9 +30,9 @@
 //
 // Escaping: every string that originates from a cloud API (resource names,
 // project IDs, labels, evidence values) is passed through html.EscapeString
-// before it is written between tags, so a bucket named with a <script> tag
-// cannot execute. Only element text is interpolated — no untrusted value ever
-// reaches an attribute.
+// before it is written between tags — HTML element text and SVG text alike —
+// so a bucket named with a <script> tag cannot execute. Only element text is
+// interpolated — no untrusted value ever reaches an attribute.
 package output
 
 import (
@@ -375,6 +381,11 @@ func scopeKind(scope string) graph.ResourceKind {
 // and its rollup hierarchy. The timestamp is emitted in exactly one place —
 // the header — so the document is byte-identical for the same scan.
 //
+// Structure: the Sankey flow overview (Part 1) sits ABOVE the collapsible
+// hierarchy tree (Part 2) and the findings table (Part 3) — the diagram is an
+// at-a-glance overview, the tree and table are the detail, so the diagram is
+// never a replacement for them.
+//
 // Currency: a default USD scan renders exactly as before (every figure "$…").
 // A non-USD scan names its currency in a header disclosure paragraph and
 // renders every figure as "12.40 EUR"; when USD embedded-fallback prices
@@ -396,13 +407,17 @@ func RenderHTML(w io.Writer, r Report, root *TreeNode) error {
 
 	// Header — the ONE clearly-marked timestamp, plus the currency disclosure
 	// for a non-USD scan (an operator must see which currency the figures are
-	// in before reading a single number).
+	// in before reading a single number). The meta line also carries the scan
+	// summary denominators — projects analyzed, resources scanned, rules
+	// evaluated, findings, resources skipped, duration — so the report reader
+	// gets the same "how much ground did this scan cover" context the table's
+	// Summary line gives a terminal operator.
 	sb.WriteString("<header>\n")
 	sb.WriteString("<h1>Tellury waste report</h1>\n")
 	sb.WriteString("<p class=\"meta\">\n")
 	fmt.Fprintf(sb, "Scope: <code>%s</code> · Provider: %s · ", esc(r.Scope), esc(r.Provider))
-	fmt.Fprintf(sb, "%d-day window · %d resources scanned · %d findings<br>\n",
-		r.WindowDays, r.ResourcesScanned, r.FindingCount)
+	fmt.Fprintf(sb, "%d-day window · %d projects analyzed · %d resources scanned · %d rules evaluated · %d findings · %d resources skipped · %s<br>\n",
+		r.WindowDays, r.ProjectsAnalyzed, r.ResourcesScanned, r.RulesEvaluated, r.FindingCount, r.ResourcesSkipped, formatDuration(r.Duration))
 	fmt.Fprintf(sb, "Generated at <time datetime=\"%s\">%s</time> (UTC)\n",
 		r.GeneratedAt.UTC().Format(time.RFC3339),
 		esc(r.GeneratedAt.UTC().Format(time.RFC3339)))
@@ -419,7 +434,14 @@ func RenderHTML(w io.Writer, r Report, root *TreeNode) error {
 	}
 	sb.WriteString("</header>\n")
 
-	// Part 1 — the hierarchy.
+	// Part 1 — the flow overview. Only rendered when the scan has findings: a
+	// zero-findings report has no flow to draw, and the tree's "$0.00" root is
+	// already the honest statement that nothing wasteful was found.
+	if len(r.Findings) > 0 {
+		renderSankeySection(sb, buildSankey(root, r.Findings), r.Currency, len(r.Findings))
+	}
+
+	// Part 2 — the hierarchy.
 	sb.WriteString("<section id=\"hierarchy\">\n")
 	sb.WriteString("<h2>Where the waste is</h2>\n")
 	sb.WriteString("<p class=\"hint\">Expand a branch to reveal its children. " +
@@ -427,7 +449,7 @@ func RenderHTML(w io.Writer, r Report, root *TreeNode) error {
 	renderTree(sb, root, r.Currency)
 	sb.WriteString("</section>\n")
 
-	// Part 2 — the findings table.
+	// Part 3 — the findings table.
 	sb.WriteString("<section id=\"findings\">\n")
 	sb.WriteString("<h2>Top findings</h2>\n")
 	if len(r.Findings) == 0 {
@@ -583,7 +605,10 @@ func moneyHTML(v float64, currency string) string {
 }
 
 // htmlCSS is the inline stylesheet. No external resource is referenced, so
-// the report is legible on an air-gapped machine and when printed to PDF.
+// the report is legible on an air-gapped machine and when printed to PDF. The
+// Sankey SVG scales with its container (width:100%, height:auto driven by the
+// viewBox), so it degrades to a narrow phone viewport and prints at page
+// width without any scripting.
 const htmlCSS = `<style>
 :root { color-scheme: light; }
 * { box-sizing: border-box; }
@@ -599,6 +624,12 @@ p.currency { color: #0969da; font-size: 0.9rem; margin: -0.5rem 0 1rem;
   border-left: 3px solid #0969da; padding: 0.35rem 0.6rem; background: #f6f8fa; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   background: #f6f8fa; padding: 0 0.25em; border-radius: 3px; font-size: 0.85em; }
+
+figure.sankey { margin: 0.5rem 0 0; }
+figure.sankey svg { width: 100%; height: auto; display: block; }
+figure.sankey figcaption { color: #57606a; font-size: 0.85rem; margin-top: 0.35rem; }
+figure.sankey .sankey-name { font-size: 11px; font-weight: 600; fill: #1a1d21; }
+figure.sankey .sankey-amt { font-size: 10px; fill: #24292f; }
 
 ul.tree { list-style: none; margin: 0; padding-left: 0; }
 ul.tree ul { list-style: none; margin: 0; padding-left: 1.4rem; }
@@ -636,6 +667,7 @@ details.more summary { cursor: pointer; color: #0969da; font-size: 0.9rem; }
 @media print {
   body { max-width: none; padding: 0; }
   details > *:not(summary) { display: block !important; }
+  figure.sankey { break-inside: avoid; }
   a, .hint { color: #000; }
 }
 </style>

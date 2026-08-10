@@ -1,9 +1,10 @@
 package gcp
 
 import (
-	"math"
 	"context"
 	"log/slog"
+	"math"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,66 @@ import (
 	"github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/unused_reserved_ip"
 	"github.com/TypeOneLabs/tellury/pkg/rules/gcp/gcs/no_lifecycle_policy"
 )
+
+// TestCatalogueProgress_InvokesRegisteredCallback pins the progress seam the
+// CLI uses to report the pricing catalogue load as its own phase:
+// SetCatalogueProgress stores a callback and reportCatalogueProgress invokes
+// it with the exact (done, total, final) arguments — including final=true on
+// the completion call, so the CLI's phase always ends. It also pins that
+// setting nil disables further invocations (the offline static pricer never
+// registers one).
+func TestCatalogueProgress_InvokesRegisteredCallback(t *testing.T) {
+	p, err := NewCatalogPricer(context.Background(), slog.New(slog.DiscardHandler), "")
+	if err != nil {
+		t.Fatalf("NewCatalogPricer: %v", err)
+	}
+	defer p.Close()
+
+	type report struct {
+		done, total int
+		final       bool
+	}
+	var (
+		mu  sync.Mutex
+		got []report
+	)
+	p.SetCatalogueProgress(func(done, total int, final bool) {
+		mu.Lock()
+		got = append(got, report{done, total, final})
+		mu.Unlock()
+	})
+
+	p.reportCatalogueProgress(0, 2, false) // load start
+	p.reportCatalogueProgress(1, 2, false) // one service indexed
+	p.reportCatalogueProgress(2, 2, true)  // completion
+
+	mu.Lock()
+	if len(got) != 3 {
+		mu.Unlock()
+		t.Fatalf("callback invoked %d times, want 3", len(got))
+	}
+	want := []report{{0, 2, false}, {1, 2, false}, {2, 2, true}}
+	for i, w := range want {
+		if got[i] != w {
+			mu.Unlock()
+			t.Fatalf("callback call %d = %+v, want %+v", i, got[i], w)
+		}
+	}
+	mu.Unlock()
+
+	// Clearing the callback must stop invocations.
+	p.SetCatalogueProgress(nil)
+	mu.Lock()
+	before := len(got)
+	mu.Unlock()
+	p.reportCatalogueProgress(0, 0, true)
+	mu.Lock()
+	if len(got) != before {
+		mu.Unlock()
+		t.Fatalf("callback must not fire after SetCatalogueProgress(nil)")
+	}
+	mu.Unlock()
+}
 
 // TestLiveUnitPrice_ThreadsScanContext is the regression test for finding #2:
 // loadCatalogue hardcoded context.Background(), so --timeout could not bound

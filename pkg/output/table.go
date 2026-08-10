@@ -171,6 +171,19 @@ func (t tableRenderer) Render(w io.Writer, r Report) error {
 		}
 	}
 
+	// Scan summary — printed after the table (or after the no-findings line
+	// when the scan produced no table), in every case. It is the "what did
+	// the scan actually look at" context, not the headline: the denominators
+	// that tell an operator whether an empty findings table means "nothing
+	// wasteful" (projects analyzed > 0, resources scanned > 0) or "nothing
+	// scanned" (a broken scope with zero projects). Every number here is
+	// carried by the Report, never measured at render time, so a replayed or
+	// fixture-driven scan reports its real counts and its real duration and
+	// the output stays deterministic for a given Report.
+	if _, err := fmt.Fprintln(w, summaryLine(r)); err != nil {
+		return err
+	}
+
 	// Offline honesty: when the scan's data carried no metrics for some rules,
 	// "no waste" would be a lie — those rules simply could not evaluate. State
 	// which ones explicitly so a fixture run does not look like a clean bill of
@@ -184,6 +197,32 @@ func (t tableRenderer) Render(w io.Writer, r Report) error {
 		}
 	}
 	return nil
+}
+
+// summaryLine renders the one-line scan summary: how much ground the scan
+// covered (projects analyzed, resources scanned, rules evaluated) and what it
+// produced (findings, resources skipped, duration). It is context, not the
+// headline, so it is a single compact line. The duration comes from the
+// Report — the scan's own clock — so rendering a Report twice always prints
+// the same line.
+func summaryLine(r Report) string {
+	parts := []string{
+		countPhrase(r.ProjectsAnalyzed, "project analyzed", "projects analyzed"),
+		countPhrase(r.ResourcesScanned, "resource scanned", "resources scanned"),
+		countPhrase(r.RulesEvaluated, "rule evaluated", "rules evaluated"),
+		countPhrase(r.FindingCount, "finding", "findings"),
+		countPhrase(r.ResourcesSkipped, "resource skipped", "resources skipped"),
+		formatDuration(r.Duration),
+	}
+	return "Summary: " + strings.Join(parts, ", ")
+}
+
+// countPhrase renders "N singular" or "N plural" for the summary line.
+func countPhrase(n int, singular, plural string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, singular)
+	}
+	return fmt.Sprintf("%d %s", n, plural)
 }
 
 // writeRow emits one single-project row. A literal space separates the two

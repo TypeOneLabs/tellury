@@ -20,9 +20,9 @@ import (
 //     in parallel across nodes.
 //   - After Freeze(), the graph's topology (nodes, edges, indexes) is
 //     immutable and safe for unlimited concurrent reads. Freeze() does NOT
-//     make Node.Metrics immutable - concurrent SetMetric calls may still
-//     be enriching it, guarded by the same mutex. Readers that need a
-//     stable view of Metrics must wait until enrichment has finished
+//     make Node.Metrics immutable - concurrent SetMetric calls may still be
+//     enriching it, guarded by the same mutex. Readers that need a stable
+//     view of Metrics must wait until enrichment has finished
 //     (i.e. synchronize with the enrichment goroutines themselves; Freeze
 //     provides no such signal).
 type Graph struct {
@@ -179,6 +179,19 @@ func (g *Graph) ProjectCount() int {
 		return true
 	})
 	return len(seen)
+}
+
+// ProjectContainerCount reports how many project container nodes the graph
+// carries — the hierarchy's own "projects/<id>" nodes, not the distinct
+// project IDs derived from resource nodes (see ProjectCount). The scan
+// report's "projects analyzed" figure uses this count: a project container
+// node exists for every project that ingested at least one resource, so a
+// scan with findings reports its projects exactly as a scan with none does.
+// Deriving the count from the findings instead would report zero projects for
+// a clean scan — precisely the "nothing wasteful" vs "nothing scanned"
+// ambiguity the scan summary exists to resolve.
+func (g *Graph) ProjectContainerCount() int {
+	return len(g.byKind[KindProject])
 }
 
 func (g *Graph) EdgeCount() int {

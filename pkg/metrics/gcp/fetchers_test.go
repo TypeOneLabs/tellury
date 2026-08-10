@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // TestRunFetchJobs_IsolatesPerJobFailures is the regression test for finding
@@ -135,5 +138,85 @@ func TestRunFetchJobs_JoinedErrorsInspectable(t *testing.T) {
 	}
 	if !failFirst || !failLast {
 		t.Fatalf("worker side-effects missing: failFirst=%v failLast=%v", failFirst, failLast)
+	}
+}
+
+// TestRunFetchJobs_ProgressReceivesCumulativeDone pins the progress seam Fill
+// uses: the onDone callback is invoked once per job with the cumulative
+// completed count, so the reported set is exactly 1..N (the order may vary —
+// the pool is concurrent — but the multiset must be complete).
+func TestRunFetchJobs_ProgressReceivesCumulativeDone(t *testing.T) {
+	const jobs = 25
+	worker := func(context.Context, fetchJob) error { return nil }
+
+	var (
+		mu  sync.Mutex
+		got []int
+	)
+	onDone := func(done int) {
+		mu.Lock()
+		got = append(got, done)
+		mu.Unlock()
+	}
+
+	var jobList []fetchJob
+	for i := 0; i < jobs; i++ {
+		jobList = append(jobList, fetchJob{key: "k", project: fmt.Sprintf("p%02d", i)})
+	}
+	if err := runFetchJobs(context.Background(), jobList, worker, onDone); err != nil {
+		t.Fatalf("runFetchJobs: %v", err)
+	}
+
+	sort.Ints(got)
+	if len(got) != jobs {
+		t.Fatalf("progress callback invoked %d times, want %d", len(got), jobs)
+	}
+	for i, d := range got {
+		if d != i+1 {
+			t.Fatalf("cumulative done counts out of order: got[%d]=%d, want %d", i, d, i+1)
+		}
+	}
+}
+
+// TestRunFetchJobs_SlowProgressDoesNotSerializePool is the concurrency
+// preservation contract: a progress callback that itself blocks must not
+// collapse the bounded pool to one worker. If reporting progress serialized
+// the fetch pool, the observed peak concurrency would be 1; it must stay
+// between 2 and maxConcurrentFetches.
+func TestRunFetchJobs_SlowProgressDoesNotSerializePool(t *testing.T) {
+	const jobs = 64
+	var (
+		inFlight    atomic.Int64
+		maxInFlight atomic.Int64
+	)
+	worker := func(context.Context, fetchJob) error {
+		cur := inFlight.Add(1)
+		for {
+			old := maxInFlight.Load()
+			if cur <= old || maxInFlight.CompareAndSwap(old, cur) {
+				break
+			}
+		}
+		time.Sleep(time.Millisecond) // hold the slot so concurrency is observable
+		inFlight.Add(-1)
+		return nil
+	}
+	// A progress callback that sleeps too: if workers waited on it, the
+	// observed concurrency would collapse toward 1.
+	slowProgress := func(int) { time.Sleep(2 * time.Millisecond) }
+
+	var jobList []fetchJob
+	for i := 0; i < jobs; i++ {
+		jobList = append(jobList, fetchJob{key: "k", project: fmt.Sprintf("p%02d", i)})
+	}
+	if err := runFetchJobs(context.Background(), jobList, worker, slowProgress); err != nil {
+		t.Fatalf("runFetchJobs: %v", err)
+	}
+
+	if got := maxInFlight.Load(); got < 2 {
+		t.Fatalf("observed peak concurrency %d; a slow progress callback must not serialize the fetch pool", got)
+	}
+	if got := maxInFlight.Load(); got > int64(maxConcurrentFetches) {
+		t.Fatalf("observed peak concurrency %d exceeds the pool bound %d", got, maxConcurrentFetches)
 	}
 }

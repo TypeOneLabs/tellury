@@ -93,6 +93,12 @@ type CatalogPricer struct {
 	// to the scan, not silently fall back to the USD embedded table.
 	unsupported error
 
+	// catalogueProgress, when non-nil, is invoked as the live catalogue
+	// loads: (done, total) counts billing services indexed, with final=true
+	// on the last call whether the load succeeded or not. Set via
+	// SetCatalogueProgress; see there for the exact call pattern.
+	catalogueProgress func(done, total int, final bool)
+
 	mu   sync.Mutex
 	last map[string]pricing.Provenance // provKey(kind,sku,region) -> last answer
 }
@@ -245,6 +251,33 @@ func (c *CatalogPricer) CatalogueError() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.unsupported
+}
+
+// SetCatalogueProgress registers a callback the pricer invokes as its live
+// catalogue loads: once at the start with (0, services, false), once after
+// each service is indexed, and once more with final=true on completion —
+// whether the load succeeded or not (total is 0 when no service could be
+// resolved). The callback is invoked from whichever goroutine triggers the
+// lazy load (a rule worker) and must not block for long; it must be nil or
+// already-settled when UnitPrice first runs, because the catalogue load is
+// cached for the pricer's lifetime. Optional.
+func (c *CatalogPricer) SetCatalogueProgress(f func(done, total int, final bool)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.catalogueProgress = f
+}
+
+// reportCatalogueProgress invokes the registered catalogue-load callback, if
+// any. It snapshots the callback under the mutex and invokes it outside so
+// the (single) loading goroutine never holds the lock across a caller's
+// function.
+func (c *CatalogPricer) reportCatalogueProgress(done, total int, final bool) {
+	c.mu.Lock()
+	f := c.catalogueProgress
+	c.mu.Unlock()
+	if f != nil {
+		f(done, total, final)
+	}
 }
 
 // UnitPrice implements pricing.Pricer with the documented precedence:
@@ -435,6 +468,13 @@ func (c *CatalogPricer) listSkusRequest(serviceID string) *billingpb.ListSkusReq
 //
 // ctx is the scan's context (see CatalogPricer.ctx): every ListServices /
 // ListSkus RPC inherits its deadline, so the CLI --timeout bounds this load.
+//
+// The registered catalogue progress callback (SetCatalogueProgress) is
+// invoked as the load proceeds: (0, services, false) before the first
+// service, (i, services, false) after each service — whether it indexed or
+// failed — and (services, services, true) once at the end, or (0, 0, true)
+// when no service could even be resolved. Callers use it to report the load
+// as a progress phase without pre-warming the lazy load.
 func (c *CatalogPricer) loadCatalogue(ctx context.Context) error {
 	wantServices := map[string]bool{}
 	for _, name := range billingServiceForKind {
@@ -443,27 +483,35 @@ func (c *CatalogPricer) loadCatalogue(ctx context.Context) error {
 
 	serviceIDs, err := c.resolveServiceIDs(ctx, wantServices)
 	if err != nil {
+		c.reportCatalogueProgress(0, 0, true)
 		c.log.Warn("gcp: could not list Cloud Billing services; pricing will use the embedded fallback table", "err", err)
 		return err
 	}
 
 	total := 0
+	done := 0
+	nServices := len(serviceIDs)
+	c.reportCatalogueProgress(0, nServices, false)
 	for displayName, serviceID := range serviceIDs {
 		n, err := c.indexServiceSKUs(ctx, displayName, serviceID)
+		done++
 		if err != nil {
 			var ue *unsupportedCurrencyError
 			if errors.As(err, &ue) {
 				c.mu.Lock()
 				c.unsupported = ue
 				c.mu.Unlock()
+				c.reportCatalogueProgress(done, nServices, true)
 				return ue
 			}
 			c.log.Warn("gcp: could not list SKUs for billing service; pricing for it will use the embedded fallback table",
 				"service", displayName, "err", err)
-			continue
+		} else {
+			total += n
 		}
-		total += n
+		c.reportCatalogueProgress(done, nServices, false)
 	}
+	c.reportCatalogueProgress(done, nServices, true)
 	c.mu.Lock()
 	c.loaded = total > 0
 	c.mu.Unlock()

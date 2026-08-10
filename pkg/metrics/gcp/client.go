@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
@@ -108,6 +109,12 @@ func (c *Client) Supports(key string) bool {
 // for all projects just because one is unreadable. Instead a bounded
 // WaitGroup keeps the same concurrency ceiling, and errors are collected and
 // returned (joined when more than one) so the caller can log once.
+//
+// When req.Progress is non-nil, it is invoked once per completed (key,
+// project) job with the cumulative (completed, total) counts, so a caller can
+// report how far enrichment is. The invocation happens on the worker
+// goroutine that finished the job and never blocks on the fetch pool's own
+// concurrency semaphore — progress reporting cannot serialize enrichment.
 func (c *Client) Fill(ctx context.Context, req metrics.Request, set metrics.Setter) error {
 	if len(req.Keys) == 0 {
 		return nil
@@ -128,8 +135,13 @@ func (c *Client) Fill(ctx context.Context, req metrics.Request, set metrics.Sett
 		}
 	}
 
+	total := len(jobs)
 	return runFetchJobs(ctx, jobs, func(ctx context.Context, j fetchJob) error {
 		return c.fillOne(ctx, j.project, j.key, req, set)
+	}, func(done int) {
+		if req.Progress != nil {
+			req.Progress(done, total)
+		}
 	})
 }
 
@@ -145,13 +157,24 @@ type fetchJob struct {
 // guarantee can be unit-tested with a fake worker and no cloud client. The
 // []error is the per-job failures; it is non-empty iff at least one job
 // failed, and nil otherwise.
-func runFetchJobs(ctx context.Context, jobs []fetchJob, worker func(ctx context.Context, j fetchJob) error) error {
+//
+// onDone, when given, is invoked once per job (after the worker returns,
+// success or failure) with the cumulative number of completed jobs, from the
+// goroutine that finished the job. The count is tracked with an atomic — the
+// callback is never serialized by this pool's semaphore, so a progress
+// callback cannot shrink the bounded concurrency below maxConcurrentFetches.
+func runFetchJobs(ctx context.Context, jobs []fetchJob, worker func(ctx context.Context, j fetchJob) error, onDone ...func(done int)) error {
 	sem := make(chan struct{}, maxConcurrentFetches)
 	var (
-		wg   sync.WaitGroup
-		mu   sync.Mutex
-		errs []error
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		errs      []error
+		completed atomic.Int64
 	)
+	report := func(int) {}
+	if len(onDone) > 0 && onDone[0] != nil {
+		report = onDone[0]
+	}
 	for _, j := range jobs {
 		j := j
 		wg.Add(1)
@@ -164,6 +187,7 @@ func runFetchJobs(ctx context.Context, jobs []fetchJob, worker func(ctx context.
 				errs = append(errs, err)
 				mu.Unlock()
 			}
+			report(int(completed.Add(1)))
 		}()
 	}
 	wg.Wait()

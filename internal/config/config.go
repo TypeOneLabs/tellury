@@ -45,6 +45,12 @@ const DefaultOutDir = "tellury-out"
 // read directly here rather than through the provider scope registry.
 const CurrencyEnvVar = "TELLURY_CURRENCY"
 
+// ProgressEnvVar is the environment-variable fallback for the --progress
+// flag, following the same flag-beats-environment convention as every other
+// scan option. Progress is provider-agnostic, so it is read directly here
+// rather than through the provider scope registry.
+const ProgressEnvVar = "TELLURY_PROGRESS"
+
 // Scan is the fully-resolved `tellury scan` configuration.
 type Scan struct {
 	Project      string
@@ -70,6 +76,15 @@ type Scan struct {
 	FailOnFindings bool
 	ExplainSkips   bool
 
+	// Progress is the scan progress mode: "auto" (default — report phase
+	// progress only on an interactive terminal), "on" (always, degrading to
+	// plain periodic lines off a terminal), or "off" (never). It is resolved
+	// from --progress with TELLURY_PROGRESS as the environment fallback, and
+	// controls a status channel on stderr that is independent of --log-level
+	// and never touches stdout. See internal/cli/progress.go for the
+	// reporter itself.
+	Progress string
+
 	// Currency is the ISO 4217 code the scan's prices are expressed in. ""
 	// means "not requested": the tool auto-detects a billing account's
 	// currency, and falls back to USD when detection cannot answer. A
@@ -93,6 +108,14 @@ func (c *Scan) Validate() error {
 	}
 	if c.Provider != "gcp" {
 		return cloud.UnknownProviderError(c.Provider)
+	}
+
+	// Progress mode is a flag/usage error and is checked before anything
+	// else, so a bad --progress value is rejected even when the scan scope
+	// would also be invalid.
+	c.Progress = resolveProgress(c.Progress)
+	if !validProgressMode(c.Progress) {
+		return fmt.Errorf("invalid --progress %q (want auto|on|off)", c.Progress)
 	}
 
 	c.Project = resolveScope(c.Provider, scopeProject, c.Project)
@@ -149,6 +172,33 @@ func (c *Scan) Validate() error {
 	c.Rules = cleanList(c.Rules)
 	c.SkipRules = cleanList(c.SkipRules)
 	return nil
+}
+
+// resolveProgress applies the flag-beats-environment convention to the
+// --progress flag: a non-empty flag wins, otherwise TELLURY_PROGRESS is read,
+// and an empty result defaults to "auto" (report only on an interactive
+// terminal). The value is normalized to lowercase.
+func resolveProgress(flagValue string) string {
+	v := flagValue
+	if v == "" {
+		v = os.Getenv(ProgressEnvVar)
+	}
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return "auto"
+	}
+	return v
+}
+
+// validProgressMode reports whether mode is one of the supported progress
+// modes: "auto" (interactive terminals only), "on" (always, plain off a
+// terminal), or "off" (never).
+func validProgressMode(mode string) bool {
+	switch mode {
+	case "auto", "on", "off":
+		return true
+	}
+	return false
 }
 
 // resolveCurrency applies the flag-beats-environment convention to the

@@ -328,7 +328,9 @@ func (p *Provider) lookupRef(resourceType, joinValue string) (graph.Ref, bool) {
 // Asset Inventory it has no native folder/organization aggregation — so this
 // resolves the distinct project IDs actually present in the ingested graph
 // (rather than trusting the scan scope, which may itself be a folder or
-// organization) and hands that set to the provider.
+// organization) and hands that set to the provider. The caller's
+// req.Progress callback (if any) is carried into the provider's Fill so the
+// scan can report how far the (key, project) fan-out has come.
 func (p *Provider) EnrichMetrics(ctx context.Context, g *graph.Graph, sc cloud.Scope, req metrics.Request) error {
 	if len(req.Keys) == 0 || p.metrics == nil {
 		return nil
@@ -351,7 +353,7 @@ func (p *Provider) EnrichMetrics(ctx context.Context, g *graph.Graph, sc cloud.S
 		return nil
 	}
 
-	sub := metrics.Request{Keys: supported, WindowDays: req.WindowDays, Projects: projects}
+	sub := metrics.Request{Keys: supported, WindowDays: req.WindowDays, Projects: projects, Progress: req.Progress}
 	return p.metrics.Fill(ctx, sub, func(id graph.Ref, key string, v graph.MetricValue) {
 		g.SetMetric(id, key, v)
 	})

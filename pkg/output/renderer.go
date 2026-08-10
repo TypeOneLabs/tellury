@@ -27,6 +27,29 @@ type Report struct {
 	ResourcesScanned     int     `json:"resources_scanned"`
 	RulesEvaluated       int     `json:"rules_evaluated"`
 
+	// ProjectsAnalyzed is the number of project container nodes the scan's
+	// graph carried — the denominator that tells an operator whether an empty
+	// findings table means "nothing wasteful" (projects analyzed > 0) or
+	// "nothing scanned" (a broken scope with zero projects). It is derived
+	// from the graph's project container nodes, never from the findings, so a
+	// scan with no findings still reports the projects it analyzed.
+	ProjectsAnalyzed int `json:"projects_analyzed"`
+
+	// ResourcesSkipped is the total number of resource-rule skips recorded
+	// during evaluation — the sum of every entry in Skipped, which is exactly
+	// the count `--explain-skips` breaks down per (rule, code). It is the
+	// denominator beside finding_count: a machine reader that sees 5 findings
+	// out of 400 resources skipped needs both to judge the scan's coverage.
+	ResourcesSkipped int `json:"resources_skipped"`
+
+	// Duration is the wall-clock time the scan took, measured by the scan's
+	// own clock and threaded through Meta. It is NEVER re-measured inside a
+	// renderer, so a replayed or fixture-driven scan reports its real
+	// duration and the value is testable with a fixed clock rather than being
+	// whatever the machine felt like at render time. It is serialized as an
+	// integer count of nanoseconds.
+	Duration time.Duration `json:"duration"`
+
 	RuleErrors map[string]string `json:"rule_errors,omitempty"`
 	Skipped    []rules.SkipTally `json:"skipped,omitempty"`
 
@@ -84,7 +107,17 @@ type Meta struct {
 	WindowDays       int
 	ResourcesScanned int
 	RulesEvaluated   int
-	MultiProject     bool
+
+	// ProjectsAnalyzed is the count of project container nodes in the scan's
+	// graph (graph.Graph.ProjectContainerCount). It is carried here rather
+	// than derived from the findings so a scan with no findings still reports
+	// the projects it looked at.
+	ProjectsAnalyzed int
+	// Duration is the scan's wall-clock duration, measured by the scan's own
+	// clock and never re-measured inside a renderer.
+	Duration time.Duration
+
+	MultiProject bool
 
 	// Currency fields describe how the scan's money figures were decided and
 	// what currency they are actually in; see Report for the exact meanings.
@@ -118,6 +151,8 @@ func NewReport(res rules.Result, m Meta) Report {
 		FindingCount:      len(res.Findings),
 		ResourcesScanned:  m.ResourcesScanned,
 		RulesEvaluated:    m.RulesEvaluated,
+		ProjectsAnalyzed:  m.ProjectsAnalyzed,
+		Duration:          m.Duration,
 		MultiProject:      m.MultiProject,
 		Skipped:           res.SkipTotals(),
 		Currency:          m.Currency,
@@ -125,6 +160,11 @@ func NewReport(res rules.Result, m Meta) Report {
 		CurrencyRequested: m.CurrencyRequested,
 		CurrencyMixed:     m.CurrencyMixed,
 	}
+	// ResourcesSkipped is the sum of the skip tallies the report already
+	// carries, so the two can never disagree: the summary's "N resources
+	// skipped" is exactly what `--explain-skips` breaks down per (rule, code).
+	r.ResourcesSkipped = skipTotal(r.Skipped)
+
 	total := 0.0
 	for _, f := range res.Findings {
 		total += f.MonthlyWasteUSD
@@ -138,6 +178,35 @@ func NewReport(res rules.Result, m Meta) Report {
 		}
 	}
 	return r
+}
+
+// skipTotal sums a report's skip tallies into the single "resources skipped"
+// figure the scan summary prints. It is the exact total `--explain-skips`
+// breaks down per (rule, code), so the summary and the breakdown can never
+// disagree.
+func skipTotal(tallies []rules.SkipTally) int {
+	n := 0
+	for _, t := range tallies {
+		n += t.Count
+	}
+	return n
+}
+
+// formatDuration renders the scan's duration compactly for human renderers:
+// rounded to milliseconds once the scan reaches a millisecond (so a real scan
+// reads "1.235s", not "1.234567891s"), and to microseconds below that so a
+// sub-millisecond fixture replay still reads as a real, non-zero duration
+// instead of "0s". A zero duration — a Report built directly, or a scan that
+// finished within one microsecond — reads "0s".
+func formatDuration(d time.Duration) string {
+	switch {
+	case d >= time.Second:
+		return d.Round(time.Millisecond).String()
+	case d >= time.Millisecond:
+		return d.Round(time.Millisecond).String()
+	default:
+		return d.Round(time.Microsecond).String()
+	}
 }
 
 // Renderer writes a Report. Implementations MUST be deterministic.

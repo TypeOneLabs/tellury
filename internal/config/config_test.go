@@ -82,3 +82,36 @@ func TestResolveScope_ScopeNotAcceptedByProviderYieldsEmpty(t *testing.T) {
 		t.Fatalf("resolveScope(other, folder) = %q, want empty", got)
 	}
 }
+
+// The --progress flag beats TELLURY_PROGRESS; with the flag empty the env var
+// is read; with both empty the default is "auto" (interactive terminals only).
+func TestResolveProgress_FlagBeatsEnv(t *testing.T) {
+	t.Setenv("TELLURY_PROGRESS", "off")
+
+	if got := resolveProgress("on"); got != "on" {
+		t.Fatalf("resolveProgress(flag=on, env=off) = %q, want on (flag wins)", got)
+	}
+	if got := resolveProgress(""); got != "off" {
+		t.Fatalf("resolveProgress(flag=empty, env=off) = %q, want off (env fallback)", got)
+	}
+
+	t.Setenv("TELLURY_PROGRESS", "")
+	if got := resolveProgress(""); got != "auto" {
+		t.Fatalf("resolveProgress(empty) = %q, want auto default", got)
+	}
+}
+
+// Validate accepts every supported progress mode and rejects anything else as
+// a usage error — before any scope/flag check that would otherwise fire first.
+func TestScanValidate_ProgressMode(t *testing.T) {
+	for _, mode := range []string{"auto", "on", "off"} {
+		c := &Scan{Provider: "gcp", Project: "p", Progress: mode}
+		if err := c.Validate(); err != nil {
+			t.Fatalf("Validate(--progress %s) failed: %v", mode, err)
+		}
+	}
+	c := &Scan{Provider: "gcp", Progress: "sometimes"}
+	if err := c.Validate(); err == nil {
+		t.Fatalf("Validate(--progress sometimes) must fail")
+	}
+}

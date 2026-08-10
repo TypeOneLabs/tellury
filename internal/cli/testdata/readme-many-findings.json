@@ -1,0 +1,220 @@
+{
+  "assets": [
+    {
+      "name": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/pd-01",
+      "assetType": "compute.googleapis.com/Disk",
+      "project": "projects/my-project",
+      "resource": {
+        "version": "v1",
+        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+        "location": "us-central1-a",
+        "data": {
+          "name": "pd-01",
+          "sizeGb": 200,
+          "type": "projects/my-project/zones/us-central1-a/diskTypes/pd-standard",
+          "status": "READY",
+          "creationTimestamp": "2024-01-01T00:00:00Z",
+          "users": []
+        }
+      }
+    },
+    {
+      "name": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/pd-02",
+      "assetType": "compute.googleapis.com/Disk",
+      "project": "projects/my-project",
+      "resource": {
+        "version": "v1",
+        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+        "location": "us-central1-a",
+        "data": {
+          "name": "pd-02",
+          "sizeGb": 200,
+          "type": "projects/my-project/zones/us-central1-a/diskTypes/pd-standard",
+          "status": "READY",
+          "creationTimestamp": "2024-01-01T00:00:00Z",
+          "users": []
+        }
+      }
+    },
+    {
+      "name": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/pd-03",
+      "assetType": "compute.googleapis.com/Disk",
+      "project": "projects/my-project",
+      "resource": {
+        "version": "v1",
+        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+        "location": "us-central1-a",
+        "data": {
+          "name": "pd-03",
+          "sizeGb": 200,
+          "type": "projects/my-project/zones/us-central1-a/diskTypes/pd-standard",
+          "status": "READY",
+          "creationTimestamp": "2024-01-01T00:00:00Z",
+          "users": []
+        }
+      }
+    },
+    {
+      "name": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/pd-04",
+      "assetType": "compute.googleapis.com/Disk",
+      "project": "projects/my-project",
+      "resource": {
+        "version": "v1",
+        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+        "location": "us-central1-a",
+        "data": {
+          "name": "pd-04",
+          "sizeGb": 200,
+          "type": "projects/my-project/zones/us-central1-a/diskTypes/pd-standard",
+          "status": "READY",
+          "creationTimestamp": "2024-01-01T00:00:00Z",
+          "users": []
+        }
+      }
+    },
+    {
+      "name": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/pd-05",
+      "assetType": "compute.googleapis.com/Disk",
+      "project": "projects/my-project",
+      "resource": {
+        "version": "v1",
+        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+        "location": "us-central1-a",
+        "data": {
+          "name": "pd-05",
+          "sizeGb": 200,
+          "type": "projects/my-project/zones/us-central1-a/diskTypes/pd-standard",
+          "status": "READY",
+          "creationTimestamp": "2024-01-01T00:00:00Z",
+          "users": []
+        }
+      }
+    },
+    {
+      "name": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/pd-06",
+      "assetType": "compute.googleapis.com/Disk",
+      "project": "projects/my-project",
+      "resource": {
+        "version": "v1",
+        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+        "location": "us-central1-a",
+        "data": {
+          "name": "pd-06",
+          "sizeGb": 200,
+          "type": "projects/my-project/zones/us-central1-a/diskTypes/pd-standard",
+          "status": "READY",
+          "creationTimestamp": "2024-01-01T00:00:00Z",
+          "users": []
+        }
+      }
+    },
+    {
+      "name": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/pd-07",
+      "assetType": "compute.googleapis.com/Disk",
+      "project": "projects/my-project",
+      "resource": {
+        "version": "v1",
+        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+        "location": "us-central1-a",
+        "data": {
+          "name": "pd-07",
+          "sizeGb": 200,
+          "type": "projects/my-project/zones/us-central1-a/diskTypes/pd-standard",
+          "status": "READY",
+          "creationTimestamp": "2024-01-01T00:00:00Z",
+          "users": []
+        }
+      }
+    },
+    {
+      "name": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/pd-08",
+      "assetType": "compute.googleapis.com/Disk",
+      "project": "projects/my-project",
+      "resource": {
+        "version": "v1",
+        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+        "location": "us-central1-a",
+        "data": {
+          "name": "pd-08",
+          "sizeGb": 200,
+          "type": "projects/my-project/zones/us-central1-a/diskTypes/pd-standard",
+          "status": "READY",
+          "creationTimestamp": "2024-01-01T00:00:00Z",
+          "users": []
+        }
+      }
+    },
+    {
+      "name": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/pd-09",
+      "assetType": "compute.googleapis.com/Disk",
+      "project": "projects/my-project",
+      "resource": {
+        "version": "v1",
+        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+        "location": "us-central1-a",
+        "data": {
+          "name": "pd-09",
+          "sizeGb": 200,
+          "type": "projects/my-project/zones/us-central1-a/diskTypes/pd-standard",
+          "status": "READY",
+          "creationTimestamp": "2024-01-01T00:00:00Z",
+          "users": []
+        }
+      }
+    },
+    {
+      "name": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/pd-10",
+      "assetType": "compute.googleapis.com/Disk",
+      "project": "projects/my-project",
+      "resource": {
+        "version": "v1",
+        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+        "location": "us-central1-a",
+        "data": {
+          "name": "pd-10",
+          "sizeGb": 200,
+          "type": "projects/my-project/zones/us-central1-a/diskTypes/pd-standard",
+          "status": "READY",
+          "creationTimestamp": "2024-01-01T00:00:00Z",
+          "users": []
+        }
+      }
+    },
+    {
+      "name": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/pd-11",
+      "assetType": "compute.googleapis.com/Disk",
+      "project": "projects/my-project",
+      "resource": {
+        "version": "v1",
+        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+        "location": "us-central1-a",
+        "data": {
+          "name": "pd-11",
+          "sizeGb": 200,
+          "type": "projects/my-project/zones/us-central1-a/diskTypes/pd-standard",
+          "status": "READY",
+          "creationTimestamp": "2024-01-01T00:00:00Z",
+          "users": []
+        }
+      }
+    },
+    {
+      "name": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/pd-12",
+      "assetType": "compute.googleapis.com/Disk",
+      "project": "projects/my-project",
+      "resource": {
+        "version": "v1",
+        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+        "location": "us-central1-a",
+        "data": {
+          "name": "pd-12",
+          "sizeGb": 200,
+          "type": "projects/my-project/zones/us-central1-a/diskTypes/pd-standard",
+          "status": "READY",
+          "creationTimestamp": "2024-01-01T00:00:00Z",
+          "users": []
+        }
+      }
+    }
+  ]
+}

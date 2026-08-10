@@ -78,6 +78,14 @@ type Request struct {
 	// slice. Providers that need no such scoping (e.g. a provider replaying a
 	// fixed table) ignore it.
 	Projects []string
+
+	// Progress, when non-nil, is invoked by Provider.Fill as work completes:
+	// (completed, total) counts of the discrete jobs the provider fans out
+	// (for the GCP client, (key, project) fetch pairs). It is called from the
+	// provider's worker goroutines and must therefore be safe for concurrent
+	// use; it is the seam scan progress reporting threads through without
+	// ever touching the provider's own concurrency bound. Optional.
+	Progress func(done, total int)
 }
 
 // Setter writes one enrichment value onto the graph. Implementations of

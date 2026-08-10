@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/TypeOneLabs/tellury/pkg/graph"
 )
@@ -14,6 +15,13 @@ import (
 type Engine struct {
 	Workers  int
 	FailFast bool
+
+	// OnProgress, when non-nil, is invoked from each worker goroutine as a
+	// rule finishes: (completed, total) with total = len(rs). It is called
+	// concurrently and must be safe for concurrent use; the caller's phase
+	// reporter (internal/cli) is lock-free on this path, so progress cannot
+	// serialize rule evaluation. Optional.
+	OnProgress func(completed, total int)
 }
 
 // Result carries findings plus per-rule diagnostics.
@@ -51,7 +59,9 @@ func (e Engine) Run(ctx context.Context, p *Pass, rs []Rule) (Result, error) {
 		muRes sync.Mutex
 		res   = Result{Errors: map[string]error{}, Skipped: map[string]map[SkipCode]int{}}
 		wg    sync.WaitGroup
+		done  atomic.Int64
 	)
+	total := len(rs)
 	jobs := make(chan Rule)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -96,6 +106,10 @@ func (e Engine) Run(ctx context.Context, p *Pass, rs []Rule) (Result, error) {
 					res.Findings = append(res.Findings, f)
 				}
 				muRes.Unlock()
+
+				if e.OnProgress != nil {
+					e.OnProgress(int(done.Add(1)), total)
+				}
 			}
 		}()
 	}

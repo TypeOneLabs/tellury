@@ -1,0 +1,122 @@
+<svg viewBox="0 0 722.00 544.00" role="img" aria-label="Sankey diagram of monthly waste flowing from organization to folder to project to rule, band widths proportional to waste" xmlns="http://www.w3.org/2000/svg">
+<g class="flows">
+<path d="M 146.00 12.00 C 221.00 12.00, 221.00 12.00, 296.00 12.00 L 296.00 77.71 C 221.00 77.71, 221.00 77.71, 146.00 77.71 Z" fill="#4E79A7" fill-opacity="0.38" stroke="none"/>
+<path d="M 146.00 77.71 C 221.00 77.71, 221.00 82.71, 296.00 82.71 L 296.00 115.57 C 221.00 115.57, 221.00 110.57, 146.00 110.57 Z" fill="#4E79A7" fill-opacity="0.38" stroke="none"/>
+<path d="M 146.00 110.57 C 221.00 110.57, 221.00 120.57, 296.00 120.57 L 296.00 153.43 C 221.00 153.43, 221.00 143.43, 146.00 143.43 Z" fill="#4E79A7" fill-opacity="0.38" stroke="none"/>
+<path d="M 146.00 143.43 C 221.00 143.43, 221.00 158.43, 296.00 158.43 L 296.00 191.29 C 221.00 191.29, 221.00 176.29, 146.00 176.29 Z" fill="#4E79A7" fill-opacity="0.38" stroke="none"/>
+<path d="M 146.00 176.29 C 221.00 176.29, 221.00 196.29, 296.00 196.29 L 296.00 229.14 C 221.00 229.14, 221.00 209.14, 146.00 209.14 Z" fill="#4E79A7" fill-opacity="0.38" stroke="none"/>
+<path d="M 146.00 209.14 C 221.00 209.14, 221.00 234.14, 296.00 234.14 L 296.00 267.00 C 221.00 267.00, 221.00 242.00, 146.00 242.00 Z" fill="#4E79A7" fill-opacity="0.38" stroke="none"/>
+<path d="M 146.00 242.00 C 221.00 242.00, 221.00 272.00, 296.00 272.00 L 296.00 304.86 C 221.00 304.86, 221.00 274.86, 146.00 274.86 Z" fill="#4E79A7" fill-opacity="0.38" stroke="none"/>
+<path d="M 146.00 274.86 C 221.00 274.86, 221.00 309.86, 296.00 309.86 L 296.00 342.71 C 221.00 342.71, 221.00 307.71, 146.00 307.71 Z" fill="#4E79A7" fill-opacity="0.38" stroke="none"/>
+<path d="M 146.00 307.71 C 221.00 307.71, 221.00 347.71, 296.00 347.71 L 296.00 380.57 C 221.00 380.57, 221.00 340.57, 146.00 340.57 Z" fill="#4E79A7" fill-opacity="0.38" stroke="none"/>
+<path d="M 146.00 340.57 C 221.00 340.57, 221.00 385.57, 296.00 385.57 L 296.00 418.43 C 221.00 418.43, 221.00 373.43, 146.00 373.43 Z" fill="#4E79A7" fill-opacity="0.38" stroke="none"/>
+<path d="M 146.00 373.43 C 221.00 373.43, 221.00 423.43, 296.00 423.43 L 296.00 456.29 C 221.00 456.29, 221.00 406.29, 146.00 406.29 Z" fill="#4E79A7" fill-opacity="0.38" stroke="none"/>
+<path d="M 146.00 406.29 C 221.00 406.29, 221.00 461.29, 296.00 461.29 L 296.00 494.14 C 221.00 494.14, 221.00 439.14, 146.00 439.14 Z" fill="#4E79A7" fill-opacity="0.38" stroke="none"/>
+<path d="M 146.00 439.14 C 221.00 439.14, 221.00 499.14, 296.00 499.14 L 296.00 532.00 C 221.00 532.00, 221.00 472.00, 146.00 472.00 Z" fill="#4E79A7" fill-opacity="0.38" stroke="none"/>
+<path d="M 426.00 12.00 C 501.00 12.00, 501.00 12.00, 576.00 12.00 L 576.00 77.71 C 501.00 77.71, 501.00 77.71, 426.00 77.71 Z" fill="#F28E2B" fill-opacity="0.38" stroke="none"/>
+<path d="M 426.00 82.71 C 501.00 82.71, 501.00 77.71, 576.00 77.71 L 576.00 110.57 C 501.00 110.57, 501.00 115.57, 426.00 115.57 Z" fill="#F28E2B" fill-opacity="0.38" stroke="none"/>
+<path d="M 426.00 120.57 C 501.00 120.57, 501.00 110.57, 576.00 110.57 L 576.00 143.43 C 501.00 143.43, 501.00 153.43, 426.00 153.43 Z" fill="#F28E2B" fill-opacity="0.38" stroke="none"/>
+<path d="M 426.00 158.43 C 501.00 158.43, 501.00 143.43, 576.00 143.43 L 576.00 176.29 C 501.00 176.29, 501.00 191.29, 426.00 191.29 Z" fill="#F28E2B" fill-opacity="0.38" stroke="none"/>
+<path d="M 426.00 196.29 C 501.00 196.29, 501.00 176.29, 576.00 176.29 L 576.00 209.14 C 501.00 209.14, 501.00 229.14, 426.00 229.14 Z" fill="#F28E2B" fill-opacity="0.38" stroke="none"/>
+<path d="M 426.00 234.14 C 501.00 234.14, 501.00 209.14, 576.00 209.14 L 576.00 242.00 C 501.00 242.00, 501.00 267.00, 426.00 267.00 Z" fill="#F28E2B" fill-opacity="0.38" stroke="none"/>
+<path d="M 426.00 272.00 C 501.00 272.00, 501.00 242.00, 576.00 242.00 L 576.00 274.86 C 501.00 274.86, 501.00 304.86, 426.00 304.86 Z" fill="#F28E2B" fill-opacity="0.38" stroke="none"/>
+<path d="M 426.00 309.86 C 501.00 309.86, 501.00 274.86, 576.00 274.86 L 576.00 307.71 C 501.00 307.71, 501.00 342.71, 426.00 342.71 Z" fill="#F28E2B" fill-opacity="0.38" stroke="none"/>
+<path d="M 426.00 347.71 C 501.00 347.71, 501.00 307.71, 576.00 307.71 L 576.00 340.57 C 501.00 340.57, 501.00 380.57, 426.00 380.57 Z" fill="#F28E2B" fill-opacity="0.38" stroke="none"/>
+<path d="M 426.00 385.57 C 501.00 385.57, 501.00 340.57, 576.00 340.57 L 576.00 373.43 C 501.00 373.43, 501.00 418.43, 426.00 418.43 Z" fill="#F28E2B" fill-opacity="0.38" stroke="none"/>
+<path d="M 426.00 423.43 C 501.00 423.43, 501.00 373.43, 576.00 373.43 L 576.00 406.29 C 501.00 406.29, 501.00 456.29, 426.00 456.29 Z" fill="#F28E2B" fill-opacity="0.38" stroke="none"/>
+<path d="M 426.00 461.29 C 501.00 461.29, 501.00 406.29, 576.00 406.29 L 576.00 439.14 C 501.00 439.14, 501.00 494.14, 426.00 494.14 Z" fill="#F28E2B" fill-opacity="0.38" stroke="none"/>
+<path d="M 426.00 499.14 C 501.00 499.14, 501.00 439.14, 576.00 439.14 L 576.00 472.00 C 501.00 472.00, 501.00 532.00, 426.00 532.00 Z" fill="#F28E2B" fill-opacity="0.38" stroke="none"/>
+</g>
+<g class="nodes">
+<g class="sankey-node">
+<title>org-1 — $14.00</title>
+<rect x="16.00" y="12.00" width="130.00" height="460.00" rx="4" ry="4" fill="#eaf1f9" stroke="#4E79A7" stroke-width="1.5"/>
+<text x="26.00" y="236.00" class="sankey-name">org-1</text>
+<text x="26.00" y="249.00" class="sankey-amt">$14.00</text>
+</g>
+<g class="sankey-node">
+<title>other (2 projects) — $2.00</title>
+<rect x="296.00" y="12.00" width="130.00" height="65.71" rx="4" ry="4" fill="#fdf1e0" stroke="#d9830f" stroke-width="1.5"/>
+<text x="306.00" y="38.86" class="sankey-name">other (2 projects)</text>
+<text x="306.00" y="51.86" class="sankey-amt">$2.00</text>
+</g>
+<g class="sankey-node">
+<title>project-00 — $1.00</title>
+<rect x="296.00" y="82.71" width="130.00" height="32.86" rx="4" ry="4" fill="#fdf1e0" stroke="#d9830f" stroke-width="1.5"/>
+<text x="306.00" y="93.14" class="sankey-name">project-00</text>
+<text x="306.00" y="106.14" class="sankey-amt">$1.00</text>
+</g>
+<g class="sankey-node">
+<title>project-01 — $1.00</title>
+<rect x="296.00" y="120.57" width="130.00" height="32.86" rx="4" ry="4" fill="#fdf1e0" stroke="#d9830f" stroke-width="1.5"/>
+<text x="306.00" y="131.00" class="sankey-name">project-01</text>
+<text x="306.00" y="144.00" class="sankey-amt">$1.00</text>
+</g>
+<g class="sankey-node">
+<title>project-02 — $1.00</title>
+<rect x="296.00" y="158.43" width="130.00" height="32.86" rx="4" ry="4" fill="#fdf1e0" stroke="#d9830f" stroke-width="1.5"/>
+<text x="306.00" y="168.86" class="sankey-name">project-02</text>
+<text x="306.00" y="181.86" class="sankey-amt">$1.00</text>
+</g>
+<g class="sankey-node">
+<title>project-03 — $1.00</title>
+<rect x="296.00" y="196.29" width="130.00" height="32.86" rx="4" ry="4" fill="#fdf1e0" stroke="#d9830f" stroke-width="1.5"/>
+<text x="306.00" y="206.71" class="sankey-name">project-03</text>
+<text x="306.00" y="219.71" class="sankey-amt">$1.00</text>
+</g>
+<g class="sankey-node">
+<title>project-04 — $1.00</title>
+<rect x="296.00" y="234.14" width="130.00" height="32.86" rx="4" ry="4" fill="#fdf1e0" stroke="#d9830f" stroke-width="1.5"/>
+<text x="306.00" y="244.57" class="sankey-name">project-04</text>
+<text x="306.00" y="257.57" class="sankey-amt">$1.00</text>
+</g>
+<g class="sankey-node">
+<title>project-05 — $1.00</title>
+<rect x="296.00" y="272.00" width="130.00" height="32.86" rx="4" ry="4" fill="#fdf1e0" stroke="#d9830f" stroke-width="1.5"/>
+<text x="306.00" y="282.43" class="sankey-name">project-05</text>
+<text x="306.00" y="295.43" class="sankey-amt">$1.00</text>
+</g>
+<g class="sankey-node">
+<title>project-06 — $1.00</title>
+<rect x="296.00" y="309.86" width="130.00" height="32.86" rx="4" ry="4" fill="#fdf1e0" stroke="#d9830f" stroke-width="1.5"/>
+<text x="306.00" y="320.29" class="sankey-name">project-06</text>
+<text x="306.00" y="333.29" class="sankey-amt">$1.00</text>
+</g>
+<g class="sankey-node">
+<title>project-07 — $1.00</title>
+<rect x="296.00" y="347.71" width="130.00" height="32.86" rx="4" ry="4" fill="#fdf1e0" stroke="#d9830f" stroke-width="1.5"/>
+<text x="306.00" y="358.14" class="sankey-name">project-07</text>
+<text x="306.00" y="371.14" class="sankey-amt">$1.00</text>
+</g>
+<g class="sankey-node">
+<title>project-08 — $1.00</title>
+<rect x="296.00" y="385.57" width="130.00" height="32.86" rx="4" ry="4" fill="#fdf1e0" stroke="#d9830f" stroke-width="1.5"/>
+<text x="306.00" y="396.00" class="sankey-name">project-08</text>
+<text x="306.00" y="409.00" class="sankey-amt">$1.00</text>
+</g>
+<g class="sankey-node">
+<title>project-09 — $1.00</title>
+<rect x="296.00" y="423.43" width="130.00" height="32.86" rx="4" ry="4" fill="#fdf1e0" stroke="#d9830f" stroke-width="1.5"/>
+<text x="306.00" y="433.86" class="sankey-name">project-09</text>
+<text x="306.00" y="446.86" class="sankey-amt">$1.00</text>
+</g>
+<g class="sankey-node">
+<title>project-10 — $1.00</title>
+<rect x="296.00" y="461.29" width="130.00" height="32.86" rx="4" ry="4" fill="#fdf1e0" stroke="#d9830f" stroke-width="1.5"/>
+<text x="306.00" y="471.71" class="sankey-name">project-10</text>
+<text x="306.00" y="484.71" class="sankey-amt">$1.00</text>
+</g>
+<g class="sankey-node">
+<title>project-11 — $1.00</title>
+<rect x="296.00" y="499.14" width="130.00" height="32.86" rx="4" ry="4" fill="#fdf1e0" stroke="#d9830f" stroke-width="1.5"/>
+<text x="306.00" y="509.57" class="sankey-name">project-11</text>
+<text x="306.00" y="522.57" class="sankey-amt">$1.00</text>
+</g>
+<g class="sankey-node">
+<title>detached_disk — $14.00</title>
+<rect x="576.00" y="12.00" width="130.00" height="460.00" rx="4" ry="4" fill="#fbeaea" stroke="#c05050" stroke-width="1.5"/>
+<text x="586.00" y="236.00" class="sankey-name">detached_disk</text>
+<text x="586.00" y="249.00" class="sankey-amt">$14.00</text>
+</g>
+</g>
+</svg>

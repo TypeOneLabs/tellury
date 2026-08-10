@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/TypeOneLabs/tellury/pkg/rules"
 )
@@ -92,8 +93,8 @@ func TestTableColumnsNeverTouch_MultiProject(t *testing.T) {
 	}
 
 	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
-	if len(lines) != 6 { // header + 3 data + separator + TOTAL
-		t.Fatalf("expected 6 lines, got %d:\n%s", len(lines), buf.String())
+	if len(lines) != 7 { // header + 3 data + separator + TOTAL + Summary
+		t.Fatalf("expected 7 lines, got %d:\n%s", len(lines), buf.String())
 	}
 
 	display := tableFindings(report)
@@ -107,7 +108,12 @@ func TestTableColumnsNeverTouch_MultiProject(t *testing.T) {
 
 	// TOTAL row: label in the resource cell, summary spanning the columns left
 	// of the money cell, money right-aligned.
-	assertTotalRow(t, lines[len(lines)-1], l, "3 findings", "$24.00")
+	assertTotalRow(t, lines[len(lines)-2], l, "3 findings", "$24.00")
+
+	// The scan summary is the last line.
+	if got := lines[len(lines)-1]; !strings.Contains(got, "Summary: ") {
+		t.Errorf("last line must be the scan summary, got %q", got)
+	}
 }
 
 // assertRowSeparated asserts the row is exactly one data-row wide and that a
@@ -205,7 +211,8 @@ func TestTableTotalRow_SummaryNeverTruncated(t *testing.T) {
 
 	display := tableFindings(report)
 	l := layoutTable(report, display)
-	totalRow := lines[len(lines)-1]
+	// The TOTAL row is second-to-last: the scan summary is the last line.
+	totalRow := lines[len(lines)-2]
 
 	// THE assertion that replaces the relaxed one ("findings" OR "findin"): the
 	// summary cell must equal the exact text. If the summary were squeezed back
@@ -265,10 +272,10 @@ func TestTableTop10_TotalReflectsAllFindingsNotJustShown(t *testing.T) {
 	}
 	got := buf.String()
 
-	// Exactly ten data rows: header + 10 + separator + TOTAL + omitted = 14.
+	// header + 10 rows + separator + TOTAL + omitted + Summary = 15.
 	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
-	if len(lines) != 14 {
-		t.Fatalf("expected 14 lines (header + 10 rows + separator + TOTAL + omitted), got %d:\n%s", len(lines), got)
+	if len(lines) != 15 {
+		t.Fatalf("expected 15 lines (header + 10 rows + separator + TOTAL + omitted + Summary), got %d:\n%s", len(lines), got)
 	}
 
 	// The ten largest by monthly waste are shown; the two smallest are not.
@@ -294,7 +301,7 @@ func TestTableTop10_TotalReflectsAllFindingsNotJustShown(t *testing.T) {
 	// THE invariant: the TOTAL row sums ALL 12 findings, not the ten shown.
 	display := tableFindings(report)
 	l := layoutTable(report, display)
-	assertTotalRow(t, lines[len(lines)-2], l, "12 findings", "$78.00")
+	assertTotalRow(t, lines[len(lines)-3], l, "12 findings", "$78.00")
 }
 
 // TestJSONAndCSV_CarryEveryFinding pins that the top-10 limit applies to the
@@ -413,8 +420,8 @@ func TestTableSingleProject_LayoutAndTotal(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
-	if len(lines) != 5 { // header + 2 data + separator + TOTAL
-		t.Fatalf("expected 5 lines, got %d:\n%s", len(lines), buf.String())
+	if len(lines) != 6 { // header + 2 data + separator + TOTAL + Summary
+		t.Fatalf("expected 6 lines, got %d:\n%s", len(lines), buf.String())
 	}
 
 	display := tableFindings(report)
@@ -422,10 +429,149 @@ func TestTableSingleProject_LayoutAndTotal(t *testing.T) {
 	for _, line := range lines[:3] {
 		assertRowSeparated(t, line, l)
 	}
-	assertTotalRow(t, lines[len(lines)-1], l, "2 findings", "$9.50")
+	assertTotalRow(t, lines[len(lines)-2], l, "2 findings", "$9.50")
 
 	if !strings.Contains(buf.String(), "snapshot/backup-2023-01-01") {
 		t.Errorf("single-project table must render the full resource name:\n%s", buf.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Feature — the scan summary (what the scan looked at)
+// ---------------------------------------------------------------------------
+
+// TestTableSummary_AfterTableCarriesEveryField pins the summary line a scan
+// prints after the table. The duration is the REPORT's fixed value — the
+// scan's own clock — so the same Report always renders the same line; a
+// renderer that re-measured time.Now() would make this assertion flaky and is
+// exactly what the design forbids.
+func TestTableSummary_AfterTableCarriesEveryField(t *testing.T) {
+	report := Report{
+		Scope:      "organizations/506691140800",
+		Provider:   "gcp",
+		WindowDays: 14,
+		Findings: []rules.Finding{
+			{RuleID: "old_snapshot", Resource: "snapshot/alpha-desktop", Project: "alpha-data-storage", MonthlyWasteUSD: 5.20},
+			{RuleID: "old_snapshot", Resource: "snapshot/ib-test", Project: "ib-testing-playground", MonthlyWasteUSD: 0.26},
+		},
+		TotalMonthlyWasteUSD: 5.46,
+		FindingCount:         2,
+		MultiProject:         true,
+		ResourcesScanned:     17,
+		RulesEvaluated:       5,
+		ProjectsAnalyzed:     2,
+		ResourcesSkipped:     3,
+		Duration:             1500 * time.Millisecond,
+	}
+
+	var buf bytes.Buffer
+	if err := (tableRenderer{}).Render(&buf, report); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	got := buf.String()
+
+	want := "Summary: 2 projects analyzed, 17 resources scanned, 5 rules evaluated, 2 findings, 3 resources skipped, 1.5s"
+	if !strings.Contains(got, want) {
+		t.Errorf("table summary must read %q:\n%s", want, got)
+	}
+	// The summary is the LAST line: context after the table, not the headline.
+	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+	if !strings.HasPrefix(lines[len(lines)-1], "Summary: ") {
+		t.Errorf("the summary must be the final line, got %q", lines[len(lines)-1])
+	}
+}
+
+// TestTableSummary_NoFindingsStillReportsProjects is the reason the summary
+// exists at all: a scan with zero findings must still say how many projects it
+// analyzed and resources it scanned, so an operator can tell "nothing
+// wasteful" (projects > 0, resources > 0, findings 0) from "nothing scanned"
+// (projects 0, resources 0). The project count comes from the graph's project
+// container nodes — never from the findings — so this report carries it even
+// though every count the table would have shown is zero.
+func TestTableSummary_NoFindingsStillReportsProjects(t *testing.T) {
+	report := Report{
+		Scope:                "projects/my-project",
+		Provider:             "gcp",
+		WindowDays:           14,
+		Findings:             nil,
+		TotalMonthlyWasteUSD: 0,
+		FindingCount:         0,
+		ResourcesScanned:     17,
+		RulesEvaluated:       5,
+		ProjectsAnalyzed:     1,
+		ResourcesSkipped:     0,
+		Duration:             4 * time.Millisecond,
+	}
+
+	var buf bytes.Buffer
+	if err := (tableRenderer{}).Render(&buf, report); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	got := buf.String()
+
+	if !strings.Contains(got, "No waste found in projects/my-project (17 resources, 5 rules).") {
+		t.Errorf("no-findings table must keep its headline line:\n%s", got)
+	}
+	want := "Summary: 1 project analyzed, 17 resources scanned, 5 rules evaluated, 0 findings, 0 resources skipped, 4ms"
+	if !strings.Contains(got, want) {
+		t.Errorf("a scan with no findings must still report the projects/resources it analyzed (%q):\n%s", want, got)
+	}
+}
+
+// TestTableSummary_BrokenScopeReportsZeroProjects is the other half of the
+// same distinction: a scan whose graph carried no project container nodes —
+// nothing was scanned at all — reports 0 projects, so "0 projects analyzed, 0
+// resources scanned" reads as a broken scope, never as a clean bill of health.
+func TestTableSummary_BrokenScopeReportsZeroProjects(t *testing.T) {
+	report := Report{
+		Scope:        "projects/does-not-exist",
+		Provider:     "gcp",
+		WindowDays:   14,
+		Findings:     nil,
+		FindingCount: 0,
+	}
+
+	var buf bytes.Buffer
+	if err := (tableRenderer{}).Render(&buf, report); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "Summary: 0 projects analyzed, 0 resources scanned, 0 rules evaluated, 0 findings, 0 resources skipped, 0s") {
+		t.Errorf("a broken scope must report zero projects analyzed, never a silent empty result:\n%s", got)
+	}
+}
+
+// TestJSON_CarriesSummaryFields pins that every field the table's summary
+// prints also appears in the JSON: a JSON consumer needs the denominators
+// (projects analyzed, resources skipped) as much as a human does. Duration is
+// serialized as an integer count of nanoseconds.
+func TestJSON_CarriesSummaryFields(t *testing.T) {
+	report := Report{
+		Scope:            "projects/my-project",
+		Provider:         "gcp",
+		WindowDays:       14,
+		Findings:         nil,
+		FindingCount:     0,
+		ResourcesScanned: 17,
+		RulesEvaluated:   5,
+		ProjectsAnalyzed: 1,
+		ResourcesSkipped: 3,
+		Duration:         1500 * time.Millisecond,
+	}
+
+	var buf bytes.Buffer
+	if err := (jsonRenderer{}).Render(&buf, report); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	got := buf.String()
+	for _, want := range []string{
+		`"projects_analyzed": 1`,
+		`"resources_skipped": 3`,
+		`"duration": 1500000000`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("JSON must carry %s:\n%s", want, got)
+		}
 	}
 }
 

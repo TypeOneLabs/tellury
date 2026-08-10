@@ -78,6 +78,11 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 		"Cloud Billing API with the currency named, never silently falling back to USD")
 	f.BoolVar(&cfg.FailOnFindings, "fail-on-findings", true, "exit 3 when findings exist")
 	f.BoolVar(&cfg.ExplainSkips, "explain-skips", false, "print the per-rule skip tally to stderr")
+	f.StringVar(&cfg.Progress, "progress", "", "auto|on|off: report scan phase progress to stderr. "+
+		"auto (default, also "+config.ProgressEnvVar+") reports only on an interactive terminal; "+
+		"on always reports (off a terminal it degrades to plain periodic lines, never ANSI); "+
+		"off silences it. Progress is a stderr status channel, independent of --log-level, and "+
+		"never touches stdout")
 	f.StringVar(&at, "at", "", "evaluation instant (RFC3339); default now. Makes age predicates reproducible")
 
 	return cmd
@@ -92,11 +97,24 @@ func runScan(
 	cfg config.Scan,
 	now time.Time,
 ) error {
+	// The scan's own wall clock. The duration the report carries is measured
+	// from this instant, up to report construction, and is NEVER re-measured
+	// inside a renderer — so a replayed or fixture-driven scan reports its
+	// real duration, and the value is testable with a fixed clock rather than
+	// being whatever the machine felt like at render time.
+	start := time.Now()
+
 	// 1. Configuration.
 	if err := cfg.Validate(); err != nil {
 		return newUsageError(err)
 	}
 	log := newLogger(g, errOut)
+
+	// Progress reporting is a status channel on stderr — never stdout, which
+	// is the report and is piped into other tools (`--format json | jq` must
+	// stay pure). See progress.go for the auto/on/off resolution, the non-TTY
+	// degradation and the no-ANSI guarantee.
+	prog := newProgress(errOut, cfg.Progress)
 
 	ctx, cancel := withTimeout(ctx, g)
 	defer cancel()
@@ -169,10 +187,36 @@ func runScan(
 		}
 	}
 
+	// The live Cloud Billing catalogue loads lazily on the first UnitPrice
+	// call — i.e. inside rule evaluation — so its load is surfaced as its own
+	// progress phase (with the number of billing services as the denominator)
+	// rather than pre-warmed: pre-warming would spend a billing API call even
+	// on a scan whose rules price nothing. A pricer with no lazy catalogue
+	// (the offline static table) simply implements no hook and no phase runs.
+	if hook, ok := pricer.(catalogueProgressSetter); ok {
+		var pricePhase *Phase
+		hook.SetCatalogueProgress(func(done, total int, final bool) {
+			if pricePhase == nil {
+				pricePhase = prog.Begin("pricing catalogue", "services")
+			}
+			if pricePhase == nil {
+				return
+			}
+			pricePhase.Set(done, total)
+			if final {
+				if total > 0 {
+					pricePhase.End("catalogue loaded")
+				} else {
+					pricePhase.End("catalogue unavailable; using embedded price table")
+				}
+			}
+		})
+	}
+
 	scope := cfg.Scope()
 
 	// 6-8. Graph: use the cache already loaded, otherwise ingest and enrich.
-	gr, err := buildGraph(ctx, cfg, provider, scope, assetTypes, metricKeys, log, cachedGraph, cacheSnap, cacheHit)
+	gr, err := buildGraph(ctx, cfg, provider, scope, assetTypes, metricKeys, log, cachedGraph, cacheSnap, cacheHit, prog)
 	if err != nil {
 		return err
 	}
@@ -188,6 +232,11 @@ func runScan(
 	currencyState := resolveScanCurrency(ctx, cfg, pricer, gr, log, offline)
 
 	// 9. Rule evaluation.
+	rulePhase := prog.Begin("rule evaluation", "rules")
+	var onRuleProgress func(completed, total int)
+	if rulePhase != nil {
+		onRuleProgress = rulePhase.Set
+	}
 	pass := &rules.Pass{
 		Graph:  gr,
 		Price:  pricer,
@@ -197,7 +246,10 @@ func runScan(
 		Now:    now,
 		Sizer:  provider.Sizer(),
 	}
-	res, err := rules.Engine{}.Run(ctx, pass, selected)
+	res, err := rules.Engine{OnProgress: onRuleProgress}.Run(ctx, pass, selected)
+	if rulePhase != nil {
+		rulePhase.End("")
+	}
 	if err != nil {
 		return err
 	}
@@ -227,7 +279,10 @@ func runScan(
 
 	// The report's ResourcesScanned is the number of real resources, so
 	// container nodes (project/folder/organization hierarchy scaffolding)
-	// never inflate the operator-facing "N resources" figure.
+	// never inflate the operator-facing "N resources" figure. ProjectsAnalyzed
+	// counts the graph's project container nodes (never the findings), and
+	// Duration is the wall clock elapsed since start — both measured by this
+	// scan, not by the renderer.
 	report := output.NewReport(res, output.Meta{
 		Scope:             scope.String(),
 		Provider:          cfg.Provider,
@@ -235,6 +290,8 @@ func runScan(
 		WindowDays:        cfg.WindowDays,
 		ResourcesScanned:  gr.ResourceNodeCount(),
 		RulesEvaluated:    len(selected),
+		ProjectsAnalyzed:  gr.ProjectContainerCount(),
+		Duration:          time.Since(start),
 		MultiProject:      gr.ProjectCount() > 1,
 		Currency:          effectiveCurrency,
 		CurrencySource:    currencyState.source,
@@ -451,7 +508,9 @@ func newProvider(ctx context.Context, cfg config.Scan, log *slog.Logger, offline
 
 // buildGraph returns a graph either replayed from a pre-loaded --cache-file
 // cache (cachedGraph/cacheSnap) or ingested and enriched from the provider. A
-// cache hit performs zero API calls.
+// cache hit performs zero API calls. The two long phases run inside here and
+// report through prog: asset discovery (ingestion, no known total) and metric
+// enrichment (per-project, the slowest phase, with a hard denominator).
 func buildGraph(
 	ctx context.Context,
 	cfg config.Scan,
@@ -462,6 +521,7 @@ func buildGraph(
 	cachedGraph *graph.Graph,
 	cacheSnap *graph.Snapshot,
 	cacheHit bool,
+	prog *Progress,
 ) (*graph.Graph, error) {
 	if cacheHit {
 		log.Info("replayed graph from cache",
@@ -476,19 +536,38 @@ func buildGraph(
 		log.Info("cache miss, ingesting", "file", cfg.CacheFile)
 	}
 
+	// Asset discovery: a paginated inventory stream with no known total, so
+	// the phase reports its start and its end (with the resource count the
+	// ingest landed on) rather than a running denominator.
+	ingestPhase := prog.Begin("asset discovery", "")
 	gr, err := provider.Ingest(ctx, scope, assetTypes)
 	if err != nil {
 		return nil, err
 	}
+	if ingestPhase != nil {
+		ingestPhase.End(progressCount(gr.ResourceNodeCount(), "resource"))
+	}
 
 	if len(metricKeys) > 0 {
+		// Metric enrichment is the slow phase and the only one with a hard
+		// denominator from the start: len(metricKeys) x the distinct projects
+		// in the graph. The fetch pool reports each completed (key, project)
+		// job through the phase's lock-free Set, so the progress lines never
+		// serialize the bounded-concurrency enrichment they report on.
+		enrichPhase := prog.Begin("metric enrichment", "fetches")
 		req := metrics.Request{Keys: metricKeys, WindowDays: cfg.WindowDays}
+		if enrichPhase != nil {
+			req.Progress = enrichPhase.Set
+		}
 		if err := provider.EnrichMetrics(ctx, gr, scope, req); err != nil {
 			// Enrichment failure is not fatal: rules that need a metric skip
 			// their nodes (invariant I5) instead of guessing, so the report
 			// stays correct — just narrower.
 			log.Warn("metric enrichment incomplete; metric-dependent rules will skip",
 				"keys", len(metricKeys), "err", err)
+		}
+		if enrichPhase != nil {
+			enrichPhase.End(progressCount(gr.ProjectCount(), "project"))
 		}
 	}
 
