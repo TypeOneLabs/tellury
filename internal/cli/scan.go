@@ -396,8 +396,9 @@ func sanitizeSegment(s string) string {
 //     through `tellury scan --cache-file` with full fidelity.
 //   - findings-<scope>.json — the scan report (findings, totals, scope,
 //     metrics_blocked) as JSON.
-//   - report-<scope>.html — the self-contained HTML report: collapsible
-//     rollup hierarchy plus the top-findings table. No CDN, no external
+//   - report-<scope>.html — the self-contained HTML report: hero number,
+//     waste-by-project / waste-by-rule summaries, the full findings table with
+//     client-side filter/sort, and collapsed scan details. No CDN, no external
 //     stylesheet, no runtime network fetch — an operator can email it, attach
 //     it to a ticket, or open it on an air-gapped machine.
 //
@@ -422,23 +423,20 @@ func writeArtifacts(dir string, cfg config.Scan, gr *graph.Graph, scope string, 
 
 	// 3. Self-contained HTML report.
 	reportPath := filepath.Join(dir, "report-"+sanitizeSegment(scope)+".html")
-	if err := writeHTMLReport(reportPath, gr, report, scope); err != nil {
+	if err := writeHTMLReport(reportPath, report); err != nil {
 		return "", err
 	}
 	return reportPath, nil
 }
 
-// writeHTMLReport renders the self-contained HTML report into path. The
-// rollup hierarchy is rebuilt from the graph's containment edges and the
-// report's findings, so the same scan materializes the same tree.
-func writeHTMLReport(path string, gr *graph.Graph, report output.Report, scope string) error {
-	root := output.BuildHierarchy(gr, report.Findings, scope)
+// writeHTMLReport renders the self-contained HTML report into path.
+func writeHTMLReport(path string, report output.Report) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	return output.RenderHTML(f, report, root)
+	return output.RenderHTML(f, report)
 }
 
 // writeGraphSnapshot writes one graph.Snapshot to path. It is the exact same

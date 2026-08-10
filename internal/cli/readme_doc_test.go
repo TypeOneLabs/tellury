@@ -17,8 +17,9 @@ import (
 //  1. --out-dir (default tellury-out/) receives, per scan, a timestamped
 //     subdirectory holding the replayable graph snapshot, the findings JSON,
 //     and the self-contained HTML report.
-//  2. The HTML report is self-contained (no network fetch), carries a
-//     collapsible hierarchy, and a top-findings table with price provenance.
+//  2. The HTML report is self-contained (no network fetch), leads with the
+//     hero number, and carries the findings table with price provenance and
+//     remediation, plus the collapsed scan-details section.
 //
 // It runs the exact command shapes the README documents against a temp out
 // dir — never the source tree — and asserts the three artifacts exist and the
@@ -53,7 +54,7 @@ func TestReadmeOutDirAndHTMLReport(t *testing.T) {
 	dir := filepath.Join(outDir, entries[0].Name())
 
 	// The three artifacts a scan leaves behind.
-	for name, mustExist := range map[string]bool{
+	for name := range map[string]bool{
 		"graph-projects-my-project.json":    true,
 		"findings-projects-my-project.json": true,
 		"report-projects-my-project.html":   true,
@@ -61,9 +62,6 @@ func TestReadmeOutDirAndHTMLReport(t *testing.T) {
 		st, err := os.Stat(filepath.Join(dir, name))
 		if err != nil || st.Size() == 0 {
 			t.Fatalf("artifact %s missing or empty: %v (err=%v)", name, st, err)
-		}
-		if !mustExist {
-			t.Fatalf("unexpected artifact %s", name)
 		}
 	}
 
@@ -78,15 +76,18 @@ func TestReadmeOutDirAndHTMLReport(t *testing.T) {
 			t.Errorf("HTML report must be self-contained; found %q", needle)
 		}
 	}
-	// It must contain a collapsible hierarchy and the findings table with the
-	// price source provenance on the row.
+	// It must lead with the hero number and carry the findings table with the
+	// price source provenance on the row, plus the collapsed scan-details
+	// section (the README fixture is a single-project, single-rule scan, so no
+	// project chart and no waste-by-rule summary render — by design).
 	for _, want := range []string{
-		"<details>",          // collapsible hierarchy node
-		"Where the waste is", // hierarchy section
-		"Top findings",       // findings table section
-		"price_source",       // price provenance on a finding
-		"pd-standard-01",     // the fixture resource
-		"$8.00",              // the documented monthly waste
+		"<details>",           // collapsed scan-details section
+		"Scan details",        // scan-details summary
+		"total monthly waste", // hero label
+		"Findings",            // findings table section
+		"price_source",        // price provenance on a finding
+		"pd-standard-01",      // the fixture resource
+		"$8.00",               // the documented monthly waste
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("HTML report missing %q", want)

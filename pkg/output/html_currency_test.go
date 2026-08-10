@@ -6,30 +6,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TypeOneLabs/tellury/pkg/graph"
 	"github.com/TypeOneLabs/tellury/pkg/rules"
 )
 
-// htmlCurrencyReport builds a minimal report with one finding plus a
-// project->disk containment tree, so the rollup hierarchy and the findings
-// table both render.
+// htmlCurrencyReport renders a Report to a string for currency assertions.
 func htmlCurrencyReport(t *testing.T, r Report) string {
 	t.Helper()
-	g := graph.New()
-	project := &graph.Node{ID: "projects/my-project", Kind: graph.KindProject, Name: "my-project", Project: "my-project"}
-	leaf := &graph.Node{ID: "//…/disks/pd-01", Kind: graph.KindDisk, Name: "pd-01", Project: "my-project"}
-	for _, n := range []*graph.Node{project, leaf} {
-		if err := g.AddNode(n); err != nil {
-			t.Fatalf("AddNode: %v", err)
-		}
-	}
-	if err := g.AddEdge(graph.Edge{From: leaf.ID, To: project.ID, Kind: graph.EdgeContains}); err != nil {
-		t.Fatalf("AddEdge: %v", err)
-	}
-	g.Freeze()
-
 	var buf bytes.Buffer
-	if err := RenderHTML(&buf, r, BuildHierarchy(g, r.Findings, "projects/my-project")); err != nil {
+	if err := RenderHTML(&buf, r); err != nil {
 		t.Fatalf("RenderHTML: %v", err)
 	}
 	return buf.String()
@@ -51,8 +35,8 @@ func baseEURReport() Report {
 
 // TestRenderHTML_NonUSDRendersCurrencyEverywhere: a EUR scan must name its
 // currency in the header disclosure and render every figure as "12.40 EUR" —
-// in the rollup hierarchy AND the findings table — so a figure can never be
-// mistaken for dollars.
+// in the hero AND the findings table — so a figure can never be mistaken for
+// dollars.
 func TestRenderHTML_NonUSDRendersCurrencyEverywhere(t *testing.T) {
 	r := baseEURReport()
 	r.Currency = "EUR"
@@ -65,9 +49,9 @@ func TestRenderHTML_NonUSDRendersCurrencyEverywhere(t *testing.T) {
 	if !strings.Contains(got, "Prices are in EUR (detected from the billing account).") {
 		t.Errorf("HTML missing the detected-currency disclosure:\n%s", got)
 	}
-	// Rollup hierarchy figure and findings-table figure.
+	// Hero figure and findings-table figure.
 	if strings.Count(got, "12.40 EUR") < 2 {
-		t.Errorf("HTML must render 12.40 EUR in the hierarchy and the findings table:\n%s", got)
+		t.Errorf("HTML must render 12.40 EUR in the hero and the findings table:\n%s", got)
 	}
 	if strings.Contains(got, "$12.40") {
 		t.Errorf("EUR scan must not render a $-prefixed amount:\n%s", got)
@@ -76,8 +60,8 @@ func TestRenderHTML_NonUSDRendersCurrencyEverywhere(t *testing.T) {
 
 // TestRenderHTML_MixedUSDFallbackWarnsLoudly: when USD embedded-fallback
 // prices contaminated a non-USD request, the HTML must say so loudly — the
-// header carries the warning and the figures stay $-prefixed (they really are
-// USD, and the report must not pretend otherwise).
+// header carries the amber warning and the figures stay $-prefixed (they
+// really are USD, and the report must not pretend otherwise).
 func TestRenderHTML_MixedUSDFallbackWarnsLoudly(t *testing.T) {
 	r := baseEURReport()
 	r.Currency = "USD"
@@ -89,6 +73,9 @@ func TestRenderHTML_MixedUSDFallbackWarnsLoudly(t *testing.T) {
 
 	if !strings.Contains(got, "WARNING: prices are in USD, not the requested EUR.") {
 		t.Errorf("HTML missing the loud mixed-currency warning:\n%s", got)
+	}
+	if !strings.Contains(got, "currency-mixed") {
+		t.Errorf("mixed-currency disclosure must carry the amber warning styling:\n%s", got)
 	}
 	if !strings.Contains(got, "$12.40") {
 		t.Errorf("mixed USD report must render the (real) $-prefixed amounts:\n%s", got)
