@@ -8,6 +8,70 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
+### Added
+
+- **AWS organization and organizational-unit scopes.** `--aws-organization` and
+  `--aws-organizational-unit` walk the Organizations tree — `ListRoots`, then recursing
+  `ListOrganizationalUnitsForParent` and `ListAccountsForParent` — and every OU and account
+  becomes a container node, so a finding rolls up through account and OU exactly as a GCP
+  finding rolls up through project and folder. Member accounts are reached by assuming a
+  role, configurable rather than hard-coded to the `OrganizationAccountAccessRole`
+  convention. Accounts that cannot be reached are reported by name and count in both the
+  summary and the JSON: a scan that quietly skips part of an organization and prints a total
+  is worse than one that fails, because the number means something other than it appears to.
+- **Resource Explorer discovery**, replacing the blind region sweep. A scan asks which
+  regions of an account actually hold the resource types the selected rules need, then
+  hydrates only those. Where Resource Explorer is unavailable the full sweep still runs, per
+  account rather than for the whole scan, and the scan reports which path each account used.
+- **Live AWS pricing** through the Price List API, resolving EBS capacity, IOPS and
+  throughput and the hourly public-IPv4 charge.
+
+### Changed
+
+- **Pricing is live-only.** The embedded price tables and `--price-file` are gone. A price
+  that cannot be resolved skips the resource with `SkipNoPrice` rather than being guessed
+  at, and the scan reports what it could not price.
+
+  This is a behaviour change worth understanding before upgrading: a scan without pricing
+  API access now reports resources found and skipped as unpriced, where it previously
+  printed figures from a hand-maintained table. That table was the reason four pricing
+  defects went unnoticed — each time a live lookup silently failed, a plausible number
+  appeared in its place. `--fixture` still replays inventory offline, but pricing needs the
+  API.
+- The AWS price fetch is filtered by product family instead of paging the entire EC2
+  catalogue, which took over 1m39s and had not finished; the same scan now takes under three
+  seconds. The filter is verified rather than trusted — a load that indexes nothing is
+  treated as a broken filter and falls back to the unfiltered fetch, because a filter on a
+  wrong attribute name returns empty with no error.
+
+### Fixed
+
+- **Three of four AWS price kinds never resolved live** and silently used the embedded
+  table. IOPS is published under product family `System Operation` and throughput under
+  `Provisioned Throughput`, neither of which was fetched; the public-IPv4 charge is not an
+  EC2 product at all but an `AmazonVPC` one with no product family, keyed on a
+  region-prefixed usagetype. Throughput also needed converting: the catalogue quotes
+  $40.96 per GiBps-month against the $0.04 per MiBps-month a rule works in, so indexing it
+  directly would have overstated throughput a thousandfold.
+- Prices resolved by display name through a hand-maintained table that held
+  `Europe (Ireland)` where the API says `EU (Ireland)`, so every Irish rate was discarded and
+  the scan reported plausible figures that were not the live ones. The region now comes from
+  the `regionCode` the API already supplies.
+- The recorded price fixture disagreed with the API it stood in for — it placed gp3 IOPS and
+  throughput under `Storage` and invented an `Elastic IP` family, neither of which
+  GetProducts returns — so the whole pricing suite validated fiction. It is now recorded from
+  the live API.
+- An AWS scan with no credentials waited for the EC2 instance metadata service to time out
+  before failing. Credentials resolve up front and the error names what is missing.
+- `unattached_ebs_volume` did not round, so live prices rendered as `17.599999999999998`.
+- `docs/aws-setup.md` asked operators to grant `resource-explorer-2:ListIndexes`, which the
+  code never calls.
+- `--aws-organization` was never checked against the organization the credentials belong to.
+  `DescribeOrganization` takes no ID — it answers for the caller — so a mistyped value
+  traversed a different organization while the report carried the requested name. A scan
+  labelled `organizations/o-notreal` was scanning `o-44tzls6k3v`. The mismatch is now an
+  error naming both.
+
 ## [0.2.0] — 2026-08-11
 
 AWS is a second provider, and the resource graph gained a region tier that both providers

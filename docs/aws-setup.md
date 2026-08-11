@@ -16,7 +16,7 @@ organization-level scans.
 | `ec2:DescribeRegions` | Discover which regions the account has enabled. |
 | `ec2:DescribeVolumes` | List every EBS volume in a region (paginated). |
 | `ec2:DescribeAddresses` | List every Elastic IP in a region. |
-| `pricing:GetProducts` | Load the live Price List API catalogue. Optional — when missing, the scan degrades to the embedded static price table and logs a warning. |
+| `pricing:GetProducts` | Load the live Price List catalogue. Without it every resource that needs a price is skipped as unpriced — there is no fallback table. |
 | `resource-explorer-2:Search` | Query the aggregator index to find which regions hold resources of the types the selected rules need, so the scan sweeps only those regions instead of every enabled region. Optional — when missing, the scan falls back to `DescribeRegions`. |
 
 ### Organization / OU scans only
@@ -145,8 +145,8 @@ Before cutting a release, run the live pricing token-pinning test. It fetches a
 real GetProducts response from the AWS Price List API and asserts that every
 SKU token the catalogue derives — volumeApiName for EBS, usagetype suffix for
 static IPs — still matches the tokens the rules query. A failure means AWS
-renamed an attribute, and if the rename ships, every lookup silently degrades
-to the embedded fallback table.
+renamed an attribute, and if the rename ships, every lookup stops resolving and
+the resources it prices are skipped as unpriced.
 
 ```bash
 TELLURY_AWS_LIVE_PRICE_TEST=1 go test ./pkg/pricing/aws/ -run TestCatalogPricer_LiveGetProductsTokenPinned -count=1 -v
@@ -158,7 +158,7 @@ offline and green.
 
 The test also asserts that all four price kinds (disk_capacity, disk_iops,
 disk_throughput, static_ip) resolve from the live API with `provenance=live_api`
-and a real region — not "default". If any kind falls through to the embedded
-table, the test fails, because that is exactly how the io1 IOPS / gp3
-throughput / static-IP defects shipped: the catalogue missed them and nobody
-knew because the fixture agreed with the code and both disagreed with AWS.
+and a real region — not "default". If any kind fails to resolve, the test fails,
+because that is exactly how the gp3 IOPS, throughput and static-IP defects
+shipped: the catalogue missed them and nobody knew, because the fixture agreed
+with the code and both disagreed with AWS.

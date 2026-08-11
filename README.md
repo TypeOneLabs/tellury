@@ -96,9 +96,12 @@ pricing will find resources but report them as skipped (unpriced).
 - Runs fully offline from a fixture or a saved snapshot. Inventory replays without the
   network; pricing requires the live API (or a test fixture via `TELLURY_PRICE_FIXTURE`).
 
-Not there yet: Azure. On AWS, organization and organizational-unit scopes and cross-account
-access are supported. Live AWS pricing (Price List API) resolves EBS capacity, IOPS,
-throughput and static IP rates.
+On AWS, organization and organizational-unit scopes work through Organizations traversal
+with cross-account role assumption, and Resource Explorer narrows the region sweep to where
+resources actually are. Prices come from the live Price List API — EBS capacity, IOPS and
+throughput, and the hourly address charge.
+
+Not there yet: Azure.
 
 ## Rules
 

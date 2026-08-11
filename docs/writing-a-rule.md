@@ -255,7 +255,7 @@ price your rule needs:
 
 - **Price**: snapshot storage had no `pricing.Kind`. A new kind
   `pricing.KindSnapshotStorage` (`"snapshot_storage"`) was added to
-  `pkg/pricing/pricer.go`, wired into the embedded table
+  `pkg/pricing/pricer.go`, resolved from the live catalogue
   (`pkg/pricing/gcp/static.go` `priceFile` field + `newTableFromFile`), into
   `pkg/pricing/gcp/data/gcp_prices.json` as
   `"snapshot_storage": {"standard": {"default": 0.026, "us-central1": 0.026}}`,
@@ -293,7 +293,7 @@ const ID = "old_snapshot"
 
 // SnapshotStorageSKU is the pricing catalogue SKU token for standard
 // snapshot storage, priced per GiB-month (pricing.KindSnapshotStorage). Both
-// the embedded price table and the live Cloud Billing Catalog lookup
+// the live Cloud Billing Catalog lookup
 // (pkg/pricing/gcp/catalog.go matchSKU's "storagesnapshot" resource group)
 // index it under this token.
 const SnapshotStorageSKU = "standard"

@@ -80,6 +80,19 @@ func buildOrgTree(ctx context.Context, client orgAPI, scope cloud.AWSScope) (*or
 	}
 	orgID := *desc.Organization.Id
 
+	// The requested organization must be the one the credentials actually belong
+	// to. DescribeOrganization takes no ID — it answers for the caller — so
+	// without this check a mistyped --aws-organization silently traverses a
+	// DIFFERENT organization and the report is labelled with one it never
+	// touched. Observed: `--aws-organization o-notreal` produced a summary
+	// reading "organizations/o-notreal" while scanning o-44tzls6k3v.
+	if scope.Organization != "" && scope.Organization != orgID {
+		return nil, fmt.Errorf(
+			"aws: --aws-organization %s does not match the organization these credentials belong to (%s); "+
+				"tellury cannot scan another organization, so this would have reported %s's accounts under the wrong name",
+			scope.Organization, orgID, orgID)
+	}
+
 	// Add the organization container node.
 	orgNode := &graph.Node{
 		ID:       graph.Ref("organizations/" + orgID),

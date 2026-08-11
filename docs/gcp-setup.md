@@ -79,9 +79,9 @@ Prices are in EUR (detected from the billing account).
 
 Two things worth knowing:
 
-- **The embedded fallback price table is USD only.** If the live catalogue cannot answer a
-  non-USD scan, the figures are USD and the scan says so loudly rather than relabelling
-  them.
+- **There is no fallback price table.** If the live catalogue cannot answer, the resource is
+  skipped as unpriced rather than given a guessed figure — so a scan without billing access
+  reports what it found and could not price, never a number it invented.
 - **GCP reports a project you cannot see and a project that does not exist identically**,
   as `PermissionDenied`. A fallback to USD is not by itself proof that a role is missing —
   check the project name too.
@@ -96,5 +96,6 @@ Two things worth knowing:
   computed client-side so the aggregation is reproducible.
 - **Cloud Billing Catalog**, cached for the scan.
 
-Without billing access, prices come from the embedded table. Without monitoring access,
-metric-dependent rules skip and say why. Neither fails the scan.
+Without billing access, resources that need a price are skipped as unpriced. Without
+monitoring access, metric-dependent rules skip and say why. Neither fails the scan, and both
+say plainly what they could not do.
