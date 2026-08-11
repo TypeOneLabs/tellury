@@ -336,3 +336,16 @@ func currencyDisclosure(r Report) []string {
 		"These figures were NOT converted; reconcile them against the " + r.CurrencyRequested + " bill by hand.",
 	}
 }
+
+
+// ownerLabel is the column heading for the tier a finding is attributed to.
+// GCP resources belong to a project; AWS resources belong to an account. The
+// Report carries the same value in Finding.Project either way — the field is
+// the owning container, not a GCP concept — but a column of AWS account IDs
+// headed PROJECT is simply wrong on the page.
+func (r Report) ownerLabel() string {
+	if r.Provider == "aws" {
+		return "ACCOUNT"
+	}
+	return "PROJECT"
+}

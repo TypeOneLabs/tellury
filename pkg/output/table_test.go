@@ -590,3 +590,38 @@ func runeSlice(line string, s, n int) string {
 	}
 	return string(r[s:e])
 }
+
+// TestTable_OwnerColumnIsProviderAware: AWS resources belong to an account,
+// not a project. Both providers put the owning container in Finding.Project —
+// the field is the owner, not a GCP concept — but a column of AWS account IDs
+// headed PROJECT is wrong on the page, and an operator reading it has to know
+// the internals to interpret it.
+func TestTable_OwnerColumnIsProviderAware(t *testing.T) {
+	base := Report{
+		Scope: "organizations/o-1", WindowDays: 14, MultiProject: true,
+		Findings: []rules.Finding{
+			{RuleID: "unattached_ebs_volume", Resource: "disk/vol-a", Project: "111122223333", MonthlyWasteUSD: 8},
+			{RuleID: "unattached_ebs_volume", Resource: "disk/vol-b", Project: "444455556666", MonthlyWasteUSD: 4},
+		},
+		TotalMonthlyWasteUSD: 12, FindingCount: 2, ResourcesScanned: 2, RulesEvaluated: 1,
+	}
+
+	for _, tc := range []struct{ provider, want, notWant string }{
+		{"aws", "ACCOUNT", "PROJECT"},
+		{"gcp", "PROJECT", "ACCOUNT"},
+	} {
+		r := base
+		r.Provider = tc.provider
+		var buf bytes.Buffer
+		if err := (tableRenderer{}).Render(&buf, r); err != nil {
+			t.Fatalf("Render(%s): %v", tc.provider, err)
+		}
+		header := strings.SplitN(buf.String(), "\n", 2)[0]
+		if !strings.Contains(header, tc.want) {
+			t.Errorf("%s header = %q, want it to contain %q", tc.provider, header, tc.want)
+		}
+		if strings.Contains(header, tc.notWant) {
+			t.Errorf("%s header = %q, must not contain %q", tc.provider, header, tc.notWant)
+		}
+	}
+}

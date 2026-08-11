@@ -53,7 +53,7 @@ func layoutTable(r Report, display []rules.Finding) tableLayout {
 		money:    colMoney,
 	}
 	if r.MultiProject {
-		l.project = runeLen("PROJECT")
+		l.project = runeLen(r.ownerLabel())
 	}
 	for _, f := range display {
 		if n := runeLen(f.Resource); n > l.resource {
@@ -126,7 +126,7 @@ func (t tableRenderer) Render(w io.Writer, r Report) error {
 		layout := layoutTable(r, display)
 
 		if r.MultiProject {
-			if err := writeRowProject(w, layout, "RESOURCE", "PROJECT", "RULE", "MONTHLY WASTE"); err != nil {
+			if err := writeRowProject(w, layout, "RESOURCE", r.ownerLabel(), "RULE", "MONTHLY WASTE"); err != nil {
 				return err
 			}
 			for _, f := range display {
