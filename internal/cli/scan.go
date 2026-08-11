@@ -16,6 +16,7 @@ import (
 
 	"github.com/TypeOneLabs/tellury/internal/config"
 	"github.com/TypeOneLabs/tellury/pkg/cloud"
+	"github.com/TypeOneLabs/tellury/pkg/cloud/aws"
 	"github.com/TypeOneLabs/tellury/pkg/cloud/gcp"
 	"github.com/TypeOneLabs/tellury/pkg/graph"
 	"github.com/TypeOneLabs/tellury/pkg/metrics"
@@ -36,6 +37,7 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 		Example: "  tellury scan --gcp-project my-gcp-project\n" +
 			"  tellury scan --gcp-project p --rules detached_disk --format json\n" +
 			"  tellury scan --currency EUR --gcp-project my-gcp-project   # price in EUR\n" +
+			"  tellury scan --aws-account 123456789012   # provider inferred from the AWS scope flag\n" +
 			"  tellury scan --cache-file snap.json   # offline replay (full fidelity)\n" +
 			"  tellury scan --fixture cai-assets.json   # offline replay (topology only)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -53,11 +55,16 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 
 	f := cmd.Flags()
 	// Scope flags are registered from the provider registry, exactly like the
-	// environment variables: cloud.ScopesFor(gcp) yields each scope dimension
-	// with its provider-owned --gcp-<scope> flag name. No literal GCP flag
-	// set is hardcoded here.
-	addScopeFlags(f, gcp.ProviderName, &cfg)
-	f.StringVar(&cfg.Provider, "provider", "gcp", "cloud provider")
+	// environment variables: addAllScopeFlags iterates cloud.Providers() and
+	// each provider's cloud.ScopesFor(...) yields its scope dimensions with
+	// their provider-owned --<provider>-<scope> flag names. No literal flag
+	// set is hardcoded here — GCP's --gcp-* and AWS's --aws-* flags appear by
+	// construction.
+	addAllScopeFlags(f, &cfg)
+	f.StringVar(&cfg.Provider, "provider", "", "cloud provider (gcp|aws; default: inferred from the scope flags, else gcp)")
+	f.StringSliceVar(&cfg.AWSRegions, "aws-regions", nil,
+		"regions to scan for the AWS provider (default: every region enabled for the account via DescribeRegions; "+
+			"an availability-zone form like us-east-1a is accepted and flattened to its region)")
 	f.StringSliceVar(&cfg.Rules, "rules", nil, "rule IDs to run (default: all)")
 	f.StringSliceVar(&cfg.SkipRules, "skip-rules", nil, "rule IDs to exclude")
 	f.StringVar(&cfg.Format, "format", "table", "table|json|csv")
@@ -283,7 +290,7 @@ func runScan(
 	// ProjectsAnalyzed counts the graph's project container nodes (never the
 	// findings), and Duration is the wall clock elapsed since start — both
 	// measured by this scan, not by the renderer.
-	report := output.NewReport(res, output.Meta{
+	meta := output.Meta{
 		Scope:             scope.String(),
 		Provider:          cfg.Provider,
 		GeneratedAt:       now,
@@ -297,7 +304,25 @@ func runScan(
 		CurrencySource:    currencyState.source,
 		CurrencyRequested: requestedCurrency(currencyState),
 		CurrencyMixed:     currencyMixed,
-	})
+	}
+	// AWS region coverage: which regions a scan actually looked at, and how
+	// they were chosen, comes from the provider's own resolution (explicit
+	// --aws-regions, the DescribeRegions default, or the fixture), so the scan
+	// summary's "N regions analyzed" figure and this log line can never drift
+	// from the scan's real coverage. GCP never sets these fields, keeping its
+	// report byte-identical.
+	if cfg.Provider == "aws" {
+		meta.AccountsAnalyzed = gr.CountByKind(graph.KindAccount)
+		if rp, ok := provider.(regionReporter); ok {
+			regions, source := rp.Regions()
+			meta.RegionsAnalyzed = len(regions)
+			log.Info("aws region coverage",
+				"regions", len(regions),
+				"source", source,
+				"list", strings.Join(regions, ","))
+		}
+	}
+	report := output.NewReport(res, meta)
 
 	// Offline honesty: when the scan's data carried no metric series (a raw
 	// CAI fixture), the metric-dependent rules could not evaluate. State which
@@ -346,6 +371,16 @@ func runScan(
 		return errFindings
 	}
 	return nil
+}
+
+// regionReporter is the optional provider capability that reports which
+// regions a scan covered and how they were chosen (explicit --aws-regions,
+// the DescribeRegions default, or a fixture). Only the AWS provider implements
+// it today; the scan summary's "N regions analyzed" figure and the region
+// coverage log line come from it, so the report never guesses about a scan's
+// real coverage.
+type regionReporter interface {
+	Regions() ([]string, string)
 }
 
 // requestedCurrency renders the currency the scan was asked/detected to price
@@ -481,28 +516,53 @@ func cacheIfPresent(path string) (*graph.Graph, *graph.Snapshot, error) {
 	return graph.LoadSnapshot(f)
 }
 
-// newProvider builds the cloud provider. It accepts two offline signals it
-// has no way to derive on its own:
+// newProvider builds the cloud provider for the scan's selected provider. It
+// dispatches on cfg.Provider — the provider seam, not a GCP hardcode — so a
+// config that resolved to "aws" is never silently served a GCP provider. It
+// accepts two offline signals it has no way to derive on its own:
 //
 //   - offline=true  => this is a --fixture or a cache-hit scan: no cloud SDK
-//     client is constructed at all (see gcp.WithOffline). The embedded static
-//     table prices the replay; a fixture lister, when present, is wired in.
+//     client is constructed at all (see aws.WithOffline / gcp.WithOffline).
+//     The embedded static table prices the replay; a fixture, when present,
+//     is wired in.
 //   - cacheHit=true => the graph already came from the cache file, so there
 //     is no asset source to build; this is only used for the log line.
-func newProvider(ctx context.Context, cfg config.Scan, log *slog.Logger, offline, cacheHit bool) (*gcp.Provider, error) {
-	opts := []gcp.Option{gcp.WithLogger(log), gcp.WithCurrency(cfg.Currency)}
-	if len(cfg.Fixture) > 0 {
-		lister, err := gcp.LoadFakeLister(cfg.Fixture...)
-		if err != nil {
-			return nil, err
+func newProvider(ctx context.Context, cfg config.Scan, log *slog.Logger, offline, cacheHit bool) (cloud.Provider, error) {
+	switch cfg.Provider {
+	case "gcp":
+		opts := []gcp.Option{gcp.WithLogger(log), gcp.WithCurrency(cfg.Currency)}
+		if len(cfg.Fixture) > 0 {
+			lister, err := gcp.LoadFakeLister(cfg.Fixture...)
+			if err != nil {
+				return nil, err
+			}
+			opts = append(opts, gcp.WithLister(lister))
+			log.Info("using fixture assets", "files", len(cfg.Fixture), "assets", len(lister.Assets))
 		}
-		opts = append(opts, gcp.WithLister(lister))
-		log.Info("using fixture assets", "files", len(cfg.Fixture), "assets", len(lister.Assets))
+		if offline {
+			opts = append(opts, gcp.WithOffline())
+		}
+		return gcp.New(ctx, opts...)
+	case "aws":
+		opts := []aws.Option{aws.WithLogger(log)}
+		if len(cfg.Fixture) > 0 {
+			fx, err := aws.LoadFixture(cfg.Fixture...)
+			if err != nil {
+				return nil, err
+			}
+			opts = append(opts, aws.WithFixture(fx))
+			log.Info("using fixture assets", "files", len(cfg.Fixture), "regions", len(fx.Regions))
+		}
+		if len(cfg.AWSRegions) > 0 {
+			opts = append(opts, aws.WithExplicitRegions(cfg.AWSRegions))
+		}
+		if offline {
+			opts = append(opts, aws.WithOffline())
+		}
+		return aws.New(ctx, opts...)
+	default:
+		return nil, cloud.UnknownProviderError(cfg.Provider)
 	}
-	if offline {
-		opts = append(opts, gcp.WithOffline())
-	}
-	return gcp.New(ctx, opts...)
 }
 
 // snapshotMigrator is the optional provider capability that upgrades a graph

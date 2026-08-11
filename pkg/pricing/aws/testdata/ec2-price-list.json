@@ -1,0 +1,376 @@
+[
+  {
+    "product": {
+      "productFamily": "Storage",
+      "attributes": {
+        "volumeApiName": "gp3",
+        "volumeType": "General Purpose",
+        "storageClass": "General Purpose",
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "operation": "Storage"
+      },
+      "sku": "M32GFAJZJJCM5R2X"
+    },
+    "terms": {
+      "OnDemand": {
+        "M32GFAJZJJCM5R2X.JRTCKXETXF": {
+          "priceDimensions": {
+            "M32GFAJZJJCM5R2X.JRTCKXETXF.6YS6EN2CT7": {
+              "unit": "GB-Mo",
+              "description": "$0.08 per GB-month of General Purpose SSD (gp3) provisioned storage - US East (N. Virginia)",
+              "pricePerUnit": { "USD": "0.0800000000" }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "productFamily": "Storage",
+      "attributes": {
+        "volumeApiName": "gp3",
+        "volumeType": "General Purpose",
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "operation": "Storage"
+      },
+      "sku": "RVU4FCDZSCBXEXVG"
+    },
+    "terms": {
+      "OnDemand": {
+        "RVU4FCDZSCBXEXVG.JRTCKXETXF": {
+          "priceDimensions": {
+            "RVU4FCDZSCBXEXVG.JRTCKXETXF.6YS6EN2CT7": {
+              "unit": "IOPS-Mo",
+              "description": "$0.005 per provisioned IOPS-month of General Purpose SSD (gp3) provisioned IOPS - US East (N. Virginia)",
+              "pricePerUnit": { "USD": "0.0050000000" }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "productFamily": "Storage",
+      "attributes": {
+        "volumeApiName": "gp3",
+        "volumeType": "General Purpose",
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "operation": "Storage"
+      },
+      "sku": "TXWSHXV4RTKNWHC9"
+    },
+    "terms": {
+      "OnDemand": {
+        "TXWSHXV4RTKNWHC9.JRTCKXETXF": {
+          "priceDimensions": {
+            "TXWSHXV4RTKNWHC9.JRTCKXETXF.6YS6EN2CT7": {
+              "unit": "MBps-Mo",
+              "description": "$0.04 per MBps-month of General Purpose SSD (gp3) provisioned throughput - US East (N. Virginia)",
+              "pricePerUnit": { "USD": "0.0400000000" }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "productFamily": "Storage",
+      "attributes": {
+        "volumeApiName": "io2",
+        "volumeType": "Provisioned IOPS",
+        "storageClass": "Provisioned IOPS",
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "operation": "Storage"
+      },
+      "sku": "ZF4DEET7XVP77GS2"
+    },
+    "terms": {
+      "OnDemand": {
+        "ZF4DEET7XVP77GS2.JRTCKXETXF": {
+          "priceDimensions": {
+            "ZF4DEET7XVP77GS2.JRTCKXETXF.6YS6EN2CT7": {
+              "unit": "GB-Mo",
+              "description": "$0.125 per GB-month of Provisioned IOPS SSD (io2) provisioned storage - US East (N. Virginia)",
+              "pricePerUnit": { "USD": "0.1250000000" }
+            },
+            "ZF4DEET7XVP77GS2.JRTCKXETXF.Y3LPD5Z4BDNQ2D2E": {
+              "unit": "IOPS-Mo",
+              "description": "$0.065 per provisioned IOPS-month of Provisioned IOPS SSD (io2) - US East (N. Virginia)",
+              "pricePerUnit": { "USD": "0.0650000000" }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "productFamily": "Storage",
+      "attributes": {
+        "volumeApiName": "io1",
+        "volumeType": "Provisioned IOPS",
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "operation": "Storage"
+      },
+      "sku": "RNBP7W8G9EHUFV7T"
+    },
+    "terms": {
+      "OnDemand": {
+        "RNBP7W8G9EHUFV7T.JRTCKXETXF": {
+          "priceDimensions": {
+            "RNBP7W8G9EHUFV7T.JRTCKXETXF.6YS6EN2CT7": {
+              "unit": "GB-Mo",
+              "description": "$0.125 per GB-month of Provisioned IOPS SSD (io1) provisioned storage - US East (N. Virginia)",
+              "pricePerUnit": { "USD": "0.1250000000" }
+            },
+            "RNBP7W8G9EHUFV7T.JRTCKXETXF.B7UVC3QABDR4VKST": {
+              "unit": "IOPS-Mo",
+              "description": "$0.065 per provisioned IOPS-month of Provisioned IOPS SSD (io1) - US East (N. Virginia)",
+              "pricePerUnit": { "USD": "0.0650000000" }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "productFamily": "Storage",
+      "attributes": {
+        "volumeApiName": "gp2",
+        "volumeType": "General Purpose",
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "operation": "Storage"
+      },
+      "sku": "RHPM8Q83PX6XCW9U"
+    },
+    "terms": {
+      "OnDemand": {
+        "RHPM8Q83PX6XCW9U.JRTCKXETXF": {
+          "priceDimensions": {
+            "RHPM8Q83PX6XCW9U.JRTCKXETXF.6YS6EN2CT7": {
+              "unit": "GB-Mo",
+              "description": "$0.10 per GB-month of General Purpose SSD (gp2) provisioned storage - US East (N. Virginia)",
+              "pricePerUnit": { "USD": "0.1000000000" }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "productFamily": "Storage",
+      "attributes": {
+        "volumeApiName": "st1",
+        "volumeType": "Throughput Optimized HDD",
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "operation": "Storage"
+      },
+      "sku": "NMDDGW5VQ7QF9TVW"
+    },
+    "terms": {
+      "OnDemand": {
+        "NMDDGW5VQ7QF9TVW.JRTCKXETXF": {
+          "priceDimensions": {
+            "NMDDGW5VQ7QF9TVW.JRTCKXETXF.6YS6EN2CT7": {
+              "unit": "GB-Mo",
+              "description": "$0.045 per GB-month of Throughput Optimized HDD (st1) provisioned storage - US East (N. Virginia)",
+              "pricePerUnit": { "USD": "0.0450000000" }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "productFamily": "Storage",
+      "attributes": {
+        "volumeApiName": "sc1",
+        "volumeType": "Cold HDD",
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "operation": "Storage"
+      },
+      "sku": "B79QYH99KNGZYY3P"
+    },
+    "terms": {
+      "OnDemand": {
+        "B79QYH99KNGZYY3P.JRTCKXETXF": {
+          "priceDimensions": {
+            "B79QYH99KNGZYY3P.JRTCKXETXF.6YS6EN2CT7": {
+              "unit": "GB-Mo",
+              "description": "$0.025 per GB-month of Cold HDD (sc1) provisioned storage - US East (N. Virginia)",
+              "pricePerUnit": { "USD": "0.0250000000" }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "productFamily": "Storage",
+      "attributes": {
+        "volumeApiName": "standard",
+        "volumeType": "Magnetic",
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "operation": "Storage"
+      },
+      "sku": "NFGQ6XSC5B75Y9TS"
+    },
+    "terms": {
+      "OnDemand": {
+        "NFGQ6XSC5B75Y9TS.JRTCKXETXF": {
+          "priceDimensions": {
+            "NFGQ6XSC5B75Y9TS.JRTCKXETXF.6YS6EN2CT7": {
+              "unit": "GB-Mo",
+              "description": "$0.05 per GB-month of Magnetic (standard) provisioned storage - US East (N. Virginia)",
+              "pricePerUnit": { "USD": "0.0500000000" }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "productFamily": "Elastic IP",
+      "attributes": {
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "usagetype": "USE1-EIP:BoxUsage",
+        "operation": "AdditionalAddress"
+      },
+      "sku": "BPDXJRN7VWEJ5S4K"
+    },
+    "terms": {
+      "OnDemand": {
+        "BPDXJRN7VWEJ5S4K.JRTCKXETXF": {
+          "priceDimensions": {
+            "BPDXJRN7VWEJ5S4K.JRTCKXETXF.6YS6EN2CT7": {
+              "unit": "Hrs",
+              "description": "$0.005 per Elastic IP address not attached to a running instance for a partial hour while in use",
+              "pricePerUnit": { "USD": "0.0050000000" }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "productFamily": "Elastic IP",
+      "attributes": {
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "usagetype": "USE1-EIP:BoxUsage",
+        "operation": "InUseAddress"
+      },
+      "sku": "S63V2GFPXV2YZT5A"
+    },
+    "terms": {
+      "OnDemand": {
+        "S63V2GFPXV2YZT5A.JRTCKXETXF": {
+          "priceDimensions": {
+            "S63V2GFPXV2YZT5A.JRTCKXETXF.6YS6EN2CT7": {
+              "unit": "Hrs",
+              "description": "$0.00 per Elastic IP address attached to a running instance",
+              "pricePerUnit": { "USD": "0.0000000000" }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "productFamily": "Storage",
+      "attributes": {
+        "volumeApiName": "gp3",
+        "volumeType": "General Purpose",
+        "location": "Europe (Ireland)",
+        "locationType": "AWS Region",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "operation": "Storage"
+      },
+      "sku": "P7YY6J9RVXQKFT3U"
+    },
+    "terms": {
+      "OnDemand": {
+        "P7YY6J9RVXQKFT3U.JRTCKXETXF": {
+          "priceDimensions": {
+            "P7YY6J9RVXQKFT3U.JRTCKXETXF.6YS6EN2CT7": {
+              "unit": "GB-Mo",
+              "description": "$0.08 per GB-month of General Purpose SSD (gp3) provisioned storage - Europe (Ireland)",
+              "pricePerUnit": { "USD": "0.0800000000" }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "productFamily": "Storage",
+      "attributes": {
+        "volumeApiName": "not-a-volume-type",
+        "volumeType": "Something Else",
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "operation": "Storage"
+      },
+      "sku": "ZZZZZZZZZZZZZZZZ"
+    },
+    "terms": {
+      "OnDemand": {
+        "ZZZZZZZZZZZZZZZZ.JRTCKXETXF": {
+          "priceDimensions": {
+            "ZZZZZZZZZZZZZZZZ.JRTCKXETXF.6YS6EN2CT7": {
+              "unit": "GB-Mo",
+              "description": "A non-EBS storage product whose volumeApiName is not a DescribeVolumes.VolumeType value",
+              "pricePerUnit": { "USD": "0.0100000000" }
+            }
+          }
+        }
+      }
+    }
+  }
+]

@@ -1,0 +1,73 @@
+{
+  "regions": {
+    "us-east-1": {
+      "volumes": [
+        {
+          "volumeId": "vol-0aaa",
+          "size": 100,
+          "volumeType": "gp3",
+          "iops": 3000,
+          "throughput": 250,
+          "state": "available",
+          "createTime": "2024-01-15T10:30:00Z",
+          "availabilityZone": "us-east-1a",
+          "attachments": []
+        },
+        {
+          "volumeId": "vol-0bbb",
+          "size": 500,
+          "volumeType": "io2",
+          "iops": 10000,
+          "state": "in-use",
+          "createTime": "2023-05-01T00:00:00Z",
+          "availabilityZone": "us-east-1b",
+          "attachments": [
+            {
+              "instanceId": "i-0cafe",
+              "device": "/dev/xvda",
+              "state": "attached",
+              "attachTime": "2023-05-02T00:00:00Z",
+              "volumeId": "vol-0bbb"
+            }
+          ]
+        }
+      ],
+      "addresses": [
+        {
+          "allocationId": "eipalloc-0d1",
+          "publicIp": "203.0.113.10",
+          "domain": "vpc"
+        },
+        {
+          "allocationId": "eipalloc-0d2",
+          "publicIp": "203.0.113.11",
+          "domain": "vpc",
+          "associationId": "eipassoc-0e1",
+          "instanceId": "i-0cafe"
+        }
+      ]
+    },
+    "eu-west-1": {
+      "volumes": [
+        {
+          "volumeId": "vol-0ccc",
+          "size": 30,
+          "volumeType": "gp2",
+          "state": "in-use",
+          "createTime": "2024-06-01T00:00:00Z",
+          "availabilityZone": "eu-west-1a",
+          "attachments": [
+            {
+              "instanceId": "i-0d00d",
+              "device": "/dev/sdf",
+              "state": "attached",
+              "attachTime": "2024-06-02T00:00:00Z",
+              "volumeId": "vol-0ccc"
+            }
+          ]
+        }
+      ],
+      "addresses": []
+    }
+  }
+}

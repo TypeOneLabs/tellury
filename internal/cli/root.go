@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	_ "github.com/TypeOneLabs/tellury/pkg/cloud/aws" // registers AWS scope flags via init()
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/all" // register built-in rules
 )
 

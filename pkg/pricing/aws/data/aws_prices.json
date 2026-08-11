@@ -1,0 +1,48 @@
+{
+  "version": "2025-06-01",
+  "currency": "USD",
+  "disk_capacity": {
+    "gp3": {
+      "default": 0.08
+    },
+    "gp2": {
+      "default": 0.1
+    },
+    "io1": {
+      "default": 0.125
+    },
+    "io2": {
+      "default": 0.125
+    },
+    "st1": {
+      "default": 0.045
+    },
+    "sc1": {
+      "default": 0.025
+    },
+    "standard": {
+      "default": 0.05
+    }
+  },
+  "disk_iops": {
+    "gp3": {
+      "default": 0.005
+    },
+    "io1": {
+      "default": 0.065
+    },
+    "io2": {
+      "default": 0.065
+    }
+  },
+  "disk_throughput": {
+    "gp3": {
+      "default": 0.04
+    }
+  },
+  "static_ip": {
+    "AdditionalAddress": {
+      "default": 0.005
+    }
+  }
+}

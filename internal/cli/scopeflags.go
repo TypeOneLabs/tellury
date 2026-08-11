@@ -7,8 +7,25 @@ import (
 	"github.com/TypeOneLabs/tellury/pkg/cloud"
 )
 
-// addScopeFlags registers every scope flag a provider has declared onto fs,
-// each bound to the corresponding named field on cfg. It iterates
+// addAllScopeFlags registers every scope flag every registered provider
+// declares onto fs, each bound to the corresponding named field on cfg. It
+// iterates cloud.Providers(), so the CLI flag surface is driven entirely by
+// the provider registry: GCP's --gcp-* flags and AWS's --aws-* flags (plus
+// any future provider) all appear here by construction, with no literal flag
+// list in the CLI. The per-provider work is addScopeFlags.
+//
+// The helper returns the number of flags it registered, which tests assert
+// equals the sum of every provider's declared scope count.
+func addAllScopeFlags(fs *pflag.FlagSet, cfg *config.Scan) int {
+	n := 0
+	for _, provider := range cloud.Providers() {
+		n += addScopeFlags(fs, provider, cfg)
+	}
+	return n
+}
+
+// addScopeFlags registers every scope flag a single provider has declared
+// onto fs, each bound to the corresponding named field on cfg. It iterates
 // cloud.ScopesFor(provider) — the same registry that owns scope environment
 // variables — so the flag surface is driven by provider declarations, not by
 // a literal list in the CLI. Adding a new cloud therefore requires no shared
@@ -33,7 +50,19 @@ func addScopeFlags(fs *pflag.FlagSet, provider string, cfg *config.Scan) int {
 		case "folder":
 			dst = &cfg.Folder
 		case "organization":
-			dst = &cfg.Organization
+			// Both providers declare a scope named "organization"; each owns a
+			// distinct config field (GCP's Organization, AWS's
+			// AWSOrganization) so the CLI never loses which provider's flag
+			// set it — the two-provider conflict check depends on that.
+			if provider == "aws" {
+				dst = &cfg.AWSOrganization
+			} else {
+				dst = &cfg.Organization
+			}
+		case "account":
+			dst = &cfg.Account
+		case "organizational_unit":
+			dst = &cfg.OrganizationalUnit
 		default:
 			// A dimension without a config field cannot be bound; skip it.
 			continue

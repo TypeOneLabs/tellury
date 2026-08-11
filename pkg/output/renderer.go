@@ -35,6 +35,20 @@ type Report struct {
 	// scan with no findings still reports the projects it analyzed.
 	ProjectsAnalyzed int `json:"projects_analyzed"`
 
+	// AccountsAnalyzed is the AWS analog of ProjectsAnalyzed: the number of
+	// account container nodes the scan's graph carried. It is set only for an
+	// AWS scan (GCP never sets it, so the GCP report is byte-identical), and
+	// the table summary shows it in place of the projects figure.
+	AccountsAnalyzed int `json:"accounts_analyzed,omitempty"`
+
+	// RegionsAnalyzed is the number of region container nodes the scan's
+	// graph carried — the "which regions did the scan actually cover" answer
+	// an AWS operator needs to tell "nothing wasteful" from "nothing
+	// scanned". It is set only for an AWS scan (GCP never sets it, so the GCP
+	// report is byte-identical) and the table summary shows it right after
+	// the account figure.
+	RegionsAnalyzed int `json:"regions_analyzed,omitempty"`
+
 	// ResourcesSkipped is the total number of resource-rule skips recorded
 	// during evaluation — the sum of every entry in Skipped, which is exactly
 	// the count `--explain-skips` breaks down per (rule, code). It is the
@@ -113,6 +127,13 @@ type Meta struct {
 	// than derived from the findings so a scan with no findings still reports
 	// the projects it looked at.
 	ProjectsAnalyzed int
+
+	// AccountsAnalyzed / RegionsAnalyzed are the AWS analogs (account and
+	// region container nodes). Both stay zero for a GCP scan, which keeps the
+	// GCP report byte-identical to the pre-AWS build.
+	AccountsAnalyzed int
+	RegionsAnalyzed  int
+
 	// Duration is the scan's wall-clock duration, measured by the scan's own
 	// clock and never re-measured inside a renderer.
 	Duration time.Duration
@@ -152,6 +173,8 @@ func NewReport(res rules.Result, m Meta) Report {
 		ResourcesScanned:  m.ResourcesScanned,
 		RulesEvaluated:    m.RulesEvaluated,
 		ProjectsAnalyzed:  m.ProjectsAnalyzed,
+		AccountsAnalyzed:  m.AccountsAnalyzed,
+		RegionsAnalyzed:   m.RegionsAnalyzed,
 		Duration:          m.Duration,
 		MultiProject:      m.MultiProject,
 		Skipped:           res.SkipTotals(),

@@ -7,7 +7,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/TypeOneLabs/tellury/internal/config"
-	"github.com/TypeOneLabs/tellury/pkg/cloud/gcp"
 	"github.com/TypeOneLabs/tellury/pkg/graph"
 	"github.com/TypeOneLabs/tellury/pkg/metrics"
 	"github.com/TypeOneLabs/tellury/pkg/rules"
@@ -73,7 +72,7 @@ func newGraphExportCmd(g *globalFlags) *cobra.Command {
 			// `graph export` always ingests fresh assets; it never replays a
 			// cache. So it is an online scan: offline=false, cacheHit=false.
 			// A --fixture here still works (that is an offline ingest), and
-			// gcp.New's offline guard applies only when offline=true.
+			// the provider's offline guard applies only when offline=true.
 			offline := len(cfg.Fixture) > 0
 			provider, err := newProvider(ctx, cfg, log, offline, false)
 			if err != nil {
@@ -104,11 +103,16 @@ func newGraphExportCmd(g *globalFlags) *cobra.Command {
 	}
 	f := cmd.Flags()
 	// Scope flags are registered from the provider registry, exactly like the
-	// environment variables: cloud.ScopesFor(gcp) yields each scope dimension
-	// with its provider-owned --gcp-<scope> flag name. No literal GCP flag
-	// set is hardcoded here.
-	addScopeFlags(f, gcp.ProviderName, &cfg)
-	f.StringVar(&cfg.Provider, "provider", "gcp", "cloud provider")
+	// environment variables: addAllScopeFlags iterates cloud.Providers() and
+	// each provider's cloud.ScopesFor(...) yields its scope dimensions with
+	// their provider-owned --<provider>-<scope> flag names. No literal flag
+	// set is hardcoded here — GCP's --gcp-* and AWS's --aws-* flags appear by
+	// construction.
+	addAllScopeFlags(f, &cfg)
+	f.StringVar(&cfg.Provider, "provider", "", "cloud provider (gcp|aws; default: inferred from the scope flags, else gcp)")
+	f.StringSliceVar(&cfg.AWSRegions, "aws-regions", nil,
+		"regions to scan for the AWS provider (default: every region enabled for the account via DescribeRegions; "+
+			"an availability-zone form like us-east-1a is accepted and flattened to its region)")
 	f.StringSliceVar(&cfg.Rules, "rules", nil, "rule IDs to drive asset type and metric planning (default: all)")
 	f.StringSliceVar(&cfg.SkipRules, "skip-rules", nil, "rule IDs to exclude from planning")
 	f.StringSliceVar(&cfg.Fixture, "fixture", nil, "read assets from CAI JSON fixtures instead of the API")

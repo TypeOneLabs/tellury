@@ -56,6 +56,68 @@ func TestScopeFlagsRegisterFromRegistry(t *testing.T) {
 	assertNoFlag(t, fs, "organization")
 }
 
+// TestAddAllScopeFlagsRegistersEveryProvider asserts that the CLI's full
+// scope flag surface is driven by cloud.Providers(): both GCP's --gcp-* flags
+// and AWS's --aws-* flags are registered in one call, each bound to the
+// provider's own config fields, with no literal flag list in the CLI. The AWS
+// package is registered in this test binary through root.go's blank import.
+func TestAddAllScopeFlagsRegistersEveryProvider(t *testing.T) {
+	cfg := &config.Scan{}
+	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+
+	n := addAllScopeFlags(fs, cfg)
+	wantFlags := map[string]bool{
+		"gcp-project":             false,
+		"gcp-folder":              false,
+		"gcp-organization":        false,
+		"aws-account":             false,
+		"aws-organizational-unit": false,
+		"aws-organization":        false,
+	}
+	if n != len(wantFlags) {
+		t.Fatalf("addAllScopeFlags registered %d flags; want %d (3 GCP + 3 AWS)", n, len(wantFlags))
+	}
+	for name := range wantFlags {
+		if fs.Lookup(name) == nil {
+			t.Errorf("addAllScopeFlags must register --%s", name)
+		}
+	}
+
+	// The AWS flags bind to AWS-owned config fields; --aws-organization is
+	// deliberately distinct from GCP's --gcp-organization, so the CLI never
+	// loses which provider's organization flag was set.
+	if err := fs.Set("aws-account", "123456789012"); err != nil {
+		t.Fatalf("Set(--aws-account): %v", err)
+	}
+	if cfg.Account != "123456789012" {
+		t.Errorf("--aws-account must bind to cfg.Account; got %q", cfg.Account)
+	}
+	if err := fs.Set("aws-organizational-unit", "ou-abc"); err != nil {
+		t.Fatalf("Set(--aws-organizational-unit): %v", err)
+	}
+	if cfg.OrganizationalUnit != "ou-abc" {
+		t.Errorf("--aws-organizational-unit must bind to cfg.OrganizationalUnit; got %q", cfg.OrganizationalUnit)
+	}
+	if err := fs.Set("aws-organization", "o-abc"); err != nil {
+		t.Fatalf("Set(--aws-organization): %v", err)
+	}
+	if cfg.AWSOrganization != "o-abc" {
+		t.Errorf("--aws-organization must bind to cfg.AWSOrganization; got %q", cfg.AWSOrganization)
+	}
+	if cfg.Organization != "" {
+		t.Errorf("--aws-organization must not write cfg.Organization; got %q", cfg.Organization)
+	}
+	if err := fs.Set("gcp-organization", "organizations/456"); err != nil {
+		t.Fatalf("Set(--gcp-organization): %v", err)
+	}
+	if cfg.Organization != "organizations/456" {
+		t.Errorf("--gcp-organization must bind to cfg.Organization; got %q", cfg.Organization)
+	}
+	if cfg.AWSOrganization != "o-abc" {
+		t.Errorf("--gcp-organization must not clobber cfg.AWSOrganization; got %q", cfg.AWSOrganization)
+	}
+}
+
 // assertFlag fails unless the flag set exposes exactly the given flag.
 func assertFlag(t *testing.T, fs *pflag.FlagSet, name string) {
 	t.Helper()

@@ -19,6 +19,8 @@ import (
 	// would let the test go green while a rule silently vanished. These direct
 	// imports hold each rule alive, so removing a blank import from `all` shows
 	// up as a rule that is registered but no longer shipped by `all`.
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/unassociated_eip"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/unattached_ebs_volume"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/detached_disk"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/old_snapshot"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/underutilized_instance"

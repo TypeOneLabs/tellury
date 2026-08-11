@@ -207,15 +207,28 @@ func (t tableRenderer) Render(w io.Writer, r Report) error {
 // headline, so it is a single compact line. The duration comes from the
 // Report — the scan's own clock — so rendering a Report twice always prints
 // the same line.
+//
+// An AWS scan reports the account and the regions it actually covered — "1
+// account analyzed, 2 regions analyzed, ..." — in place of the GCP projects
+// figure. The branch keys on AccountsAnalyzed, which only an AWS report ever
+// sets, so a GCP report renders byte-identically to the pre-AWS build.
 func summaryLine(r Report) string {
-	parts := []string{
-		countPhrase(r.ProjectsAnalyzed, "project analyzed", "projects analyzed"),
+	parts := make([]string, 0, 7)
+	if r.AccountsAnalyzed > 0 {
+		parts = append(parts, countPhrase(r.AccountsAnalyzed, "account analyzed", "accounts analyzed"))
+		if r.RegionsAnalyzed > 0 {
+			parts = append(parts, countPhrase(r.RegionsAnalyzed, "region analyzed", "regions analyzed"))
+		}
+	} else {
+		parts = append(parts, countPhrase(r.ProjectsAnalyzed, "project analyzed", "projects analyzed"))
+	}
+	parts = append(parts,
 		countPhrase(r.ResourcesScanned, "resource scanned", "resources scanned"),
 		countPhrase(r.RulesEvaluated, "rule evaluated", "rules evaluated"),
 		countPhrase(r.FindingCount, "finding", "findings"),
 		countPhrase(r.ResourcesSkipped, "resource skipped", "resources skipped"),
 		formatDuration(r.Duration),
-	}
+	)
 	// The scope leads the line. Without it a findings table says nothing about
 	// what it is a scan OF: the PROJECT column only appears when findings span
 	// more than one project, so a single-project run named the project nowhere

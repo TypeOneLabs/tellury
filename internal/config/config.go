@@ -14,16 +14,19 @@ import (
 
 // Scope dimension names. These are provider-agnostic identity keys, NOT
 // surface names: a provider maps each one it accepts to its own CLI flag
-// (--gcp-project) and environment variable (TELLURY_GCP_PROJECT) via
-// cloud.RegisterScopes. config never hardcodes a surface name or a
-// GCP-shaped scope set — it only knows these three dimensions the CLI
-// exposes, and asks the selected provider (through cloud.ScopeFlag/
+// (--gcp-project, --aws-account) and environment variable (TELLURY_GCP_PROJECT,
+// TELLURY_AWS_ACCOUNT) via cloud.RegisterScopes. config never hardcodes a
+// surface name or a provider-shaped scope set — it only knows these dimensions
+// the CLI exposes, and asks the selected provider (through cloud.ScopeFlag/
 // ScopeEnvVar, keyed by provider) what each one's flag and variable are
-// actually called.
+// actually called. "organization" is shared by both providers: GCP and AWS
+// each own their own surface names for it, resolved by provider.
 const (
-	scopeProject      = "project"
-	scopeFolder       = "folder"
-	scopeOrganization = "organization"
+	scopeProject            = "project"
+	scopeFolder             = "folder"
+	scopeOrganization       = "organization"
+	scopeAccount            = "account"
+	scopeOrganizationalUnit = "organizational_unit"
 )
 
 // Metric window bounds. Below 7 days the p95 sample floor cannot be met, above
@@ -53,10 +56,31 @@ const ProgressEnvVar = "TELLURY_PROGRESS"
 
 // Scan is the fully-resolved `tellury scan` configuration.
 type Scan struct {
+	// GCP scope dimensions. Exactly one is set for a GCP scan (the offline
+	// replay paths are exempt: a cache file or fixture names its own scope).
 	Project      string
 	Folder       string
 	Organization string
-	Provider     string
+
+	// AWS scope dimensions, mirroring GCP's three levels structurally.
+	// Account and OrganizationalUnit parallel Project and Folder.
+	// AWSOrganization is AWS's own organization field: it is deliberately a
+	// DISTINCT field rather than sharing GCP's Organization, so the CLI never
+	// loses which provider's --*-organization flag set it — which is what lets
+	// the two-provider conflict check name both flags.
+	Account            string
+	OrganizationalUnit string
+	AWSOrganization    string
+
+	// AWSRegions narrows an AWS scan to an explicit region list (--aws-regions).
+	// Empty means the default: every region enabled for the account, resolved
+	// by ec2:DescribeRegions (or an offline fixture's regions on a replay).
+	// The values are canonicalised by the AWS provider — an availability-zone
+	// form like "us-east-1a" becomes its region "us-east-1" — so an operator
+	// can pass either spelling.
+	AWSRegions []string
+
+	Provider string
 
 	Rules     []string
 	SkipRules []string
@@ -92,9 +116,31 @@ type Scan struct {
 	Currency string
 }
 
-// Scope renders the cloud scope.
+// Scope renders the cloud scope, building the provider-specific block that
+// matches the selected provider. Callers must run Validate first so Provider
+// is resolved (explicit, inferred from scope flags, or the gcp default).
 func (c Scan) Scope() cloud.Scope {
-	return cloud.Scope{Project: c.Project, Folder: c.Folder, Organization: c.Organization}
+	switch c.Provider {
+	case "gcp":
+		return cloud.Scope{
+			Provider: "gcp",
+			GCP: &cloud.GCPScope{
+				Project:      c.Project,
+				Folder:       c.Folder,
+				Organization: c.Organization,
+			},
+		}
+	case "aws":
+		return cloud.Scope{
+			Provider: "aws",
+			AWS: &cloud.AWSScope{
+				Account:            c.Account,
+				OrganizationalUnit: c.OrganizationalUnit,
+				Organization:       c.AWSOrganization,
+			},
+		}
+	}
+	return cloud.Scope{Provider: c.Provider}
 }
 
 // Offline reports whether the scan can run without cloud credentials.
@@ -103,10 +149,14 @@ func (c Scan) Offline() bool { return c.CacheFile != "" || len(c.Fixture) > 0 }
 // Validate applies environment fallbacks and enforces every invariant the
 // pipeline downstream is allowed to assume.
 func (c *Scan) Validate() error {
-	if c.Provider == "" {
-		c.Provider = "gcp"
+	// Provider resolution happens first: the scope flags (and, failing them,
+	// the scope environment variables) can name the provider, and a scan that
+	// mixes one provider's scope flags with another's must fail here — before
+	// any rule selection, any directory creation, any cloud client.
+	if err := c.resolveProvider(); err != nil {
+		return err
 	}
-	if c.Provider != "gcp" {
+	if c.Provider != "gcp" && c.Provider != "aws" {
 		return cloud.UnknownProviderError(c.Provider)
 	}
 
@@ -118,9 +168,18 @@ func (c *Scan) Validate() error {
 		return fmt.Errorf("invalid --progress %q (want auto|on|off)", c.Progress)
 	}
 
-	c.Project = resolveScope(c.Provider, scopeProject, c.Project)
-	c.Folder = resolveScope(c.Provider, scopeFolder, c.Folder)
-	c.Organization = resolveScope(c.Provider, scopeOrganization, c.Organization)
+	// Scope environment fallbacks, resolved only for the selected provider: a
+	// scope belonging to a different provider is never consulted.
+	switch c.Provider {
+	case "gcp":
+		c.Project = resolveScope(c.Provider, scopeProject, c.Project)
+		c.Folder = resolveScope(c.Provider, scopeFolder, c.Folder)
+		c.Organization = resolveScope(c.Provider, scopeOrganization, c.Organization)
+	case "aws":
+		c.Account = resolveScope(c.Provider, scopeAccount, c.Account)
+		c.OrganizationalUnit = resolveScope(c.Provider, scopeOrganizationalUnit, c.OrganizationalUnit)
+		c.AWSOrganization = resolveScope(c.Provider, scopeOrganization, c.AWSOrganization)
+	}
 
 	// A cache file or fixture already names its own scope; a live scan does not.
 	if err := c.Scope().Validate(); err != nil {
@@ -172,6 +231,121 @@ func (c *Scan) Validate() error {
 	c.Rules = cleanList(c.Rules)
 	c.SkipRules = cleanList(c.SkipRules)
 	return nil
+}
+
+// resolveProvider settles which provider a scan targets, and rejects the
+// two-provider ambiguity as a usage error before any work is done. Precedence:
+//
+//  1. An explicit --provider value (non-empty) is authoritative. Scope flags
+//     belonging to the OTHER provider are then a hard conflict.
+//  2. Otherwise the scope FLAGS infer the provider: any --gcp-* flag set
+//     means gcp, any --aws-* flag set means aws, both means a conflict.
+//  3. Otherwise the scope ENVIRONMENT variables infer the provider, with the
+//     same logic (TELLURY_GCP_* vs TELLURY_AWS_*).
+//  4. Otherwise the historical default: gcp.
+//
+// Mixed evidence is never guessed at. An explicit flag always wins over a
+// passive environment variable, so an operator whose shell carries
+// TELLURY_GCP_PROJECT can still run `tellury scan --aws-account 123` — the
+// AWS flag selects AWS, and the unrelated GCP variable is never consulted.
+func (c *Scan) resolveProvider() error {
+	if c.Provider != "" {
+		other := otherProvider(c.Provider)
+		if other != "" && c.providerFlagsSet(other) {
+			return providerConflictError(c.Provider, other)
+		}
+		return nil
+	}
+
+	gcpFlags := c.providerFlagsSet("gcp")
+	awsFlags := c.providerFlagsSet("aws")
+	switch {
+	case gcpFlags && awsFlags:
+		return providerConflictError("gcp", "aws")
+	case gcpFlags:
+		c.Provider = "gcp"
+		return nil
+	case awsFlags:
+		c.Provider = "aws"
+		return nil
+	}
+
+	gcpEnv := c.providerEnvSet("gcp")
+	awsEnv := c.providerEnvSet("aws")
+	switch {
+	case gcpEnv && awsEnv:
+		return providerConflictError("gcp", "aws")
+	case gcpEnv:
+		c.Provider = "gcp"
+		return nil
+	case awsEnv:
+		c.Provider = "aws"
+		return nil
+	}
+
+	c.Provider = "gcp"
+	return nil
+}
+
+// otherProvider returns the other of the two supported providers, or "" when
+// provider is not one of them (so an unknown explicit provider is never given
+// a conflict check it has no meaningful counterpart for).
+func otherProvider(provider string) string {
+	switch provider {
+	case "gcp":
+		return "aws"
+	case "aws":
+		return "gcp"
+	}
+	return ""
+}
+
+// providerFlagsSet reports whether any of the provider's scope dimensions
+// carries a non-empty FLAG value on the config struct. Environment variables
+// are deliberately not consulted here: they are the lower inference tier and
+// must never be contradicted by a flag from the other provider.
+func (c *Scan) providerFlagsSet(provider string) bool {
+	switch provider {
+	case "gcp":
+		return c.Project != "" || c.Folder != "" || c.Organization != ""
+	case "aws":
+		return c.Account != "" || c.OrganizationalUnit != "" || c.AWSOrganization != ""
+	}
+	return false
+}
+
+// providerEnvSet reports whether any of the provider's declared scope
+// environment variables is set. It resolves the variable names from the
+// registry, keyed by provider, so one cloud's variables can never be
+// misread as another's.
+func (c *Scan) providerEnvSet(provider string) bool {
+	for _, sv := range cloud.ScopesFor(provider) {
+		if os.Getenv(sv.EnvVar) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// providerConflictError renders the two-provider usage error. It names both
+// providers' scope flag groups — resolved from the registry, never a literal
+// GCP-shaped list — and tells the operator to pick one provider.
+func providerConflictError(providerA, providerB string) error {
+	return fmt.Errorf("both %s and %s scope flags are set (%s and %s); pick one provider",
+		strings.ToUpper(providerA), strings.ToUpper(providerB),
+		scopeFlagList(providerA), scopeFlagList(providerB))
+}
+
+// scopeFlagList renders the "--flag/--flag/--flag" group a provider declares
+// for its scope dimensions, resolved from the registry and sorted by
+// dimension name for determinism.
+func scopeFlagList(provider string) string {
+	scopes := cloud.ScopesFor(provider)
+	names := make([]string, 0, len(scopes))
+	for _, sv := range scopes {
+		names = append(names, "--"+sv.Flag)
+	}
+	return strings.Join(names, "/")
 }
 
 // resolveProgress applies the flag-beats-environment convention to the
@@ -231,14 +405,26 @@ func validCurrencyCode(code string) bool {
 }
 
 // scopeHint renders the flag/env pair the provider publishes for its first
-// scope dimension, so an error message tells the operator what to actually
-// type. It resolves the names from the registry rather than guessing.
+// usable scope dimension, so an error message tells the operator what to
+// actually type. It prefers the "project" dimension — the historical GCP hint
+// — and falls back to the provider's first declared dimension for a provider
+// without one (AWS resolves to --aws-account or TELLURY_AWS_ACCOUNT). Names
+// come from the registry, never a literal list.
 func scopeHint(provider string) string {
-	hint := "--" + "?"
-	if flag, ok := cloud.ScopeFlag(provider, scopeProject); ok {
-		hint = "--" + flag
+	name := scopeProject
+	if _, ok := cloud.ScopeFlag(provider, scopeProject); !ok {
+		scopes := cloud.ScopesFor(provider)
+		if len(scopes) == 0 {
+			return "--" + "?"
+		}
+		name = scopes[0].Name
 	}
-	if envVar, ok := cloud.ScopeEnvVar(provider, scopeProject); ok {
+	flag, ok := cloud.ScopeFlag(provider, name)
+	if !ok {
+		return "--" + "?"
+	}
+	hint := "--" + flag
+	if envVar, ok := cloud.ScopeEnvVar(provider, name); ok {
 		hint += " or " + envVar
 	}
 	return hint

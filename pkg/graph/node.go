@@ -27,13 +27,15 @@ const (
 	// targets and never appear as findings (see Node.Container and
 	// Graph.ResourceNodeCount).
 	KindProject      ResourceKind = "project"
+	KindAccount      ResourceKind = "account"
 	KindFolder       ResourceKind = "folder"
 	KindOrganization ResourceKind = "organization"
-	// KindRegion is the location tier of the hierarchy: a per-project
-	// container node ("projects/<id>/regions/<location>") that sits between a
-	// resource and its project. A rollup walks
-	// resource -> region -> project -> folder -> organization. Region nodes
-	// are containers, never billable leaves — no rule ever sees one and
+	// KindRegion is the location tier of the hierarchy: a per-project (or
+	// per-account, for AWS) container node ("projects/<id>/regions/<location>"
+	// / "accounts/<id>/regions/<region>") that sits between a resource and
+	// its project/account. A rollup walks
+	// resource -> region -> project|account -> folder -> organization. Region
+	// nodes are containers, never billable leaves — no rule ever sees one and
 	// ResourceNodeCount never counts one.
 	KindRegion  ResourceKind = "region"
 	KindUnknown ResourceKind = "unknown"
@@ -92,10 +94,10 @@ type Node struct {
 }
 
 // Container reports whether the node is resource-hierarchy scaffolding rather
-// than a billable leaf resource. Organization, folder, project and region
-// nodes are containers. They are added during ingestion so a finding can be
-// attributed to a folder or rolled up across projects, but they must never be
-// evaluated by a rule and never appear as a finding.
+// than a billable leaf resource. Organization, folder, project, account and
+// region nodes are containers. They are added during ingestion so a finding
+// can be attributed to a folder or rolled up across projects, but they must
+// never be evaluated by a rule and never appear as a finding.
 //
 // This exclusion is structural, not per-rule: every rule enters the graph
 // through Graph.ByKind with a leaf ResourceKind, and a container node's Kind
@@ -106,7 +108,7 @@ type Node struct {
 // inherit every one of these guarantees from this single switch.
 func (n *Node) Container() bool {
 	switch n.Kind {
-	case KindOrganization, KindFolder, KindProject, KindRegion:
+	case KindOrganization, KindFolder, KindProject, KindAccount, KindRegion:
 		return true
 	}
 	return false
