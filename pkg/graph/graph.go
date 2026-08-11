@@ -25,6 +25,12 @@ import (
 //     view of Metrics must wait until enrichment has finished
 //     (i.e. synchronize with the enrichment goroutines themselves; Freeze
 //     provides no such signal).
+//
+// The one deliberate exception to the immutability-after-Freeze rule is
+// Unfreeze, which exists for a single caller: provider-side snapshot
+// migration (gcp.Provider.MigrateV2ToV3). It reopens a freshly deserialized
+// graph so region container nodes and edges can be added, and the migration
+// re-freezes it before the graph is shared with any other code.
 type Graph struct {
 	nodes  map[Ref]*Node
 	out    map[Ref][]Edge
@@ -145,14 +151,26 @@ func (g *Graph) Freeze() {
 	g.frozen = true
 }
 
+// Unfreeze reopens a frozen graph for mutation. It exists for exactly one
+// caller: provider-side snapshot migration (gcp.Provider.MigrateV2ToV3),
+// which must add region container nodes and edges to a graph freshly
+// deserialized by LoadSnapshot. The graph must not be shared with concurrent
+// readers across Unfreeze — the migration is a single-threaded reconstruction
+// pass that runs before the graph is handed to rules, enrichment or a
+// renderer — and the migration re-seals the graph with Freeze() before it
+// returns.
+func (g *Graph) Unfreeze() { g.frozen = false }
+
 func (g *Graph) Frozen() bool       { return g.frozen }
 func (g *Graph) NodeCount() int     { return len(g.nodes) }
 func (g *Graph) DanglingEdges() int { return g.dangling }
 
 // ResourceNodeCount is the count of leaf (non-container) nodes. Container
-// nodes — organization, folder, project — are hierarchy scaffolding that must
-// not inflate an operator's reading of "N resources", so the scan report uses
-// this count, not NodeCount().
+// nodes — organization, folder, project, region — are hierarchy scaffolding
+// that must not inflate an operator's reading of "N resources", so the scan
+// report uses this count, not NodeCount(). Region nodes are containers, so a
+// graph with region nodes reports the same "N resources" figure a graph
+// without them does.
 func (g *Graph) ResourceNodeCount() int {
 	n := 0
 	g.Nodes(func(node *Node) bool {

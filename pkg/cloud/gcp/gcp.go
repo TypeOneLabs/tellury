@@ -193,11 +193,11 @@ func (p *Provider) Close() error {
 // The graph leaves hold exactly the resources normalization recognizes; the
 // SearchAllResources result's hierarchy fields (project / folders /
 // organization) are turned into container nodes (KindProject / KindFolder /
-// KindOrganization) plus containment edges, so a finding can be attributed to
-// a folder or rolled up beyond a single project. Containers are not waste and
-// never reach rule evaluation (they are structurally excluded by
-// graph.ByKind) and never inflate the scan's "N resources" count
-// (graph.ResourceNodeCount).
+// KindOrganization) plus containment edges, and every leaf's canonical
+// location is turned into a per-project region container node between the
+// leaf and its project (KindRegion). Containers are not waste and never reach
+// rule evaluation (they are structurally excluded by graph.ByKind) and never
+// inflate the scan's "N resources" count (graph.ResourceNodeCount).
 //
 // The scope is validated (exactly one of project/folder/organization) ONLY on
 // the live path. An offline provider (built with WithOffline for a --fixture
@@ -377,4 +377,140 @@ func distinctProjects(g *graph.Graph) []string {
 		return true
 	})
 	return out
+}
+
+// MigrateV2ToV3 adds the region container tier to a graph deserialized from a
+// v2 snapshot. v2 snapshots predate KindRegion and carry no region nodes or
+// region edges; every leaf's Location field (canonicalised at normalization
+// time through the single pricing.CanonicalRegion wrapper) carries enough data
+// to reconstruct the tier exactly, so a cached v2 scan is replayed rather than
+// rejected. The report that comes out of the migrated graph is identical to a
+// fresh v3 scan of the same data — same region nodes, same region edges, same
+// rollup.
+//
+// The migration is additive: the resource -> project containment edge a v2
+// snapshot already carries stays, and only the two missing edges (resource ->
+// region, region -> project) are added. The result therefore has one more
+// contains path (resource -> project directly) than a fresh v3 ingestion,
+// which changes no reachability and no operator-facing number — walking out
+// from a resource still reaches its region, then its project, then its
+// folder(s), then its org.
+//
+// It is idempotent: a graph that already carries any KindRegion node (a v3
+// snapshot loaded directly) is returned untouched.
+//
+// The graph must be freshly deserialized (graph.LoadSnapshot) and not yet
+// shared with concurrent readers: the method unfreezes it to add nodes and
+// edges and re-freezes it before returning.
+func (p *Provider) MigrateV2ToV3(g *graph.Graph) error {
+	if g == nil {
+		return fmt.Errorf("gcp: migrate v2->v3: nil graph")
+	}
+
+	// Idempotency gate: region nodes already present means a v3 snapshot.
+	hasRegion := false
+	g.Nodes(func(n *graph.Node) bool {
+		if n.Kind == graph.KindRegion {
+			hasRegion = true
+			return false
+		}
+		return true
+	})
+	if hasRegion {
+		return nil
+	}
+
+	// Collect the leaves first: the iteration must not be disturbed by the
+	// nodes we are about to add.
+	var leaves []*graph.Node
+	g.Nodes(func(n *graph.Node) bool {
+		if !n.Container() {
+			leaves = append(leaves, n)
+		}
+		return true
+	})
+	if len(leaves) == 0 {
+		return nil
+	}
+
+	g.Unfreeze()
+	// Edge de-duplication: several leaves of one project can share a location
+	// (two disks in us-central1-a), and each would independently emit the same
+	// region -> project edge. The live ingest path de-dupes its edges through
+	// a set before AddEdge (see Ingest); the migration must do the same, or a
+	// replayed v2 scan carries a duplicated containment edge that the fresh v3
+	// scan does not.
+	addedEdges := map[graph.Edge]struct{}{}
+	emit := func(e graph.Edge) error {
+		if _, ok := addedEdges[e]; ok {
+			return nil
+		}
+		addedEdges[e] = struct{}{}
+		return g.AddEdge(e)
+	}
+	for _, leaf := range leaves {
+		loc := locationRegion(leaf.Location)
+		if loc == "" {
+			continue
+		}
+		// Rewrite the leaf's own Location too, not just the region node built
+		// from it. A v2 snapshot stores whatever spelling the service returned
+		// — Cloud Storage says "EUROPE-WEST4" and "US" where Compute says
+		// "europe-west4" and "us" — and a finding copies Location verbatim.
+		// Migrating the region node but leaving the leaf raw would put a
+		// replayed snapshot and a fresh scan of the same bucket in two
+		// different rows of the waste-by-region chart, for one real region.
+		// Money is unaffected either way (pricing re-canonicalises), which is
+		// exactly why this would go unnoticed.
+		leaf.Location = loc
+
+		// Resolve the owning project CONTAINER token from the v2 leaf ->
+		// project containment edge — the same token fresh ingestion derives
+		// from RawAsset.Project. For a GCS bucket the leaf.Project field is
+		// the parent project NUMBER while the container node is
+		// "projects/<id>"; only the containment edge knows the real token, so
+		// the region node must hang off that edge's endpoint or the chain
+		// would never reach the project container. The "projects/<id>" form
+		// is the defensive fallback for a leaf whose edge was pruned.
+		projectToken, projectID := "", ""
+		for _, e := range g.Out(leaf.ID) {
+			if e.Kind != graph.EdgeContains {
+				continue
+			}
+			if pn, ok := g.Node(e.To); ok && pn.Kind == graph.KindProject {
+				projectToken = string(e.To)
+				projectID = pn.Project
+				break
+			}
+		}
+		if projectToken == "" && leaf.Project != "" {
+			tok := graph.Ref("projects/" + leaf.Project)
+			if pn, ok := g.Node(tok); ok && pn.Kind == graph.KindProject {
+				projectToken = string(tok)
+				projectID = pn.Project
+			}
+		}
+		if projectToken == "" {
+			continue
+		}
+		if projectID == "" {
+			projectID = leaf.Project
+		}
+
+		rn := regionNode(projectToken, projectID, loc)
+		if err := g.AddNode(rn); err != nil {
+			return fmt.Errorf("gcp: migrate v2->v3: add region node: %w", err)
+		}
+		if err := emit(graph.Edge{From: leaf.ID, To: rn.ID, Kind: graph.EdgeContains}); err != nil {
+			return fmt.Errorf("gcp: migrate v2->v3: add leaf->region edge: %w", err)
+		}
+		if err := emit(graph.Edge{From: rn.ID, To: graph.Ref(projectToken), Kind: graph.EdgeContains}); err != nil {
+			return fmt.Errorf("gcp: migrate v2->v3: add region->project edge: %w", err)
+		}
+	}
+	g.Freeze()
+
+	p.log.Info("reconstructed region containers from v2 snapshot",
+		"region_nodes", g.CountByKind(graph.KindRegion))
+	return nil
 }

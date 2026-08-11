@@ -7,6 +7,91 @@ import (
 	"github.com/TypeOneLabs/tellury/pkg/graph"
 )
 
+// TestLocationRegion_LocationNodeWrapper pins the second caller of the single
+// canonicaliser: the graph location node. Unlike RegionOf it keeps the empty
+// input empty — a locationless asset has no region to claim — and delegates
+// every non-empty location straight to pricing.CanonicalRegion, so the graph
+// node and the price can never disagree about where a resource lives.
+func TestLocationRegion_LocationNodeWrapper(t *testing.T) {
+	if got := locationRegion(""); got != "" {
+		t.Errorf("locationRegion(\"\") = %q, want \"\" (a location node keeps empty empty)", got)
+	}
+	if got := locationRegion("us-central1-a"); got != "us-central1" {
+		t.Errorf("locationRegion(\"us-central1-a\") = %q, want \"us-central1\" (GCP zone flattened)", got)
+	}
+	if got := locationRegion("US"); got != "us" {
+		t.Errorf("locationRegion(\"US\") = %q, want \"us\" (multi-region lowercased)", got)
+	}
+	if got := locationRegion("us-east-1"); got != "us-east-1" {
+		t.Errorf("locationRegion(\"us-east-1\") = %q, want \"us-east-1\" (AWS region kept)", got)
+	}
+}
+
+// TestNormalizeDisk_LocationIsCanonicalRegion asserts that the graph node's
+// Location is set through the single canonicaliser, not stored raw: a disk in
+// zone "us-central1-a" carries Location "us-central1", the same region token
+// the pricer resolves. This is what makes the location node a real caller of
+// CanonicalRegion rather than a second, drift-prone answer.
+func TestNormalizeDisk_LocationIsCanonicalRegion(t *testing.T) {
+	a := &RawAsset{
+		Name:      "//compute.googleapis.com/projects/p/zones/us-central1-a/disks/d1",
+		AssetType: TypeDisk,
+		Resource: &RawResource{
+			Version:  "v1",
+			Parent:   "//cloudresourcemanager.googleapis.com/projects/p",
+			Location: "us-central1-a",
+			Data: json.RawMessage(`{
+				"name": "d1",
+				"sizeGb": 100,
+				"zone": "projects/p/zones/us-central1-a"
+			}`),
+		},
+	}
+
+	n, err := Normalize(a, nil)
+	if err != nil {
+		t.Fatalf("Normalize(disk): %v", err)
+	}
+	if n == nil {
+		t.Fatalf("Normalize(disk) returned nil")
+	}
+	if n.Location != "us-central1" {
+		t.Errorf("node Location = %q, want the canonical region \"us-central1\" (raw zone must be flattened)", n.Location)
+	}
+}
+
+// TestNormalizeBucket_LocationLowercased asserts the GCS bucket normalizer also
+// routes its location through the canonicaliser: a multi-region bucket whose
+// payload says "US" resolves to the same lowercase token ("us") the pricer
+// uses, never the raw uppercase spelling.
+func TestNormalizeBucket_LocationLowercased(t *testing.T) {
+	a := &RawAsset{
+		Name:      "//storage.googleapis.com/alpha-data",
+		AssetType: TypeBucket,
+		Resource: &RawResource{
+			Version:  "v1",
+			Location: "US",
+			Data: json.RawMessage(`{
+				"name": "alpha-data",
+				"storageClass": "STANDARD",
+				"location": "US",
+				"locationType": "multi-region"
+			}`),
+		},
+	}
+
+	n, err := Normalize(a, nil)
+	if err != nil {
+		t.Fatalf("Normalize(bucket): %v", err)
+	}
+	if n == nil {
+		t.Fatalf("Normalize(bucket) returned nil")
+	}
+	if n.Location != "us" {
+		t.Errorf("node Location = %q, want the canonical lowercase \"us\"", n.Location)
+	}
+}
+
 // TestNormalizeBucket_ProjectFromParentFallback is the regression test for the
 // "empty project on GCS buckets" bug. Real CAI output names a GCS bucket
 // WITHOUT any "projects/" segment:

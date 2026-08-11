@@ -29,7 +29,14 @@ const (
 	KindProject      ResourceKind = "project"
 	KindFolder       ResourceKind = "folder"
 	KindOrganization ResourceKind = "organization"
-	KindUnknown      ResourceKind = "unknown"
+	// KindRegion is the location tier of the hierarchy: a per-project
+	// container node ("projects/<id>/regions/<location>") that sits between a
+	// resource and its project. A rollup walks
+	// resource -> region -> project -> folder -> organization. Region nodes
+	// are containers, never billable leaves — no rule ever sees one and
+	// ResourceNodeCount never counts one.
+	KindRegion  ResourceKind = "region"
+	KindUnknown ResourceKind = "unknown"
 )
 
 // Ref is a stable, globally unique node identity. For GCP we use the Cloud
@@ -85,20 +92,21 @@ type Node struct {
 }
 
 // Container reports whether the node is resource-hierarchy scaffolding rather
-// than a billable leaf resource. Organization, folder and project nodes are
-// containers. They are added during ingestion so a finding can be attributed
-// to a folder or rolled up across projects, but they must never be evaluated
-// by a rule and never appear as a finding.
+// than a billable leaf resource. Organization, folder, project and region
+// nodes are containers. They are added during ingestion so a finding can be
+// attributed to a folder or rolled up across projects, but they must never be
+// evaluated by a rule and never appear as a finding.
 //
 // This exclusion is structural, not per-rule: every rule enters the graph
 // through Graph.ByKind with a leaf ResourceKind, and a container node's Kind
 // is always one of the container kinds, so a rule can never be handed a
 // container node regardless of which leaf kinds it iterates. The scan
 // report's "N resources" count uses Graph.ResourceNodeCount, which excludes
-// containers, so containers never inflate that figure either.
+// containers, so containers never inflate that figure either. Region nodes
+// inherit every one of these guarantees from this single switch.
 func (n *Node) Container() bool {
 	switch n.Kind {
-	case KindOrganization, KindFolder, KindProject:
+	case KindOrganization, KindFolder, KindProject, KindRegion:
 		return true
 	}
 	return false

@@ -39,6 +39,18 @@ func Normalize(a *RawAsset, sz pricing.Sizer) (*graph.Node, error) {
 // Shared scaffolding
 // ─────────────────────────────────────────────────────────────────────────────
 
+// locationRegion is the location node's answer to "what place is this". It is
+// a thin wrapper over the single pricing.CanonicalRegion canonicaliser — NOT a
+// second implementation — so the graph node and the price resolve a location
+// through the same code path and can never disagree about where a resource
+// lives (a SKU-token drift once shipped exactly that disagreement silently for
+// two releases). The only difference from RegionOf is the empty input: a
+// locationless asset has no region to claim, so "" stays "" here, where
+// pricing keys it as "default".
+func locationRegion(location string) string {
+	return pricing.CanonicalRegion(location)
+}
+
 func baseNode(a *RawAsset, kind graph.ResourceKind, service string) *graph.Node {
 	return &graph.Node{
 		ID:        graph.Ref(a.Name),
@@ -48,7 +60,7 @@ func baseNode(a *RawAsset, kind graph.ResourceKind, service string) *graph.Node 
 		Service:   service,
 		AssetType: a.AssetType,
 		Project:   projectOf(a),
-		Location:  a.Location(),
+		Location:  locationRegion(a.Location()),
 		Attrs:     make(map[string]any, 12),
 		Raw:       a.Data(),
 	}
@@ -183,16 +195,19 @@ func labelsOf(data map[string]any) map[string]string {
 }
 
 // locationOf prefers the resource's own zone/region field and falls back to the
-// authoritative CAI envelope location when parsing fails.
+// authoritative CAI envelope location when parsing fails. Whichever source
+// wins, the result is canonicalised through the single locationRegion wrapper
+// (pricing.CanonicalRegion) so the node's Location is always the same region
+// token the pricer resolves.
 func locationOf(data map[string]any, envelope string) string {
 	for _, key := range []string{"zone", "region"} {
 		if s, ok := strOf(data[key]); ok && s != "" {
 			if seg := lastSegment(s); seg != "" {
-				return seg
+				return locationRegion(seg)
 			}
 		}
 	}
-	return envelope
+	return locationRegion(envelope)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -486,7 +501,7 @@ func normalizeBucket(a *RawAsset, _ pricing.Sizer) (*graph.Node, error) {
 		n.Name = name
 	}
 	if loc, ok := strOf(data["location"]); ok && loc != "" {
-		n.Location = loc
+		n.Location = locationRegion(loc)
 	}
 
 	// bucket_name is the join key to Monitoring resource.labels.bucket_name.

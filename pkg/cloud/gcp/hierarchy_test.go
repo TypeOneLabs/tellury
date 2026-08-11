@@ -26,6 +26,11 @@ import (
 //	└── (folder folders/3030, a second folder directly under the org)
 //	    └── project projects/alpha shares folders/3030 too
 //
+// Locations: web-0 and pd-0 are in zone us-central1-a (region us-central1);
+// both buckets are in the US multi-region (canonical "us"). So the region tier
+// adds projects/alpha/regions/us-central1, projects/alpha/regions/us and
+// projects/beta/regions/us.
+//
 // Every resource's hierarchy fields come straight from the search result:
 // no Cloud Resource Manager call is involved.
 func hierarchyFixture() *FakeLister {
@@ -123,10 +128,12 @@ func ingestHierarchyFixture(t *testing.T) (*graph.Graph, *Provider) {
 // the resource-hierarchy feature. It ingests a multi-project fixture whose
 // assets carry project/folders/organization hierarchy fields and asserts:
 //
-//   - container nodes exist for the organization, both folders and both
-//     projects, and only those (no duplicate container per token);
-//   - the containment edges link each resource to its project, each project
-//     to its folder(s), and each folder to the organization;
+//   - container nodes exist for the organization, both folders, both
+//     projects and the three region nodes (and only those — no duplicate
+//     container per token);
+//   - the containment edges link each resource to its region, each region to
+//     its project, each project to its folder(s), and each folder to the
+//     organization;
 //   - the "N resources" scan count excludes containers;
 //   - no container node reaches rule evaluation.
 func TestHierarchy_BuiltFromSearchResultFields(t *testing.T) {
@@ -144,6 +151,11 @@ func TestHierarchy_BuiltFromSearchResultFields(t *testing.T) {
 		{"folders/3030", graph.KindFolder},
 		{"projects/alpha", graph.KindProject},
 		{"projects/beta", graph.KindProject},
+		// Region tier: web-0 and pd-0 flatten from zone us-central1-a to
+		// region us-central1; both buckets are the US multi-region ("us").
+		{"projects/alpha/regions/us-central1", graph.KindRegion},
+		{"projects/alpha/regions/us", graph.KindRegion},
+		{"projects/beta/regions/us", graph.KindRegion},
 	}
 	for _, w := range wantContainers {
 		n, ok := gr.Node(w.id)
@@ -161,15 +173,20 @@ func TestHierarchy_BuiltFromSearchResultFields(t *testing.T) {
 
 	// 2. Containment edges. Direction is "contained -> container"
 	// ("dependent -> dependency"), the same convention as every other edge:
-	// out from a resource reaches its project; out from a project reaches
-	// its folder; out from a folder reaches the org. Assert the exact set.
+	// out from a resource reaches its region; out from a region reaches its
+	// project; out from a project reaches its folder; out from a folder
+	// reaches the org. Assert the exact set.
 	type edgeTriple struct{ from, to graph.Ref }
 	wantEdges := []edgeTriple{
-		// resource -> project
-		{"//compute.googleapis.com/projects/alpha/zones/us-central1-a/instances/web-0", "projects/alpha"},
-		{"//compute.googleapis.com/projects/alpha/zones/us-central1-a/disks/pd-0", "projects/alpha"},
-		{"//storage.googleapis.com/alpha-data", "projects/alpha"},
-		{"//storage.googleapis.com/beta-data", "projects/beta"},
+		// resource -> region
+		{"//compute.googleapis.com/projects/alpha/zones/us-central1-a/instances/web-0", "projects/alpha/regions/us-central1"},
+		{"//compute.googleapis.com/projects/alpha/zones/us-central1-a/disks/pd-0", "projects/alpha/regions/us-central1"},
+		{"//storage.googleapis.com/alpha-data", "projects/alpha/regions/us"},
+		{"//storage.googleapis.com/beta-data", "projects/beta/regions/us"},
+		// region -> project
+		{"projects/alpha/regions/us-central1", "projects/alpha"},
+		{"projects/alpha/regions/us", "projects/alpha"},
+		{"projects/beta/regions/us", "projects/beta"},
 		// project -> folder
 		{"projects/alpha", "folders/2020"},
 		{"projects/alpha", "folders/3030"},
@@ -192,19 +209,34 @@ func TestHierarchy_BuiltFromSearchResultFields(t *testing.T) {
 			t.Errorf("missing contains edge %s -> %s", w.from, w.to)
 		}
 	}
+	// The leaf -> project edge of the pre-region tier must be GONE: it is
+	// replaced by leaf -> region plus region -> project, so the chain stays
+	// linear.
+	for _, leaf := range []graph.Ref{
+		"//compute.googleapis.com/projects/alpha/zones/us-central1-a/instances/web-0",
+		"//storage.googleapis.com/alpha-data",
+	} {
+		if haveEdges[edgeTriple{leaf, "projects/alpha"}] {
+			t.Errorf("contains edge %s -> projects/alpha must NOT exist (replaced by leaf -> region -> project)", leaf)
+		}
+	}
 
 	// 3. Rollup: from any resource, walking out along contains reaches the
-	// organization. This is the property the feature exists to provide.
+	// organization through the region tier. This is the property the feature
+	// exists to provide.
 	assertReachesOrg(t, gr, "//storage.googleapis.com/beta-data", "organizations/1010")
 	assertReachesOrg(t, gr, "//compute.googleapis.com/projects/alpha/zones/us-central1-a/instances/web-0", "organizations/1010")
+	// And the region node itself sits on the walk.
+	assertReachesOrg(t, gr, "//compute.googleapis.com/projects/alpha/zones/us-central1-a/instances/web-0", "projects/alpha/regions/us-central1")
 
 	// 4. The scan counts real resources only: 4 leaf resources, and the
-	// container nodes do not inflate the count.
+	// container nodes — including the three region nodes — do not inflate the
+	// count.
 	if got := gr.ResourceNodeCount(); got != 4 {
 		t.Errorf("ResourceNodeCount = %d, want 4 (containers must not inflate the count)", got)
 	}
-	if gr.NodeCount() != 4+len(wantContainers) {
-		t.Errorf("NodeCount = %d, want %d = 4 leaves + %d containers", gr.NodeCount(), 4+len(wantContainers), len(wantContainers))
+	if got, want := gr.NodeCount(), 4+len(wantContainers); got != want {
+		t.Errorf("NodeCount = %d, want %d = 4 leaves + %d containers (incl. regions)", got, want, len(wantContainers))
 	}
 
 	// 5. No container node reaches rule evaluation.
@@ -253,7 +285,8 @@ func unmodeledHierarchyFixture() *FakeLister {
 // container nodes even when Normalize returned nil for an unmapped asset type.
 // A project whose only assets are unmodelled types must produce NO container
 // nodes: container nodes only make sense when they have a normalized leaf
-// resource beneath them.
+// resource beneath them. This is also Fixture R6 — the region builder must
+// skip when leaf == nil, so an unmapped asset produces zero region nodes too.
 func TestHierarchy_UnmappedAssetTypeBuildsNoContainers(t *testing.T) {
 	lister := unmodeledHierarchyFixture()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -279,12 +312,13 @@ func TestHierarchy_UnmappedAssetTypeBuildsNoContainers(t *testing.T) {
 		t.Fatalf("ResourceNodeCount = %d, want 0: the unmapped asset must normalize to nil", gr.ResourceNodeCount())
 	}
 
-	// No container nodes anywhere: the project, folder and organization must
-	// NOT exist because no normalized leaf hangs beneath them.
+	// No container nodes anywhere: the project, folder, organization AND
+	// region must NOT exist because no normalized leaf hangs beneath them.
 	for _, token := range []graph.Ref{
 		"projects/alpha",
 		"folders/2020",
 		"organizations/1010",
+		"projects/alpha/regions/us-central1",
 	} {
 		if n, ok := gr.Node(token); ok {
 			t.Errorf("container node %s (%s) must NOT exist for an unmapped asset type", token, n.Kind)

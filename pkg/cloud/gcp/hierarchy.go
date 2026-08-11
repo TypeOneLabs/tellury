@@ -15,16 +15,17 @@ import (
 //
 // Containment edge convention (following pkg/graph):
 //
-//	resource  --contains-->  project      (the resource's owning project)
-//	project   --contains-->  folder       (each folder that contains the project)
+//	resource  --contains-->  region    (the leaf's canonical location tier)
+//	region    --contains-->  project   (the project that owns the region)
+//	project   --contains-->  folder    (each folder that contains the project)
 //	folder    --contains-->  organization (the folder's owning organization)
 //
 // Direction is the same "dependent -> dependency" convention as every other
 // edge in the graph: the contained resource points at the node that owns it,
-// so walking out from a resource reaches its project, folder(s), then
-// organization, and walking in from an organization reaches everything under
-// it. EdgeContains is a single shared kind; a project directly contains a
-// resource and a folder directly contains a project both use it.
+// so walking out from a resource reaches its region, then its project,
+// folder(s), then organization, and walking in from an organization reaches
+// everything under it. EdgeContains is a single shared kind; a region directly
+// contains a resource and a project directly contains a region both use it.
 
 // hierarchyNode builds a container node for one level of the hierarchy. The
 // node ID is the qualified CAI-style token ("projects/<id>", "folders/<n>",
@@ -44,6 +45,30 @@ func hierarchyNode(kind graph.ResourceKind, token, projectID string) *graph.Node
 		Project: projectID,
 		Service: "cloudresourcemanager",
 		Attrs:   map[string]any{},
+	}
+}
+
+// regionNode builds the region container node for one (project, location)
+// pair. The node ID is scoped to the project ("projects/<id>/regions/
+// <location>") so two projects sharing a location never collide and the
+// containment chain stays linear: a node can only have one out-edge of a
+// given kind, and a project-global "us-central1" node would have to point at
+// whichever project claimed it first. The Name field is the canonical
+// location string, which is what a cross-project rollup groups on, and the
+// Project field carries the owning project ID so the node is attributable.
+//
+// canonicalLocation is ALREADY canonicalised (normalize.go routes every
+// node's Location through the single pricing.CanonicalRegion wrapper); this
+// function never canonicalises again.
+func regionNode(projectToken, projectID, canonicalLocation string) *graph.Node {
+	return &graph.Node{
+		ID:       graph.Ref(projectToken + "/regions/" + canonicalLocation),
+		Kind:     graph.KindRegion,
+		Name:     canonicalLocation,
+		Provider: "gcp",
+		Project:  projectID,
+		Service:  "cloudresourcemanager",
+		Attrs:    map[string]any{},
 	}
 }
 
@@ -67,23 +92,32 @@ func ParseHierarchyToken(token string) (kind string, name string) {
 }
 
 // buildHierarchy is called once per ingested leaf asset. It owns the
-// project/folder/organization container nodes that asset is contained in and
-// emits the containment edges from that asset up to the organization.
+// region/project/folder/organization container nodes that asset is contained
+// in and emits the containment edges from that asset up to the organization.
 //
 // Container nodes are only ever created for a project that actually has a
 // normalized leaf. When leaf is nil (Normalize returned nil for an unmapped
 // asset type) the whole hierarchy pass is skipped: a project whose only
 // assets are unmodelled types must not end up with container nodes and no
 // resources under them. The containment edges all hinge on the leaf on one
-// end (resource -> project) or on the project that only exists because of it
-// (project -> folder, folder -> organization), so no leaf means no containers
-// and no edges.
+// end (resource -> region) or on the project that only exists because of it
+// (region -> project, project -> folder, folder -> organization), so no leaf
+// means no containers and no edges.
 //
 // Edge set, in order (all EdgeContains):
-//   - asset --contains--> its project (from RawAsset.Project, "projects/<N>")
+//   - asset --contains--> its region node ("projects/<N>/regions/<location>")
+//     when the leaf carries a location; a locationless leaf keeps the direct
+//     asset --contains--> project edge below instead
+//   - region --contains--> its project (from RawAsset.Project, "projects/<N>")
 //   - project --contains--> each of RawAsset.Folders (each "folders/<N>")
 //   - each folder --contains--> the organization (RawAsset.Organization,
 //     "organizations/<N>")
+//
+// The leaf -> project edge of the pre-region tier is REPLACED (not
+// supplemented) by leaf -> region plus region -> project, so the containment
+// chain stays linear — walking out from a resource reaches its region, then
+// its project, then its folder(s), then its org — and the graph carries no
+// redundant path.
 //
 // The hierarchy builder derives the project ID from the RawAsset.Project token
 // when present; otherwise the leaf node's normalized Project field is the
@@ -114,10 +148,29 @@ func buildHierarchy(a *RawAsset, leaf *graph.Node, add func(*graph.Node), emit f
 	}
 	pn := hierarchyNode(graph.KindProject, projectToken, projectID)
 	add(pn)
-	// Leaf -> project containment. The endpoint is the leaf ref (the
-	// normalized node ID) so the edge joins the resource to its container
-	// exactly once per leaf.
-	emit(graph.Edge{From: leaf.ID, To: pn.ID, Kind: graph.EdgeContains})
+
+	// Region tier: the leaf's canonical location becomes a per-project region
+	// container node between the leaf and its project. leaf.Location is
+	// already canonicalised at normalization time, so the node ID is
+	// "projects/<id>/regions/<location>" with no second canonicalisation.
+	// A leaf with no location (nothing to claim a region) keeps the direct
+	// leaf -> project containment edge so it still reaches its project.
+	if leaf.Location != "" {
+		rn := regionNode(projectToken, projectID, leaf.Location)
+		add(rn)
+		// Leaf -> region containment. The endpoint is the leaf ref (the
+		// normalized node ID) so the edge joins the resource to its region
+		// exactly once per leaf.
+		emit(graph.Edge{From: leaf.ID, To: rn.ID, Kind: graph.EdgeContains})
+		// Region -> project: one edge per distinct region the project hosts.
+		// A project with resources in two regions has two inbound region edges,
+		// both from region nodes that belong to that project — correct, and it
+		// creates no second path from a different folder.
+		emit(graph.Edge{From: rn.ID, To: pn.ID, Kind: graph.EdgeContains})
+	} else {
+		// Locationless leaf: the historical direct containment edge.
+		emit(graph.Edge{From: leaf.ID, To: pn.ID, Kind: graph.EdgeContains})
+	}
 
 	// Folder nodes: a resource may belong to multiple folders (its full
 	// ancestor chain), which is why RawAsset.Folders is a slice. Each folder

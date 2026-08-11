@@ -278,11 +278,11 @@ func runScan(
 	effectiveCurrency, currencyMixed := reportCurrency(pricer, currencyState)
 
 	// The report's ResourcesScanned is the number of real resources, so
-	// container nodes (project/folder/organization hierarchy scaffolding)
-	// never inflate the operator-facing "N resources" figure. ProjectsAnalyzed
-	// counts the graph's project container nodes (never the findings), and
-	// Duration is the wall clock elapsed since start — both measured by this
-	// scan, not by the renderer.
+	// container nodes (project/folder/organization/region hierarchy
+	// scaffolding) never inflate the operator-facing "N resources" figure.
+	// ProjectsAnalyzed counts the graph's project container nodes (never the
+	// findings), and Duration is the wall clock elapsed since start — both
+	// measured by this scan, not by the renderer.
 	report := output.NewReport(res, output.Meta{
 		Scope:             scope.String(),
 		Provider:          cfg.Provider,
@@ -397,10 +397,11 @@ func sanitizeSegment(s string) string {
 //   - findings-<scope>.json — the scan report (findings, totals, scope,
 //     metrics_blocked) as JSON.
 //   - report-<scope>.html — the self-contained HTML report: hero number,
-//     waste-by-project / waste-by-rule summaries, the full findings table with
-//     client-side filter/sort, and collapsed scan details. No CDN, no external
-//     stylesheet, no runtime network fetch — an operator can email it, attach
-//     it to a ticket, or open it on an air-gapped machine.
+//     waste-by-project / waste-by-region / waste-by-rule summaries, the full
+//     findings table with client-side filter/sort, and collapsed scan
+//     details. No CDN, no external stylesheet, no runtime network fetch — an
+//     operator can email it, attach it to a ticket, or open it on an
+//     air-gapped machine.
 //
 // All three names carry the scope so an artifact directory containing many
 // scans stays navigable.
@@ -504,6 +505,17 @@ func newProvider(ctx context.Context, cfg config.Scan, log *slog.Logger, offline
 	return gcp.New(ctx, opts...)
 }
 
+// snapshotMigrator is the optional provider capability that upgrades a graph
+// deserialized from an older snapshot version to the current topology. The
+// only implementor today is gcp.Provider.MigrateV2ToV3, which reconstructs the
+// region container tier (KindRegion nodes and their containment edges) that v2
+// snapshots predate, so an operator's cached scan replays instead of being
+// rejected. Providers that have nothing to migrate simply do not implement it,
+// and a replay is used as loaded.
+type snapshotMigrator interface {
+	MigrateV2ToV3(g *graph.Graph) error
+}
+
 // buildGraph returns a graph either replayed from a pre-loaded --cache-file
 // cache (cachedGraph/cacheSnap) or ingested and enriched from the provider. A
 // cache hit performs zero API calls. The two long phases run inside here and
@@ -525,6 +537,23 @@ func buildGraph(
 		log.Info("replayed graph from cache",
 			"file", cfg.CacheFile, "captured_at", cacheSnap.CapturedAt,
 			"nodes", cachedGraph.NodeCount(), "edges", cachedGraph.EdgeCount())
+		// A snapshot older than the current version is still valid data: the
+		// version is advisory and the graph deserialized. Reconstruct whatever
+		// topology the newer version added from the node fields already in the
+		// snapshot, rather than rejecting the cache or silently running a scan
+		// missing its region tier. The provider's migration is idempotent, so
+		// a current snapshot replays untouched.
+		if cacheSnap.Version < graph.SnapshotVersion {
+			if mig, ok := provider.(snapshotMigrator); ok {
+				if err := mig.MigrateV2ToV3(cachedGraph); err != nil {
+					return nil, fmt.Errorf("migrate cache snapshot v%d to v%d: %w",
+						cacheSnap.Version, graph.SnapshotVersion, err)
+				}
+				log.Info("migrated cache from v2 to v3 (regions reconstructed)",
+					"from", cacheSnap.Version, "to", graph.SnapshotVersion,
+					"nodes", cachedGraph.NodeCount(), "edges", cachedGraph.EdgeCount())
+			}
+		}
 		return cachedGraph, nil
 	}
 

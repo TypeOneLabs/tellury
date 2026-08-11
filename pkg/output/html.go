@@ -9,9 +9,12 @@
 //     the two degenerate states), the scan meta line, and any currency,
 //     metrics-blocked or rule-error warnings.
 //   - Summary: a waste-by-project horizontal bar chart (only for multi-project
-//     scans, where a single bar would be information-free) and a compact
-//     waste-by-rule table. Both are derived by aggregating r.Findings — no
-//     graph traversal, no fabricated data.
+//     scans, where a single bar would be information-free), a waste-by-region
+//     bar chart (only when the findings span more than one region), and a
+//     compact waste-by-rule table. All three are derived by aggregating
+//     r.Findings — no graph traversal, no fabricated data, and the same
+//     numbers grouped three ways, so each chart's total always equals the
+//     findings total.
 //   - Findings: every finding in one table, with client-side text search,
 //     severity toggles, a sort control and a 50-row default limit with a
 //     "Show all N findings" button. The table always contains every finding;
@@ -57,9 +60,10 @@ import (
 // before the "Show all N findings" button is needed.
 const maxTableRows = 50
 
-// maxSummaryRows caps the waste-by-project bars and the waste-by-rule table
-// at the top rows by value; the remainder folds into one explicit
-// "Other"/"and N more" row so the aggregate always totals the findings.
+// maxSummaryRows caps the waste-by-project/waste-by-region bars and the
+// waste-by-rule table at the top rows by value; the remainder folds into one
+// explicit "Other"/"and N more" row so the aggregate always totals the
+// findings.
 const maxSummaryRows = 8
 
 // maxResourceRunes is the point past which a resource name is truncated with
@@ -72,8 +76,9 @@ const maxResourceRunes = 60
 const maxBarLabelRunes = 30
 
 // wasteAgg is one row of a waste aggregation: the total monthly waste
-// attributed to one project or one rule, summed from the report's findings
-// (never fabricated). Key distinguishes the capped "other" remainder row.
+// attributed to one project, one region or one rule, summed from the report's
+// findings (never fabricated). Key distinguishes the capped "other" remainder
+// row.
 type wasteAgg struct {
 	Key   string
 	Label string
@@ -133,6 +138,31 @@ func wasteByProject(fs []rules.Finding) []wasteAgg {
 	})
 }
 
+// wasteByRegion aggregates findings by location, reading the region from each
+// finding's own Location field — never from the graph. Location is stamped
+// onto the resource node exactly once at ingestion, through the single
+// pricing.CanonicalRegion wrapper (zones are flattened to their region, so
+// "us-central1-a" and "us-central1-b" both group under "us-central1", and
+// global/multi-region tokens such as "global" or "eu" stay as they are), and
+// evalNodeRule copies it onto the finding verbatim. The finding already
+// carries the canonical region the rollup needs, so walking the
+// resource -> region containment edge would add nothing but a second source
+// for the same token to drift; this grouping is a pure aggregation of the
+// findings, exactly like wasteByProject and wasteByRule, and therefore the
+// rollup invariant holds by construction. A finding with no location groups
+// under "(unknown region)" so the row labels stay honest. Region nodes
+// themselves are containers and never produce findings.
+func wasteByRegion(fs []rules.Finding) []wasteAgg {
+	return sumGrouped(fs, func(f rules.Finding) string {
+		if f.Location == "" {
+			return "(unknown region)"
+		}
+		return f.Location
+	}, maxSummaryRows, func(n int) string {
+		return fmt.Sprintf("Other (%d regions)", n)
+	})
+}
+
 // wasteByRule aggregates findings by rule ID.
 func wasteByRule(fs []rules.Finding) []wasteAgg {
 	return sumGrouped(fs, func(f rules.Finding) string { return f.RuleID }, maxSummaryRows,
@@ -145,6 +175,18 @@ func distinctRuleCount(fs []rules.Finding) int {
 	seen := map[string]bool{}
 	for _, f := range fs {
 		seen[f.RuleID] = true
+	}
+	return len(seen)
+}
+
+// distinctRegionCount returns the number of distinct locations among the
+// findings. It gates the waste-by-region chart the same way distinct projects
+// gate the waste-by-project chart: a single bar at 100% is decoration, not
+// information.
+func distinctRegionCount(fs []rules.Finding) int {
+	seen := map[string]bool{}
+	for _, f := range fs {
+		seen[f.Location] = true
 	}
 	return len(seen)
 }
@@ -277,9 +319,15 @@ func writeWarningBanners(sb *strings.Builder, r Report) {
 
 // writeSummary renders the "where the waste is" section: the waste-by-project
 // bar chart (only for a multi-project scan with more than one project in the
-// findings) and the waste-by-rule table (only when more than one rule fired —
-// a single-row summary table is decoration). If neither renders, no section
-// is emitted at all.
+// findings), the waste-by-region bar chart (only when the findings span more
+// than one distinct region), and the waste-by-rule table (only when more than
+// one rule fired — a single-row summary table is decoration). If none render,
+// no section is emitted at all.
+//
+// All three groupings sum the same r.Findings slice, so their totals always
+// equal the hero — the rollup invariant holds by construction, and each chart
+// answers a different operator question: "which project?", "which region?",
+// "which rule?".
 func writeSummary(sb *strings.Builder, r Report) {
 	if len(r.Findings) == 0 {
 		return
@@ -298,8 +346,16 @@ func writeSummary(sb *strings.Builder, r Report) {
 			sb.WriteString("<section id=\"summary\">\n")
 			open = true
 			sb.WriteString("<h2>Where the waste is</h2>\n")
-			renderProjectBars(sb, rows, r.Currency)
+			renderBarChart(sb, rows, r.Currency, "Monthly waste by project, bar widths proportional to monthly waste")
 		}
+	}
+	if distinctRegionCount(r.Findings) > 1 {
+		if !open {
+			sb.WriteString("<section id=\"summary\">\n")
+			open = true
+		}
+		sb.WriteString("<h2>Waste by region</h2>\n")
+		renderBarChart(sb, wasteByRegion(r.Findings), r.Currency, "Monthly waste by region, bar widths proportional to monthly waste")
 	}
 	if distinctRuleCount(r.Findings) > 1 {
 		if !open {
@@ -329,12 +385,14 @@ func writeRuleSummary(sb *strings.Builder, r Report) {
 	sb.WriteString("</tbody>\n</table>\n")
 }
 
-// renderProjectBars emits the waste-by-project chart as inline SVG: one row
-// per project (capped to maxSummaryRows plus an "Other" row), the label on
-// the left, a bar whose width is proportional to the project's share of the
-// total waste, and the amount just past the bar end. Single colour, no axis,
-// no ticks, no gridlines. The SVG scales with its container via the viewBox.
-func renderProjectBars(sb *strings.Builder, rows []wasteAgg, currency string) {
+// renderBarChart emits one waste-aggregation chart as inline SVG: one row per
+// group (capped to maxSummaryRows plus an "Other" row), the label on the
+// left, a bar whose width is proportional to the group's share of the total
+// waste, and the amount just past the bar end. Single colour, no axis, no
+// ticks, no gridlines. The SVG scales with its container via the viewBox. It
+// is shared by the waste-by-project and waste-by-region charts — identical
+// rendering, only the grouping and the aria-label differ.
+func renderBarChart(sb *strings.Builder, rows []wasteAgg, currency, ariaLabel string) {
 	const (
 		rowHeight = 28.0
 		barHeight = 20.0
@@ -348,8 +406,8 @@ func renderProjectBars(sb *strings.Builder, rows []wasteAgg, currency string) {
 	}
 	height := rowHeight * float64(len(rows))
 	sb.WriteString("<div class=\"summary-bars\">\n")
-	fmt.Fprintf(sb, "<svg viewBox=\"0 0 %s %s\" role=\"img\" aria-label=\"Monthly waste by project, bar widths proportional to monthly waste\" width=\"100%%\">\n",
-		f2(viewW), f2(height))
+	fmt.Fprintf(sb, "<svg viewBox=\"0 0 %s %s\" role=\"img\" aria-label=\"%s\" width=\"100%%\">\n",
+		f2(viewW), f2(height), esc(ariaLabel))
 	for i, row := range rows {
 		y := float64(i) * rowHeight
 		cy := y + rowHeight/2
@@ -784,7 +842,7 @@ p.currency.currency-mixed {
 .warning-blocked { border-left-color: var(--color-blocked-border); background: var(--color-blocked-bg); }
 .warning-errors { border-left-color: var(--color-blocked-border); background: var(--color-blocked-bg); }
 
-/* Waste-by-project bar chart */
+/* Waste-by-project / waste-by-region bar chart */
 .summary-bars { margin: 0.25rem 0 0; }
 .summary-bars svg { width: 100%; height: auto; display: block; }
 .bar-label { font-size: 12.5px; fill: var(--color-text-primary); }

@@ -101,6 +101,35 @@ func TestProjectContainerCount_EmptyGraphIsZero(t *testing.T) {
 	}
 }
 
+// TestKindRegion_IsContainer pins the new container kind: a region node is
+// hierarchy scaffolding, not a billable leaf resource, so Container() must
+// return true and ResourceNodeCount must not count it — the guard that keeps
+// the scan report's "N resources scanned" figure unchanged when region nodes
+// appear in the graph. If a region node ever leaked into ResourceNodeCount,
+// every scan summary would silently inflate its count, and an operator could
+// no longer tell "nothing wasteful" from "nothing scanned".
+func TestKindRegion_IsContainer(t *testing.T) {
+	g := New()
+	leaf := &Node{ID: Ref("//compute.googleapis.com/projects/p/zones/us-central1-a/disks/d1"), Kind: KindDisk, Name: "d1", Project: "p"}
+	region := &Node{ID: Ref("projects/p/regions/us-central1"), Kind: KindRegion, Name: "us-central1", Project: "p"}
+	proj := &Node{ID: Ref("projects/p"), Kind: KindProject, Name: "p", Project: "p"}
+	for _, n := range []*Node{leaf, region, proj} {
+		if err := g.AddNode(n); err != nil {
+			t.Fatalf("AddNode(%s): %v", n.ID, err)
+		}
+	}
+	if !region.Container() {
+		t.Errorf("a KindRegion node must report Container() == true")
+	}
+	g.Freeze()
+	if got := g.ResourceNodeCount(); got != 1 {
+		t.Errorf("ResourceNodeCount = %d, want 1 (the region is a container, not a billable leaf)", got)
+	}
+	if got := g.CountByKind(KindRegion); got != 1 {
+		t.Errorf("CountByKind(KindRegion) = %d, want 1", got)
+	}
+}
+
 func addProjectWithLeaf(t *testing.T, g *Graph, projectToken, leafID string) {
 	t.Helper()
 	proj := &Node{ID: Ref(projectToken), Kind: KindProject, Name: lastSeg(projectToken), Project: lastSeg(projectToken)}
