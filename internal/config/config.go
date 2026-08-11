@@ -101,7 +101,6 @@ type Scan struct {
 
 	CacheFile string
 	Fixture   []string
-	PriceFile string
 
 	OutDir         string
 	FailOnFindings bool
@@ -224,8 +223,7 @@ func (c *Scan) Validate() error {
 	// an uppercase 3-letter ISO 4217 code. A malformed code fails here, before
 	// the scan starts — never after ingestion. A well-formed but unsupported
 	// code passes this check and fails at the Cloud Billing API, which the
-	// scan surfaces plainly (naming the currency) rather than silently
-	// falling back to the USD embedded table.
+	// scan surfaces plainly (naming the currency).
 	c.Currency = resolveCurrency(c.Currency)
 	if c.Currency != "" && !validCurrencyCode(c.Currency) {
 		return fmt.Errorf("invalid --currency %q: want a 3-letter ISO 4217 currency code such as EUR or USD", c.Currency)

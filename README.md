@@ -19,7 +19,9 @@ gcloud auth application-default login
 ```
 
 Read-only access is enough. See [GCP setup](docs/gcp-setup.md) for the four roles and what
-each one buys you.
+each one buys you. **Pricing requires API access.** Without a live pricing API connection
+(or the `TELLURY_PRICE_FIXTURE` environment variable for tests), resources are found and
+reported as skipped (unpriced) rather than carrying a dollar total.
 
 Scan a project:
 
@@ -76,12 +78,14 @@ Three read-only permissions are enough — see [AWS setup](docs/aws-setup.md). A
 provider at a time: passing both `--gcp-*` and `--aws-*` flags fails before doing any work.
 
 No credentials to hand? `tellury` runs the whole pipeline offline from a captured inventory
-or a saved snapshot — see [Offline scanning](docs/offline.md).
+or a saved snapshot — see [Offline scanning](docs/offline.md). An offline scan without
+pricing will find resources but report them as skipped (unpriced).
 
 ## What it does
 
 - Reads GCP inventory from Cloud Asset Inventory, metrics from Cloud Monitoring, prices
-  from the Cloud Billing Catalog; and AWS inventory from the EC2 API.
+  from the Cloud Billing Catalog; and AWS inventory from the EC2 API, prices from the
+  Price List API (pricing:GetProducts).
 - Builds a resource graph: instances, disks, snapshots, addresses, networks and buckets,
   plus the hierarchy above them — organization, folder and project on GCP, account on AWS,
   with a region tier beneath, so waste rolls up by place as well as by owner.
@@ -89,10 +93,12 @@ or a saved snapshot — see [Offline scanning](docs/offline.md).
   currency.
 - Writes a directory of artifacts per scan: a replayable graph snapshot, findings JSON, and
   a self-contained HTML report.
-- Runs fully offline from a fixture or a saved snapshot.
+- Runs fully offline from a fixture or a saved snapshot. Inventory replays without the
+  network; pricing requires the live API (or a test fixture via `TELLURY_PRICE_FIXTURE`).
 
-Not there yet: Azure. On AWS, only single-account scans work — organization and
-organizational-unit scopes, cross-account access and live pricing are still to come.
+Not there yet: Azure. On AWS, organization and organizational-unit scopes and cross-account
+access are supported. Live AWS pricing (Price List API) resolves EBS capacity, IOPS,
+throughput and static IP rates.
 
 ## Rules
 
@@ -129,7 +135,8 @@ no code generation.
 
 **Honest about gaps.** A rule that cannot evaluate a resource records a typed reason rather
 than guessing, and a scan reports what it scanned, not only what it found. An empty table
-means nothing wasteful, never nothing scanned.
+means nothing wasteful, never nothing scanned. An unpriced resource is reported as skipped,
+never as free.
 
 ## Documentation
 
@@ -163,7 +170,7 @@ internal/cli/     command wiring, flags, output selection
 pkg/graph/        in-memory resource graph
 pkg/cloud/gcp/    Cloud Asset Inventory ingestion and normalization
 pkg/metrics/      metric registry and GCP backends
-pkg/pricing/      price sources: override, live catalogue, embedded table
+pkg/pricing/      pricing interfaces, live API clients, test fixtures
 pkg/rules/        rule engine, NodeRule interface, skip vocabulary
 pkg/rules/gcp/    the shipped rules
 pkg/output/       table, JSON, CSV and HTML renderers
@@ -177,6 +184,8 @@ Neither affects a scan's results.
   every fixture run — see [Offline scanning](docs/offline.md).
 - When several metric fetches fail, the failures are joined and render as one dense line,
   though each stays individually inspectable via `errors.Is`.
+- An offline scan without a price source (no live API, no `TELLURY_PRICE_FIXTURE`) reports
+  resources as skipped (unpriced). This is by design: the tool refuses to guess at money.
 
 ## Contributing
 

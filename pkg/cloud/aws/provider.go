@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -106,8 +107,9 @@ func WithLogger(l *slog.Logger) Option { return func(p *Provider) { p.log = l } 
 
 // WithOffline builds a provider that never constructs an AWS SDK client. It is
 // for scans whose data comes from local fixtures: the fixture stands in for
-// every EC2 call, and the static price table prices the replay. This is what
-// lets an offline AWS scan run on a host with no AWS credentials.
+// every EC2 call, and pricing uses the TELLURY_PRICE_FIXTURE file if set, or a
+// NoPricePricer (all resources skip) otherwise. This is what lets an offline
+// AWS scan run on a host with no AWS credentials.
 func WithOffline() Option { return func(p *Provider) { p.offline = true } }
 
 // WithFixture supplies the offline data source (LoadFixture's result).
@@ -139,15 +141,12 @@ func WithRoleName(name string) Option {
 // flag: tellury reads no key files, and the GCP side sets that precedent with
 // Application Default Credentials.
 //
-// Precedence for pricing mirrors GCP exactly: --price-file override > live
-// Price List API (pricing:GetProducts, cached for the scan's duration) >
-// embedded static price table. The live catalogue client is pinned to
-// us-east-1 regardless of which region the scan targets, because the AWS
-// Price List API is reachable only from us-east-1 and ap-south-1. Prices are
-// looked up by each product's own region attribute, never by the client
-// region. Missing pricing:GetProducts permission is a normal, expected state:
-// the catalogue load logs a warning and every lookup falls back to the
-// embedded table — exactly as the GCP side does without billing access.
+// Pricing: the live Price List API (pricing:GetProducts, cached for the
+// scan's duration) is the ONLY source. There is no embedded fallback table.
+// A price that cannot be resolved from the live catalogue returns ErrNoPrice
+// and the rule skips. When TELLURY_PRICE_FIXTURE is set, the catalogue loads
+// from that file instead of calling the API — a test-only hook, never a
+// user-facing flag.
 //
 // credentialResolveTimeout bounds the credential chain's own resolution. The
 // IMDS fallback is the slow leg: off an EC2 instance it retries until its
@@ -207,20 +206,11 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 		})
 	}
 
-	// Build the pricer: live CatalogPricer (pinned to us-east-1 for the
-	// pricing API) when online, StaticPricer when offline. The CatalogPricer
-	// wraps the embedded static table as its fallback and handles missing
-	// pricing:GetProducts permission gracefully — the catalogue load fails
-	// with a warning and every lookup falls back to the embedded table,
-	// exactly as the GCP side does without billing access. This mirrors the
-	// GCP pattern in pkg/cloud/gcp/gcp.go.
+	// Build the pricer: live CatalogPricer when online, file-backed or
+	// NoPricePricer when offline. There is no embedded fallback table.
 	if p.pricer == nil {
 		if p.offline {
-			static, err := pricingaws.NewStaticPricer()
-			if err != nil {
-				return nil, err
-			}
-			p.pricer = static
+			p.pricer = offlinePricer(p.log)
 		} else {
 			cat, err := pricingaws.NewCatalogPricer(ctx, p.log, p.awsCfg)
 			if err != nil {
@@ -231,6 +221,24 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 	}
 
 	return p, nil
+}
+
+// offlinePricer builds a pricer for an offline scan. When TELLURY_PRICE_FIXTURE
+// is set, it loads from that file; otherwise it returns a NoPricePricer —
+// every resource requiring a price will skip rather than guess.
+func offlinePricer(log *slog.Logger) pricing.Pricer {
+	if path := os.Getenv("TELLURY_PRICE_FIXTURE"); path != "" {
+		static, err := pricingaws.NewStaticPricerFromFile(path)
+		if err != nil {
+			log.Warn("aws: TELLURY_PRICE_FIXTURE set but could not load; resources requiring prices will skip",
+				"path", path, "err", err)
+			return pricing.NoPricePricer{}
+		}
+		log.Debug("aws: offline pricer loaded from TELLURY_PRICE_FIXTURE", "path", path)
+		return static
+	}
+	log.Debug("aws: no price source available; resources requiring prices will skip")
+	return pricing.NoPricePricer{}
 }
 
 // Name implements cloud.Provider.

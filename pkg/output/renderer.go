@@ -114,13 +114,13 @@ type Report struct {
 	// Empty for the default USD case.
 	CurrencySource string `json:"currency_source,omitempty"`
 	// CurrencyRequested is the code the operator asked for (flag) or the tool
-	// detected, before fallback. It differs from Currency only when the
-	// embedded USD table answered a non-USD request (the currency trap).
+	// detected, before fallback. It differs from Currency only when an
+	// offline scan answered a non-USD request (the currency trap).
 	CurrencyRequested string `json:"currency_requested,omitempty"`
-	// CurrencyMixed reports that USD embedded-fallback prices were used while
-	// a non-USD currency was requested — the scan's figures are partly or
-	// wholly USD although the operator asked for another currency. Human
-	// renderers surface this as a loud warning.
+	// CurrencyMixed reports that USD prices were used while a non-USD
+	// currency was requested — the scan's figures are partly or wholly USD
+	// although the operator asked for another currency. Human renderers
+	// surface this as a loud warning.
 	CurrencyMixed bool `json:"currency_mixed,omitempty"`
 
 	// ReportPath is the absolute path of the self-contained HTML report the
@@ -304,7 +304,7 @@ func (r Report) money(v float64) string {
 // table and HTML outputs. It returns nothing for the default USD scan, so
 // that output stays byte-identical to the pre-currency build. For a non-USD
 // scan it states the effective currency and how it was decided; when USD
-// fallback prices contaminated the scan it returns a loud warning naming the
+// prices contaminated the scan it returns a loud warning naming the
 // requested currency so an operator reading EUR figures is never silently
 // handed USD numbers.
 func currencyDisclosure(r Report) []string {
@@ -323,16 +323,16 @@ func currencyDisclosure(r Report) []string {
 	}
 	if r.Currency == r.CurrencyRequested || r.CurrencyRequested == "" {
 		// Partial contamination: the catalogue answered in the requested
-		// currency, but some prices fell back to the USD table.
+		// currency, but some prices could not be resolved live.
 		return []string{
-			fmt.Sprintf("WARNING: some prices came from the embedded USD fallback table, not the %s catalogue.", r.Currency),
+			fmt.Sprintf("WARNING: some prices could not be resolved in %s.", r.Currency),
 			"Those figures are USD and were NOT converted; reconcile them against the " + r.Currency + " bill by hand.",
 		}
 	}
-	// Full fallback: the requested currency priced nothing.
+	// The requested currency priced nothing — no live API answered.
 	return []string{
 		fmt.Sprintf("WARNING: prices are in %s, not the requested %s.", r.Currency, r.CurrencyRequested),
-		"The Cloud Billing catalogue did not answer in " + r.CurrencyRequested + " and the embedded fallback table is USD-only.",
+		"The live pricing catalogue did not answer in " + r.CurrencyRequested + ".",
 		"These figures were NOT converted; reconcile them against the " + r.CurrencyRequested + " bill by hand.",
 	}
 }

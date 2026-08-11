@@ -74,11 +74,19 @@ These filter what is **reported**, not what is evaluated. A rule's own noise flo
 | Flag | Environment | Meaning |
 |---|---|---|
 | `--currency` | `TELLURY_CURRENCY` | ISO 4217 code to price in, e.g. `EUR`. Overrides auto-detection. |
-| `--price-file` | — | JSON price overrides. |
 
-Price precedence, highest first: `--price-file`, then the live Cloud Billing Catalog
-(cached for the scan), then an embedded fallback table. Every figure records which of the
-three answered it. See [GCP setup](gcp-setup.md#currency) for how currency is detected.
+Pricing comes from the live catalog API: Cloud Billing Catalog for GCP, Price List API
+(pricing:GetProducts) for AWS. There is no embedded fallback table. A price that cannot be
+resolved makes the rule skip the resource with `SkipNoPrice` — it never guesses a dollar
+figure.
+
+A scan that cannot reach the pricing API (no credentials, no billing access, or offline
+without `TELLURY_PRICE_FIXTURE`) reports all resources as skipped (unpriced). Every output
+format carries the skip reason so the operator knows why no findings priced.
+
+`TELLURY_PRICE_FIXTURE` is a test-only environment variable pointing at a recorded price
+response file. It is not a user-facing flag and is not documented as a way to price a real
+scan.
 
 ### Output
 

@@ -19,6 +19,8 @@ import (
 // asserted verbatim. The logged output is the verbatim `tellury scan
 // --fixture ...` stdout this feature is documented against.
 func TestScanSummary_ProjectsDerivedFromGraphNodes(t *testing.T) {
+	gcpPriceFixtureEnv(t)
+
 	cfg := config.Scan{
 		Provider:       "gcp",
 		Project:        "my-project",
@@ -55,6 +57,8 @@ func TestScanSummary_ProjectsDerivedFromGraphNodes(t *testing.T) {
 // empty — that is how an operator distinguishes "nothing wasteful" from
 // "nothing scanned".
 func TestScanSummary_NoFindingsStillReportsProjects(t *testing.T) {
+	gcpPriceFixtureEnv(t)
+
 	cfg := config.Scan{
 		Provider:       "gcp",
 		Project:        "my-project",
@@ -95,6 +99,8 @@ func TestScanSummary_NoFindingsStillReportsProjects(t *testing.T) {
 // duration as much as a human does. The logged document is the verbatim
 // `tellury scan --format json` report.
 func TestScanSummary_JSONCarriesSummaryFields(t *testing.T) {
+	gcpPriceFixtureEnv(t)
+
 	cfg := config.Scan{
 		Provider:       "gcp",
 		Project:        "my-project",

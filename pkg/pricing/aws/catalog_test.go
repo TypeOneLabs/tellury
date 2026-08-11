@@ -19,26 +19,23 @@ import (
 
 // loadFixtureDocs loads the recorded GetProducts fixture and returns its
 // priceListDoc values through the SAME parse path the live load uses: the
-// fixture stores the parsed aws_v1 product documents; each is re-marshalled
-// to the exact raw string GetProducts would put in a PriceList element, then
-// parsePriceListDoc decodes it. A test that bypassed parsePriceListDoc would
-// not actually exercise the token-derivation code under test.
+// fixture stores the raw aws_v1 product documents exactly as GetProducts
+// returns them; each is parsed by parsePriceListDoc so the test exercises
+// the exact decoding path the live load uses. A test that bypassed
+// parsePriceListDoc would not actually exercise the token-derivation code
+// under test.
 func loadFixtureDocs(t *testing.T) []*priceListDoc {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("testdata", "ec2-price-list.json"))
+	b, err := os.ReadFile(filepath.Join("testdata", "getproducts-recorded.json"))
 	if err != nil {
 		t.Fatalf("read price fixture: %v", err)
 	}
-	var stored []priceListDoc
+	var stored []json.RawMessage
 	if err := json.Unmarshal(b, &stored); err != nil {
 		t.Fatalf("decode price fixture: %v", err)
 	}
 	out := make([]*priceListDoc, 0, len(stored))
-	for i := range stored {
-		raw, err := json.Marshal(&stored[i])
-		if err != nil {
-			t.Fatalf("re-marshal fixture doc: %v", err)
-		}
+	for _, raw := range stored {
 		doc, err := parsePriceListDoc(string(raw))
 		if err != nil {
 			t.Fatalf("parsePriceListDoc: %v", err)
@@ -136,69 +133,64 @@ func TestCatalogPricer_EBSVolumeSKUPinned(t *testing.T) {
 				"a lookup for this type would silently fall back to the embedded table", sku)
 		}
 	}
-
-	// The fixture also carries a Storage product whose volumeApiName is NOT an
-	// SDK VolumeType ("not-a-volume-type"): it must never be indexed.
-	for _, doc := range docs {
-		if doc.Product.Attributes["volumeApiName"] == "not-a-volume-type" {
-			for _, e := range indexDoc(doc) {
-				t.Fatalf("non-EBS product with volumeApiName %q was indexed as sku %q; "+
-					"the SDK-whitelist gate failed", doc.Product.Attributes["volumeApiName"], e.sku)
-			}
-		}
-	}
 }
 
-// TestCatalogPricer_EIPSKUPinned pins the Elastic IP SKU token to the exact
-// constant the unassociated_eip rule queries (EIPSKU = "AdditionalAddress"):
-// the live catalogue derives the token from a real GetProducts response's
-// operation attribute for the productFamily "Elastic IP", and this test
-// asserts catalogue-token == rule-token. It also asserts the associated-EIP
-// product (operation "InUseAddress", $0.00) is indexed under a DIFFERENT
-// token, so the rule can never accidentally price an in-use address.
+// TestCatalogPricer_EIPSKUPinned pins the static-IP SKU token to the exact
+// constant the unassociated_eip rule queries (EIPSKU = "AdditionalAddress").
+// The live API surfaces the charge under serviceCode AmazonVPC with NO
+// productFamily, matched by usagetype suffix "PublicIPv4:InUseAddress". The
+// indexer maps it to the canonical "AdditionalAddress" token.
+//
+// This test asserts:
+//   - The fixture contains at least one AmazonVPC product with usagetype
+//     ending in "PublicIPv4:InUseAddress" in two regions (us-east-1,
+//     eu-west-1);
+//   - Each is indexed under KindStaticIP with SKU "AdditionalAddress";
+//   - The price is $0.005/hr (the published rate).
 func TestCatalogPricer_EIPSKUPinned(t *testing.T) {
-	var additionalToken, inUseToken string
-	foundAdditional, foundInUse := false, false
+	foundUSE1, foundEUW1 := false, false
 	for _, doc := range loadFixtureDocs(t) {
-		if doc.Product.ProductFamily != "Elastic IP" {
+		if doc.ServiceCode != "AmazonVPC" {
+			continue
+		}
+		if doc.Product.ProductFamily != "" {
 			continue
 		}
 		entries := indexDoc(doc)
 		if len(entries) == 0 {
 			continue
 		}
-		switch doc.Product.Attributes["operation"] {
-		case "AdditionalAddress":
-			foundAdditional = true
-			additionalToken = entries[0].sku
-		case "InUseAddress":
-			foundInUse = true
-			inUseToken = entries[0].sku
+		for _, e := range entries {
+			if e.kind != pricing.KindStaticIP {
+				t.Fatalf("VPC product indexed under non-static-IP kind %q", e.kind)
+			}
+			if e.sku != unassociated_eip.EIPSKU {
+				t.Fatalf("VPC product indexed under sku %q, want %q (unassociated_eip.EIPSKU)",
+					e.sku, unassociated_eip.EIPSKU)
+			}
+			if e.price != 0.005 {
+				t.Errorf("VPC static-IP price = %v, want 0.005", e.price)
+			}
+			switch e.region {
+			case "us-east-1":
+				foundUSE1 = true
+			case "eu-west-1":
+				foundEUW1 = true
+			}
 		}
 	}
-	if !foundAdditional {
-		t.Fatal("fixture carries no AdditionalAddress Elastic IP product; the pin cannot be asserted")
+	if !foundUSE1 {
+		t.Fatal("fixture carries no AmazonVPC InUseAddress product in us-east-1; the pin cannot be asserted")
 	}
-	if !foundInUse {
-		t.Fatal("fixture carries no InUseAddress Elastic IP product; the distinction test cannot be asserted")
-	}
-
-	if additionalToken != unassociated_eip.EIPSKU {
-		t.Fatalf("catalogue token %q != unassociated_eip.EIPSKU %q: the rule would "+
-			"query a token the live catalogue never produces and every EIP price "+
-			"would silently fall back to the embedded table",
-			additionalToken, unassociated_eip.EIPSKU)
-	}
-	if inUseToken == unassociated_eip.EIPSKU {
-		t.Fatalf("the in-use EIP product indexed under the rule's token %q: an "+
-			"associated address would be mispriced as waste", inUseToken)
+	if !foundEUW1 {
+		t.Fatal("fixture carries no AmazonVPC InUseAddress product in eu-west-1; the multi-region pin cannot be asserted")
 	}
 }
 
 // TestCatalogPricer_UnitPrice_EBS prices the recorded fixture end to end
 // through UnitPrice: gp3 capacity in us-east-1, gp3 IOPS, gp3 throughput,
-// io2 capacity+IOPS from one product, and a gp3 capacity in eu-west-1
-// resolved through the Location display-name map.
+// io2 capacity+IOPS from their respective products, and gp3 capacity+IOPS
+// in eu-west-1.
 func TestCatalogPricer_UnitPrice_EBS(t *testing.T) {
 	p := fixtureCatalog(t)
 
@@ -215,10 +207,14 @@ func TestCatalogPricer_UnitPrice_EBS(t *testing.T) {
 		{"gp2 capacity us-east-1", pricing.KindDiskCapacity, "gp2", "us-east-1", 0.10},
 		{"io2 capacity us-east-1", pricing.KindDiskCapacity, "io2", "us-east-1", 0.125},
 		{"io2 iops us-east-1", pricing.KindDiskIOPS, "io2", "us-east-1", 0.065},
+		{"io1 capacity us-east-1", pricing.KindDiskCapacity, "io1", "us-east-1", 0.125},
+		{"io1 iops us-east-1", pricing.KindDiskIOPS, "io1", "us-east-1", 0.065},
 		{"st1 capacity us-east-1", pricing.KindDiskCapacity, "st1", "us-east-1", 0.045},
-		{"sc1 capacity us-east-1", pricing.KindDiskCapacity, "sc1", "us-east-1", 0.025},
+		{"sc1 capacity us-east-1", pricing.KindDiskCapacity, "sc1", "us-east-1", 0.015},
 		{"standard capacity us-east-1", pricing.KindDiskCapacity, "standard", "us-east-1", 0.05},
-		{"gp3 capacity eu-west-1 (display name map)", pricing.KindDiskCapacity, "gp3", "eu-west-1", 0.08},
+		{"gp3 capacity eu-west-1", pricing.KindDiskCapacity, "gp3", "eu-west-1", 0.088},
+		{"gp3 iops eu-west-1", pricing.KindDiskIOPS, "gp3", "eu-west-1", 0.0055},
+		{"gp3 throughput eu-west-1", pricing.KindDiskThroughput, "gp3", "eu-west-1", 0.044},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -236,20 +232,34 @@ func TestCatalogPricer_UnitPrice_EBS(t *testing.T) {
 	}
 }
 
-// TestCatalogPricer_UnitPrice_EIP prices the unassociated Elastic IP from the
-// fixture: $0.005/hour, the figure the unassociated_eip rule multiplies by
-// HoursPerMonth.
+// TestCatalogPricer_UnitPrice_EIP prices the static IP charge from the
+// fixture: $0.005/hour, resolved through the VPC InUseAddress product.
 func TestCatalogPricer_UnitPrice_EIP(t *testing.T) {
 	p := fixtureCatalog(t)
+
+	// us-east-1: the VPC InUseAddress product resolves under
+	// "AdditionalAddress" at $0.005/hr.
 	unit, region, err := p.UnitPrice(pricing.KindStaticIP, "aws", unassociated_eip.EIPSKU, "us-east-1")
 	if err != nil {
-		t.Fatalf("UnitPrice(EIP): %v", err)
+		t.Fatalf("UnitPrice(EIP us-east-1): %v", err)
 	}
 	if unit != 0.005 {
 		t.Errorf("EIP unit price = %v, want 0.005", unit)
 	}
 	if region != "us-east-1" {
 		t.Errorf("EIP region = %q, want us-east-1", region)
+	}
+
+	// eu-west-1: same SKU, same price, different region.
+	unit, region, err = p.UnitPrice(pricing.KindStaticIP, "aws", unassociated_eip.EIPSKU, "eu-west-1")
+	if err != nil {
+		t.Fatalf("UnitPrice(EIP eu-west-1): %v", err)
+	}
+	if unit != 0.005 {
+		t.Errorf("EIP unit price eu-west-1 = %v, want 0.005", unit)
+	}
+	if region != "eu-west-1" {
+		t.Errorf("EIP region eu-west-1 = %q, want eu-west-1", region)
 	}
 }
 
@@ -320,16 +330,63 @@ func TestCatalogPricer_OneGiBGp3IsEightCents(t *testing.T) {
 	}
 }
 
+// TestCatalogPricer_AllFourKindsResolveLive asserts every price kind resolves
+// from the recorded fixture with provenance live_api and a region that is NOT
+// "default". This is the acceptance test for the fix: before the fix, only
+// disk_capacity resolved; disk_iops, disk_throughput, and static_ip all fell
+// through to the embedded table.
+func TestCatalogPricer_AllFourKindsResolveLive(t *testing.T) {
+	p := fixtureCatalog(t)
+
+	cases := []struct {
+		name   string
+		kind   pricing.Kind
+		sku    string
+		region string
+	}{
+		{"disk_capacity", pricing.KindDiskCapacity, "gp3", "us-east-1"},
+		{"disk_iops", pricing.KindDiskIOPS, "gp3", "us-east-1"},
+		{"disk_throughput", pricing.KindDiskThroughput, "gp3", "us-east-1"},
+		{"static_ip", pricing.KindStaticIP, unassociated_eip.EIPSKU, "us-east-1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			unit, region, err := p.UnitPrice(tc.kind, "aws", tc.sku, tc.region)
+			if err != nil {
+				t.Fatalf("UnitPrice(%s, %q, %q): %v", tc.kind, tc.sku, tc.region, err)
+			}
+			if unit <= 0 {
+				t.Errorf("UnitPrice = %v, want > 0", unit)
+			}
+			if region == "default" {
+				t.Errorf("region = %q, want a real region, not \"default\"", region)
+			}
+			prov, ok := p.LastLookup(tc.kind, tc.sku, tc.region)
+			if !ok {
+				t.Fatalf("LastLookup returned ok=false after successful UnitPrice")
+			}
+			if prov.Source != pricing.SourceLiveAPI {
+				t.Errorf("provenance source = %q, want %q (live_api)", prov.Source, pricing.SourceLiveAPI)
+			}
+		})
+	}
+}
+
 // TestCatalogPricer_LiveGetProductsTokenPinned is the LIVE counterpart of the
 // fixture pinning tests: it fetches a real GetProducts response for AmazonEC2
-// and asserts the catalogue resolves the exact tokens the rules query. It is
-// the test that catches an AWS rename of volumeApiName / operation / a
-// Location display name before it silently degrades every lookup to the
-// embedded table.
+// and AmazonVPC and asserts the catalogue resolves the exact tokens the rules
+// query. It is the test that catches an AWS rename of volumeApiName /
+// usagetype / a Location display name before it silently degrades every
+// lookup to the embedded table.
 //
 // It requires real AWS credentials and network access, so it is skipped unless
 // the operator sets TELLURY_AWS_LIVE_PRICE_TEST=1 (CI and the default test
 // suite stay offline and green).
+//
+// This is the pre-release check documented in docs/aws-setup.md: run it
+// before a release to confirm the live API still returns the tokens the
+// catalogue expects. A failure here means a rename — update the tokens and
+// the recorded fixture before the rename silently degrades every lookup.
 func TestCatalogPricer_LiveGetProductsTokenPinned(t *testing.T) {
 	if os.Getenv("TELLURY_AWS_LIVE_PRICE_TEST") == "" {
 		t.Skip("TELLURY_AWS_LIVE_PRICE_TEST is not set; live GetProducts pin skipped")
@@ -365,5 +422,38 @@ func TestCatalogPricer_LiveGetProductsTokenPinned(t *testing.T) {
 		if region != tc.region {
 			t.Errorf("live region = %q, want %q", region, tc.region)
 		}
+	}
+
+	// Additionally assert that all four kinds resolve from the live API
+	// with provenance live_api and a real region.
+	for _, tc := range []struct {
+		name string
+		kind pricing.Kind
+		sku  string
+	}{
+		{"disk_capacity gp3 us-east-1", pricing.KindDiskCapacity, unattached_ebs_volume.VolumeSKU("gp3")},
+		{"disk_iops gp3 us-east-1", pricing.KindDiskIOPS, unattached_ebs_volume.VolumeSKU("gp3")},
+		{"disk_throughput gp3 us-east-1", pricing.KindDiskThroughput, unattached_ebs_volume.VolumeSKU("gp3")},
+		{"static_ip us-east-1", pricing.KindStaticIP, unassociated_eip.EIPSKU},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			unit, region, err := p.UnitPrice(tc.kind, "aws", tc.sku, "us-east-1")
+			if err != nil {
+				t.Fatalf("live UnitPrice(%s, %q): %v", tc.kind, tc.sku, err)
+			}
+			if unit <= 0 {
+				t.Errorf("live unit price = %v, want > 0", unit)
+			}
+			if region == "default" {
+				t.Errorf("live region = %q, want a real region", region)
+			}
+			prov, ok := p.LastLookup(tc.kind, tc.sku, "us-east-1")
+			if !ok {
+				t.Fatalf("LastLookup returned ok=false")
+			}
+			if prov.Source != pricing.SourceLiveAPI {
+				t.Errorf("provenance source = %q, want live_api", prov.Source)
+			}
+		})
 	}
 }

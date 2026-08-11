@@ -1,38 +1,22 @@
 package gcp
 
 import (
-	_ "embed"
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/TypeOneLabs/tellury/pkg/pricing"
 )
 
-//go:embed data/gcp_prices.json
-var embeddedPriceTable []byte
-
 // table is pricing.Kind -> SKU -> region -> price.
 type table map[pricing.Kind]map[string]map[string]float64
 
-// StaticPricer reads an embedded GCP price table, optionally overlaid by a
-// user-supplied override file (see OverlayFile).
+// StaticPricer reads a GCP price table from a JSON file on disk. It is used
+// by tests (via TELLURY_PRICE_FIXTURE) and by offline scans that still need
+// pricing.
 //
-// It is the GCP-specific implementation of pricing.Pricer over the embedded
-// price data. The parent package (pricing) owns the interfaces and money
-// conventions; this package owns the actual USD values and the SKU/region
-// spelling. A future AWS provider would keep its own StaticPricer in its own
-// package rather than sharing this GCP-shaped one.
-//
-// FALLBACK OF LAST RESORT. A rate in this table is the lowest-precedence
-// source in the CatalogPricer stack (--price-file override > live Cloud
-// Billing Catalog > embedded table) and is a hand-maintained snapshot, not
-// ground truth: it can silently drift from the live catalogue. The
-// snapshot_storage.standard entry did exactly that — it sat at $0.026/GiB
-// while the real catalogue billed ~$0.050/GiB, a roughly 2x understatement —
-// and because live lookups fell back to this table without any error, the
-// drift went unnoticed until a real bill was compared. Treat any answer whose
-// provenance reads SourceEmbedded as a stopgap to verify against the live
-// catalogue, never as a number to trust on its own.
+// There is no embedded fallback table. A price that cannot be resolved from
+// this file returns ErrNoPrice, and the rule skips rather than guessing.
 type StaticPricer struct {
 	t table
 }
@@ -75,24 +59,17 @@ func newTableFromFile(pf priceFile) table {
 	return t
 }
 
-// NewStaticPricer loads the embedded table.
-func NewStaticPricer() (*StaticPricer, error) {
-	var pf priceFile
-	if err := json.Unmarshal(embeddedPriceTable, &pf); err != nil {
-		return nil, fmt.Errorf("pricing: decode embedded table: %w", err)
+// NewStaticPricerFromFile loads a GCP price table from the given JSON file.
+func NewStaticPricerFromFile(path string) (*StaticPricer, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("pricing: read GCP price file %q: %w", path, err)
 	}
-	return &StaticPricer{t: newTableFromFile(pf)}, nil
-}
-
-// LoadOverride replaces the entire table with the given JSON file contents.
-// Deterministic, offline; used by --price-file.
-func (p *StaticPricer) LoadOverride(data []byte) error {
 	var pf priceFile
 	if err := json.Unmarshal(data, &pf); err != nil {
-		return fmt.Errorf("pricing: decode override table: %w", err)
+		return nil, fmt.Errorf("pricing: decode GCP price file %q: %w", path, err)
 	}
-	p.t = newTableFromFile(pf)
-	return nil
+	return &StaticPricer{t: newTableFromFile(pf)}, nil
 }
 
 // UnitPrice resolves exact region -> region prefix -> "default".
@@ -137,43 +114,4 @@ func (p *StaticPricer) MonthlyCost(it pricing.Item) (float64, error) {
 		return 0, err
 	}
 	return unit * it.Quantity, nil
-}
-
-// OverlayFile reads a JSON price file from disk and merges it on top of the
-// currently loaded table (per Kind/SKU/region entry — an override file need
-// only specify the SKUs it changes). This backs `tellury scan --price-file`.
-func (p *StaticPricer) OverlayFile(path string) error {
-	data, err := readFile(path)
-	if err != nil {
-		return err
-	}
-	var pf priceFile
-	if err := json.Unmarshal(data, &pf); err != nil {
-		return fmt.Errorf("pricing: decode price file %q: %w", path, err)
-	}
-	overlay := newTableFromFile(pf)
-	if p.t == nil {
-		p.t = table{}
-	}
-	for kind, skus := range overlay {
-		if len(skus) == 0 {
-			continue
-		}
-		dstSKUs, ok := p.t[kind]
-		if !ok {
-			dstSKUs = map[string]map[string]float64{}
-			p.t[kind] = dstSKUs
-		}
-		for sku, regions := range skus {
-			dstRegions, ok := dstSKUs[sku]
-			if !ok {
-				dstRegions = map[string]float64{}
-				dstSKUs[sku] = dstRegions
-			}
-			for region, price := range regions {
-				dstRegions[region] = price
-			}
-		}
-	}
-	return nil
 }

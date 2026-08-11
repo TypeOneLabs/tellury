@@ -15,7 +15,7 @@ import (
 // effective currency — what the figures are ACTUALLY in — is derived later
 // from the pricer (reportCurrency), after rule evaluation has exercised it,
 // because only the pricer knows whether the live catalogue answered in the
-// requested currency or the embedded USD table had to.
+// requested currency or the scan had no live pricing at all.
 type currencyResolution struct {
 	requested string // ISO 4217 code the operator asked for or the tool detected; "" = default USD
 	source    string // "flag" | "detected" | "default"
@@ -39,8 +39,8 @@ func resolveScanCurrency(ctx context.Context, cfg config.Scan, pricer pricing.Pr
 		return currencyResolution{requested: cfg.Currency, source: "flag"}
 	}
 	if offline {
-		// A fixture/cache replay prices everything from the embedded USD
-		// table; there is no cloud client to ask, so USD is the only answer.
+		// A fixture/cache replay has no live pricing API; there is no cloud
+		// client to ask, so USD is the only answer.
 		log.Info("currency", "code", "USD", "source", "default", "reason", "offline scan (no billing account to ask)")
 		return currencyResolution{requested: "", source: "default"}
 	}
@@ -67,10 +67,10 @@ func resolveScanCurrency(ctx context.Context, cfg config.Scan, pricer pricing.Pr
 }
 
 // reportCurrency derives the effective currency (what the figures are actually
-// in) and whether USD fallback prices contaminated a non-USD scan, from the
-// pricer after rule evaluation has exercised it. A pricer without a
-// pricing.CurrencyReporter is a bare embedded-table pricer (an offline scan
-// or a --price-file-only build) and always answers in USD.
+// in) and whether USD prices contaminated a non-USD scan, from the pricer
+// after rule evaluation has exercised it. A pricer without a
+// pricing.CurrencyReporter is a fixture-backed pricer (an offline scan) and
+// always answers in USD.
 func reportCurrency(pricer pricing.Pricer, state currencyResolution) (effective string, mixed bool) {
 	if rep, ok := pricer.(pricing.CurrencyReporter); ok {
 		info := rep.CurrencyInfo()
@@ -82,9 +82,9 @@ func reportCurrency(pricer pricing.Pricer, state currencyResolution) (effective 
 		return effective, mixed
 	}
 	effective = "USD"
-	// The embedded table answered everything. If a non-USD currency was
-	// requested, every figure is in the wrong currency — that is the trap,
-	// and it must be disclosed loudly.
+	// A fixture-backed pricer answered everything in USD. If a non-USD
+	// currency was requested, every figure is in the wrong currency — that is
+	// the trap, and it must be disclosed loudly.
 	mixed = state.requested != "" && state.requested != "USD"
 	return effective, mixed
 }

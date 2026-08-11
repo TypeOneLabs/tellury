@@ -11,24 +11,23 @@ import (
 // {"price_source", "live_api sku=n1-standard-4 region=us-central1"}.
 //
 // Every price a Finding reports MUST be traceable to the SKU that produced
-// it and to which of the three sources answered it (--price-file override,
-// the live pricing API, or the embedded fallback table) - this is the one
-// function every rule uses to keep that promise, so the rendering can never
-// drift between rules.
+// it and to which source answered it (the live pricing API or a fixture file)
+// — this is the one function every rule uses to keep that promise, so the
+// rendering can never drift between rules.
 //
 // If p implements pricing.ProvenancePricer (currently true for GCP's
-// CatalogPricer) and has a recorded answer for (kind, sku, region), that
-// answer's real source is used. Otherwise p is a plain pricing.Pricer with
-// no provenance tracking (e.g. a bare pricing.StaticPricer, or a test
-// fake) - in which case the source is reported as the embedded fallback,
-// which is the only source such a Pricer can be.
+// CatalogPricer and AWS's CatalogPricer) and has a recorded answer for
+// (kind, sku, region), that answer's real source is used. Otherwise p is a
+// plain pricing.Pricer with no provenance tracking (e.g. a bare
+// pricing.StaticPricer, or a test fake) — in which case the source is
+// reported as a fixture, which is the only source such a Pricer can be.
 func PriceEvidence(key string, p pricing.Pricer, kind pricing.Kind, sku, region string) Evidence {
 	if pp, ok := p.(pricing.ProvenancePricer); ok {
 		if prov, ok := pp.LastLookup(kind, sku, region); ok {
 			return Evidence{Key: key, Value: fmt.Sprintf("%s sku=%s region=%s", prov.Source, prov.SKU, prov.Region)}
 		}
 	}
-	return Evidence{Key: key, Value: fmt.Sprintf("%s sku=%s region=%s", pricing.SourceEmbedded, sku, region)}
+	return Evidence{Key: key, Value: fmt.Sprintf("%s sku=%s region=%s", pricing.SourceFixture, sku, region)}
 }
 
 // PricedComponent identifies one pricing dimension that contributed a nonzero
@@ -38,7 +37,7 @@ func PriceEvidence(key string, p pricing.Pricer, kind pricing.Kind, sku, region 
 // Finding can attach a price-evidence entry for every contributor — never
 // just the dominant one, which would mispresent where the summed number came
 // from when different components were answered by different sources (e.g. a
-// live-API answer for one leg and an embedded-fallback answer for another).
+// live-API answer for one leg and a fixture answer for another).
 // Key is a human-legible dimension token (e.g. "cpu", "iops", "capacity")
 // used to disambiguate the rendered evidence keys when several components
 // contribute.

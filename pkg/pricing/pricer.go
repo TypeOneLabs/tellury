@@ -53,6 +53,24 @@ type Pricer interface {
 	UnitPrice(kind Kind, provider, sku, region string) (float64, string, error)
 }
 
+// NoPricePricer is a Pricer that returns ErrNoPrice for every lookup. It is
+// used by offline scans that have no price source available (no
+// TELLURY_PRICE_FIXTURE and no live API). Every resource priced through it
+// skips with SkipNoPrice rather than guessing a dollar figure.
+type NoPricePricer struct{}
+
+// UnitPrice always returns ErrNoPrice.
+func (NoPricePricer) UnitPrice(_ Kind, _, _, _ string) (float64, string, error) {
+	return 0, "", ErrNoPrice
+}
+
+// MonthlyCost always returns ErrNoPrice.
+func (NoPricePricer) MonthlyCost(_ Item) (float64, error) {
+	return 0, ErrNoPrice
+}
+
+var _ Pricer = NoPricePricer{}
+
 // CanonicalRegion is the ONE canonicaliser for "what place is this". It
 // lowercases a location and flattens a zone to its region. Every caller —
 // pricing's RegionOf and the graph location node in pkg/cloud/gcp — must

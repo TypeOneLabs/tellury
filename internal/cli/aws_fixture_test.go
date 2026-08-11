@@ -22,17 +22,19 @@ var awsScanNow = time.Date(2024, 2, 15, 0, 0, 0, 0, time.UTC)
 // selection -> offline AWS provider -> fixture ingest -> rules -> table
 // render) on the shipped AWS EC2 fixture
 // (pkg/cloud/aws/testdata/aws-ec2-fixture.json). The offline provider prices
-// the replay from the embedded static table, so the expected figures are
+// the replay from the TELLURY_PRICE_FIXTURE file, so the expected figures are
 // exact and deterministic:
 //
 //   - vol-0aaa: available gp3, 100 GiB, 3000 IOPS, 250 MB/s, created 31 days
 //     before now → unattached_ebs_volume fires at
-//     100*0.08 + 3000*0.005 + 250*0.04 = $33.00;
+//     100*0.08 + (3000-3000)*0.005 + (250-125)*0.04 = $13.00;
 //   - eipalloc-0d1: VPC-domain EIP with no association →
 //     unassociated_eip fires at 0.005 * 730 = $3.65;
 //   - vol-0bbb (in-use), vol-0ccc (in-use) and eipalloc-0d2 (associated) all
-//     skip, so the total is exactly $36.65 over 2 findings.
+//     skip, so the total is exactly $16.65 over 2 findings.
 func TestAwsFixtureScanFiresBothRules(t *testing.T) {
+	t.Setenv("TELLURY_PRICE_FIXTURE", filepath.Join("..", "..", "pkg", "pricing", "aws", "testdata", "price-fixture.json"))
+
 	cfg := config.Scan{
 		Provider:       "aws",
 		Account:        "123456789012",

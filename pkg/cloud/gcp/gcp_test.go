@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"testing"
 
 	"github.com/TypeOneLabs/tellury/pkg/cloud"
@@ -35,49 +36,66 @@ func newTestLogger() *slog.Logger {
 // constructor touches ADC at all, which the compile-time guard below enforces
 // by refusing to proceed when the offline flag was dropped.
 func TestNew_OfflineConstructsZeroCloudClients(t *testing.T) {
-	// Guard: assert the option is wired. If it were removed, this call would
-	// still compile but the scan path would silently return to constructing
-	// cloud clients on the live path too — we can't detect that from here in
-	// a credential-present CI, so the strongest portable signal is that the
-	// offline constructor itself succeeds without ever running ADC code.
+	// Set TELLURY_PRICE_FIXTURE so the offline pricer has prices to serve.
+	priceFixture := filepath.Join("..", "..", "pricing", "gcp", "testdata", "price-fixture.json")
+	t.Setenv("TELLURY_PRICE_FIXTURE", priceFixture)
+
 	p, err := New(context.Background(), WithOffline(), WithLogger(newTestLogger()))
 	if err != nil {
 		t.Fatalf("offline gcp.New must succeed with no ADC: %v", err)
 	}
 	defer p.Close()
 
-	// The offline pricer is the embedded static table (WithOffline bypasses
-	// NewCatalogPricer entirely): a lookup the table knows answers with the
-	// exact embedded value, proving no live Cloud Billing client is involved.
+	// The offline pricer loads from TELLURY_PRICE_FIXTURE. A lookup the
+	// fixture knows answers with the exact value, proving no live Cloud
+	// Billing client is involved.
 	unit, region, err := p.Pricer().UnitPrice(pricing.KindDiskCapacity, "gcp", "pd-ssd", "default")
 	if err != nil {
 		t.Fatalf("offline pricer UnitPrice: %v", err)
 	}
 	if unit != 0.170 || region != "default" {
-		t.Fatalf("offline pricer answered %v in %q; want embedded 0.170 in default", unit, region)
-	}
-	if _, ok := p.Pricer().(pricing.OverlayLoader); !ok {
-		t.Fatalf("offline pricer must implement pricing.OverlayLoader so --price-file still applies")
+		t.Fatalf("offline pricer answered %v in %q; want fixture 0.170 in default", unit, region)
 	}
 }
 
 // TestOfflinePricerNoBillingClient ensures the offline pricer is a pure
 // StaticPricer without any live-catalog behavior: it asserts the interface we
-// hand out from an offline provider is exactly the embedded one. This is the
+// hand out from an offline provider is exactly the fixture one. This is the
 // slice of the regression that is provable without relying on the host being
 // credential-less.
 func TestOfflinePricerNoBillingClient(t *testing.T) {
+	priceFixture := filepath.Join("..", "..", "pricing", "gcp", "testdata", "price-fixture.json")
+	t.Setenv("TELLURY_PRICE_FIXTURE", priceFixture)
+
 	p, err := New(context.Background(), WithOffline(), WithLogger(newTestLogger()))
 	if err != nil {
 		t.Fatalf("offline gcp.New: %v", err)
 	}
 	defer p.Close()
 
-	// A live CatalogPricer would implement ProvenancePricer; the embedded
-	// StaticPricer does not. Asserting its absence proves we never built the
-	// live pricer for an offline scan.
+	// When TELLURY_PRICE_FIXTURE is set, the offline pricer is a StaticPricer,
+	// which does not implement ProvenancePricer.
 	if _, ok := p.Pricer().(pricing.ProvenancePricer); ok {
 		t.Fatalf("offline pricer unexpectedly implements ProvenancePricer; a CatalogPricer (live Billing client) must not be built offline")
+	}
+}
+
+// TestOfflinePricerNoFixtureSkips asserts that an offline provider without
+// TELLURY_PRICE_FIXTURE returns a NoPricePricer — every price lookup returns
+// ErrNoPrice and rules skip.
+func TestOfflinePricerNoFixtureSkips(t *testing.T) {
+	// Unset TELLURY_PRICE_FIXTURE to test the "no prices" path.
+	t.Setenv("TELLURY_PRICE_FIXTURE", "")
+
+	p, err := New(context.Background(), WithOffline(), WithLogger(newTestLogger()))
+	if err != nil {
+		t.Fatalf("offline gcp.New: %v", err)
+	}
+	defer p.Close()
+
+	_, _, err = p.Pricer().UnitPrice(pricing.KindDiskCapacity, "gcp", "pd-ssd", "default")
+	if err != pricing.ErrNoPrice {
+		t.Fatalf("offline pricer without TELLURY_PRICE_FIXTURE must return ErrNoPrice, got %v", err)
 	}
 }
 

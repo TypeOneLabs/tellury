@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"math"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -17,13 +19,27 @@ import (
 	"github.com/TypeOneLabs/tellury/pkg/rules/gcp/gcs/no_lifecycle_policy"
 )
 
+// gcpPriceFixture loads the GCP price fixture for tests that need a
+// populated StaticPricer. It prefers TELLURY_PRICE_FIXTURE; if unset it
+// falls back to the testdata file.
+func gcpPriceFixture(t *testing.T) *StaticPricer {
+	t.Helper()
+	path := os.Getenv("TELLURY_PRICE_FIXTURE")
+	if path == "" {
+		path = filepath.Join("testdata", "price-fixture.json")
+	}
+	p, err := NewStaticPricerFromFile(path)
+	if err != nil {
+		t.Fatalf("NewStaticPricerFromFile: %v", err)
+	}
+	return p
+}
+
 // TestCatalogueProgress_InvokesRegisteredCallback pins the progress seam the
 // CLI uses to report the pricing catalogue load as its own phase:
 // SetCatalogueProgress stores a callback and reportCatalogueProgress invokes
 // it with the exact (done, total, final) arguments — including final=true on
-// the completion call, so the CLI's phase always ends. It also pins that
-// setting nil disables further invocations (the offline static pricer never
-// registers one).
+// the completion call, so the CLI's phase always ends.
 func TestCatalogueProgress_InvokesRegisteredCallback(t *testing.T) {
 	p, err := NewCatalogPricer(context.Background(), slog.New(slog.DiscardHandler), "")
 	if err != nil {
@@ -87,8 +103,8 @@ func TestCatalogueProgress_InvokesRegisteredCallback(t *testing.T) {
 // a cancelled/deadline-exceeded context makes every ListServices/ListSkus RPC
 // abort promptly. This test proves the thread is intact: it creates a pricer
 // with an already-cancelled context and asserts the live path honours it,
-// turning the load error into the embedded fallback and never blocking on the
-// passed deadline.
+// returning ErrNoPrice — the scan then skips rather than falling back to an
+// embedded table (there is no embedded table anymore).
 func TestLiveUnitPrice_ThreadsScanContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already cancelled: the load must not proceed
@@ -103,15 +119,11 @@ func TestLiveUnitPrice_ThreadsScanContext(t *testing.T) {
 	}
 	defer p.Close()
 
-	// UnitPrice falls back to the embedded table, never hanging on the Billing
-	// API. Exactly the "deadline-bounded, then embedded" behaviour the scan
-	// needs.
-	unit, region, err := p.UnitPrice(pricing.KindDiskCapacity, "gcp", "pd-ssd", "default")
-	if err != nil {
-		t.Fatalf("UnitPrice with a cancelled scan context must fall back to embedded, not fail: %v", err)
-	}
-	if unit != 0.170 || region != "default" {
-		t.Fatalf("expected embedded 0.170/default, got %v/%q", unit, region)
+	// UnitPrice returns ErrNoPrice, never hanging on the Billing API.
+	// There is no embedded fallback: the rule skips rather than guessing.
+	_, _, err = p.UnitPrice(pricing.KindDiskCapacity, "gcp", "pd-ssd", "default")
+	if err != pricing.ErrNoPrice {
+		t.Fatalf("UnitPrice with a cancelled scan context must return ErrNoPrice (no embedded fallback): %v", err)
 	}
 }
 
@@ -140,11 +152,8 @@ func TestLoadCatalogue_UsesCallerContext(t *testing.T) {
 
 // TestLiveUnitPrice_DeadlineExceededOnce asserts that once the context source
 // has signalled deadline-exceeded, the live path stays dead for the pricer's
-// lifetime (sync.Once caches loadErr), and every subsequent UnitPrice resolves
-// from the embedded table without re-entering the API. This is the contract
-// that stops a hanging Billing API from stalling the scan: the FIRST resource
-// trip to the API hits the deadline, the error is cached, and all later
-// resources price instantly from the embedded table.
+// lifetime (sync.Once caches loadErr), and every subsequent UnitPrice returns
+// ErrNoPrice — no embedded fallback exists.
 func TestLiveUnitPrice_DeadlineExceededOnce(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	p, err := NewCatalogPricer(ctx, slog.New(slog.DiscardHandler), "")
@@ -156,30 +165,25 @@ func TestLiveUnitPrice_DeadlineExceededOnce(t *testing.T) {
 	// Cancel immediately after construction, before the first UnitPrice: the
 	// first lookup trips the lazy load under a dead context.
 	cancel()
-	unit, region, err := p.UnitPrice(pricing.KindDiskCapacity, "gcp", "pd-ssd", "default")
-	if err != nil {
-		t.Fatalf("failed on first UnitPrice: %v", err)
-	}
-	if unit != 0.170 {
-		t.Fatalf("embedded fallback should answer 0.170, got %v (%q)", unit, region)
+	_, _, err = p.UnitPrice(pricing.KindDiskCapacity, "gcp", "pd-ssd", "default")
+	if err != pricing.ErrNoPrice {
+		t.Fatalf("UnitPrice with cancelled context must return ErrNoPrice: %v", err)
 	}
 
-	// Second call must not re-enter the API: same embedded answer, proving
+	// Second call must not re-enter the API: same ErrNoPrice, proving
 	// loadErr is cached via sync.Once.
-	unit2, _, err := p.UnitPrice(pricing.KindDiskCapacity, "gcp", "pd-ssd", "default")
-	if err != nil || unit2 != unit {
-		t.Fatalf("second UnitPrice diverged (loadErr must be cached via sync.Once): unit=%v err=%v", unit2, err)
+	_, _, err = p.UnitPrice(pricing.KindDiskCapacity, "gcp", "pd-ssd", "default")
+	if err != pricing.ErrNoPrice {
+		t.Fatalf("second UnitPrice diverged (loadErr must be cached via sync.Once): err=%v", err)
 	}
 }
 
 // TestMatchSKU_StaticIPTokenPinned is the regression test for the static-IP
 // pricing token mismatch: matchSKU indexed live Cloud Billing static-IP SKUs
 // under "external-static" while the unused_reserved_ip rule queried
-// StaticIPSKU = "unattached" (the same token the embedded table's
+// StaticIPSKU = "unattached" (the same token the fixture's
 // static_ip.unattached entry is keyed under). The live lookup therefore NEVER
-// matched: every static-IP price silently resolved from the embedded
-// fallback, provenance always read "embedded_fallback", and a region whose
-// live rate differs from the table was mispriced with no error.
+// matched.
 //
 // The assertion imports the constant the rule ACTUALLY queries, so the two
 // cannot drift apart again: if matchSKU's token or the rule's StaticIPSKU
@@ -215,21 +219,13 @@ func TestMatchSKU_StaticIPTokenPinned(t *testing.T) {
 // ("storagesnapshot"), so no live SKU ever matched and every snapshot silently
 // resolved from the embedded table — which itself carried a rate roughly half
 // the real one. The combined error understated a real snapshot's cost by ~2x.
-//
-// The Category values below are copied from a live catalogue response, not
-// invented, which is the whole point: an invented group name is what broke it.
 func TestMatchSKU_SnapshotTokenPinned(t *testing.T) {
 	sk := &billingpb.Sku{
 		Category: &billingpb.Category{
 			ServiceDisplayName: "Compute Engine",
-			// Copied verbatim from a live catalogue response. Cloud Billing
-			// files snapshot SKUs under family "Storage", NOT "Compute" — an
-			// earlier version of this test invented "Compute", so the test
-			// passed while no live SKU matched and every snapshot silently
-			// used the embedded rate.
-			ResourceFamily: "Storage",
-			ResourceGroup:  "PDSnapshot",
-			UsageType:      "OnDemand",
+			ResourceFamily:     "Storage",
+			ResourceGroup:      "PDSnapshot",
+			UsageType:          "OnDemand",
 		},
 		Description: "Storage PD Snapshot",
 	}
@@ -251,8 +247,7 @@ func TestMatchSKU_SnapshotTokenPinned(t *testing.T) {
 
 // TestMatchSKU_SnapshotEarlyDeletionIgnored: the PDSnapshot group also carries
 // early-deletion charges, which are one-off penalties rather than a standing
-// per-GiB-month rate. Indexing one as the storage rate would overwrite the real
-// rate for that region with an unrelated number.
+// per-GiB-month rate.
 func TestMatchSKU_SnapshotEarlyDeletionIgnored(t *testing.T) {
 	sk := &billingpb.Sku{
 		Category: &billingpb.Category{
@@ -269,18 +264,7 @@ func TestMatchSKU_SnapshotEarlyDeletionIgnored(t *testing.T) {
 }
 
 // TestMatchSKU_GCSSkuTokensPinned pins the GCS storage-class tokens against
-// the exact constants the no_lifecycle_policy rule queries: FromClass =
-// "STANDARD" and ToClass = "NEARLINE" are the two classes whose price delta the
-// rule prices (the STANDARD→NEARLINE class-transition waste). If matchSKU's
-// storage-class spelling ever drifts from those constants, the live catalogue
-// would never match and every GCS class-transition price would silently fall
-// back to the embedded table with no error — the same silent-fallback bug
-// class that broke static IPs and snapshots.
-//
-// matchSKU switches on ResourceFamily "Storage" (the family a live catalogue
-// response confirmed for snapshot SKUs; Cloud Storage SKUs sit in the same
-// family) and on the storage-class keyword in the description. The resource
-// group is not consulted for GCS, so it is left off the fixture.
+// the exact constants the no_lifecycle_policy rule queries.
 func TestMatchSKU_GCSSkuTokensPinned(t *testing.T) {
 	cases := []struct {
 		name string
@@ -318,20 +302,7 @@ func TestMatchSKU_GCSSkuTokensPinned(t *testing.T) {
 }
 
 // TestMatchSKU_CustomFamilyTokensPinned pins the custom-machine-family token
-// the whole pricing path shares. The underutilized_instance rule prices a
-// custom shape by passing the node's machine_family token to
-// KindVMCustomCPU/KindVMCustomRAM; the normalizer derives that token from the
-// machine-type name via ParseCustomMachineType ("n2-custom-8-32768-ext" ->
-// family "n2-custom"), and matchSKU derives it from a live custom-instance SKU
-// description by taking the leading family word ("N2 Custom Instance Core
-// running in Americas" -> "n2-custom"). All three must spell the token the
-// same way, or the live lookup resolves a key the rule never queries and every
-// custom-shape price silently falls back to the embedded table.
-//
-// The family prefix in the description is what customFamilyFromDescription
-// reads (fields[0] + "-custom"): without it the parser would emit
-// "custom-custom", so a description that starts with the family name is the
-// only spelling that can produce the machine-catalog token.
+// the whole pricing path shares.
 func TestMatchSKU_CustomFamilyTokensPinned(t *testing.T) {
 	cpuSKU := &billingpb.Sku{
 		Category: &billingpb.Category{
@@ -384,25 +355,9 @@ func TestMatchSKU_CustomFamilyTokensPinned(t *testing.T) {
 }
 
 // TestMatchSKU_DiskCapacityTokensPinned pins the disk-capacity vocabulary
-// against the detached_disk rule's lookup: the rule prices a disk under
-// pricing.DiskSKU(disk_type, replica_zone_count) — e.g. "pd-ssd" for a zonal
-// pd-ssd and "pd-ssd-regional" for one replicated across >= 2 zones — and
-// matchSKU must index the live catalogue under exactly those tokens. Each
-// token must also exist as a key in the embedded table, so the live answer and
-// the fallback resolve the same key (the static-IP/snapshot failure mode).
-//
-// This pins the TOKEN agreement only. The resource groups below are matchSKU's
-// own switch literals; whether the live catalogue really returns them for
-// these SKUs cannot be confirmed from this repo and is flagged as unverified
-// in the catalog audit — this test guards against token drift between matchSKU
-// and the rule/embedded table, not against a wrong group name. It also does
-// not cover pd-balanced or hyperdisk-* capacity SKUs, which matchSKU does not
-// currently index at all (also flagged in the audit).
+// against the detached_disk rule's lookup.
 func TestMatchSKU_DiskCapacityTokensPinned(t *testing.T) {
-	static, err := NewStaticPricer()
-	if err != nil {
-		t.Fatalf("NewStaticPricer: %v", err)
-	}
+	static := gcpPriceFixture(t)
 	cases := []struct {
 		desc  string
 		group string
@@ -443,20 +398,15 @@ func TestMatchSKU_DiskCapacityTokensPinned(t *testing.T) {
 					tc.base, tc.zones, got, token)
 			}
 			if _, _, err := static.UnitPrice(pricing.KindDiskCapacity, "gcp", token, "default"); err != nil {
-				t.Errorf("embedded table has no disk_capacity entry for matchSKU token %q: "+
-					"live and fallback vocabularies have drifted", token)
+				t.Errorf("fixture has no disk_capacity entry for matchSKU token %q: "+
+					"live and fixture vocabularies have drifted", token)
 			}
 		})
 	}
 }
 
 // TestUnitPriceOf_SubCentPrecision pins full-precision parsing of Cloud
-// Billing's units+nanos money. This function used to truncate to whole cents,
-// which was invisible for the round-cent USD SKUs anyone happened to check and
-// catastrophic everywhere else: coldline storage ($0.004/GiB-month) and custom
-// RAM ($0.004446/GiB-hour) both truncated to ZERO, pricing them free, and
-// every non-USD scan lost precision because a converted rate almost never
-// lands on a round cent.
+// Billing's units+nanos money.
 func TestUnitPriceOf_SubCentPrecision(t *testing.T) {
 	cases := []struct {
 		name  string

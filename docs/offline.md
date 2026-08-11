@@ -4,15 +4,38 @@ Two offline paths, neither of which makes an API call or needs credentials. They
 **different fidelity**, and a scan says which rules it could not evaluate rather than
 letting an empty table read as "no waste".
 
+**Pricing requires the live API.** An offline scan replays inventory from local JSON,
+but pricing needs the Cloud Billing Catalog (GCP) or Price List API (AWS). Without a
+live pricing connection, resources are found and reported as skipped (unpriced) rather
+than carrying a dollar total. The `TELLURY_PRICE_FIXTURE` environment variable provides a
+test-only pricing fixture for golden tests; it is not a supported way to price a real
+scan.
+
 ## `--fixture` — raw Cloud Asset Inventory, topology only
 
 Replays a captured Cloud Asset Inventory export: assets with their resource payloads, but
-**no metric series**. It runs the full normalization, edge extraction and hierarchy pass,
-so topology rules evaluate exactly as they would live. Metric-dependent rules cannot —
-a raw export carries no Cloud Monitoring data.
+**no metric series** and **no pricing data**. It runs the full normalization, edge
+extraction and hierarchy pass, so topology rules evaluate exactly as they would live.
+Metric-dependent rules cannot — a raw export carries no Cloud Monitoring data. Pricing
+rules skip with `no_price`.
 
 ```bash
 tellury scan --gcp-project my-project \
+  --fixture internal/cli/testdata/readme-assets.json --at 2024-01-20T00:00:00Z
+```
+
+```
+No waste found.
+Summary: projects/my-project — 1 project analyzed, 1 resource scanned, 5 rules evaluated, 0 findings, 1 resource skipped, 2ms
+
+5 rule(s) could not be evaluated for lack of metric data: …
+```
+
+With a price fixture (test-only):
+
+```bash
+TELLURY_PRICE_FIXTURE=pkg/pricing/gcp/testdata/price-fixture.json \
+  tellury scan --gcp-project my-project \
   --fixture internal/cli/testdata/readme-assets.json --at 2024-01-20T00:00:00Z
 ```
 
@@ -54,7 +77,8 @@ Replace `--scope` with `folders/123` or `organizations/456` for a wider capture.
 
 Reads or writes the same in-memory graph a live scan builds, serialized **after**
 enrichment, with every node's metric values, sample counts, coverage and window bounds.
-A replay therefore drives **every** rule, metric-dependent ones included.
+A replay therefore drives **every** rule, metric-dependent ones included. Pricing still
+requires the live API (or `TELLURY_PRICE_FIXTURE` for tests).
 
 ```bash
 # First run: live scan, graph written back.
@@ -66,6 +90,9 @@ tellury scan --cache-file snapshot.json
 
 A replay needs no scope flag: the snapshot carries its own. It writes a fresh artifact
 directory under the new run's timestamp, so a replay is auditable like any other scan.
+
+Without a live pricing API connection, a replay will find resources but report them as
+skipped (unpriced).
 
 ## `graph export`
 
@@ -89,6 +116,7 @@ but metric-dependent rules will skip on replay, exactly as with a fixture.
 | Rules that can evaluate | Topology only | All |
 | Portable to another machine | Yes | Yes |
 | Produced by | `gcloud asset search-all-resources` | `tellury scan` or `graph export` |
+| Pricing | Requires API or `TELLURY_PRICE_FIXTURE` | Requires API or `TELLURY_PRICE_FIXTURE` |
 
 ## Scan artifacts
 

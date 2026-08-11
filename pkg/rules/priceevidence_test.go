@@ -6,11 +6,11 @@ import (
 	"github.com/TypeOneLabs/tellury/pkg/pricing"
 )
 
-// mixedProvenancePricer answers every lookup from the embedded path (so
+// mixedProvenancePricer answers every lookup from a fixture-backed path (so
 // PriceEvidence's provenance type-assert always succeeds) while recording a
 // different per-kind provenance: exactly what a live CatalogPricer does when
 // a compound price's legs were answered by different sources — e.g. capacity
-// from the live pricing API and IOPS/throughput from the embedded fallback.
+// from the live pricing API and IOPS/throughput from a fixture.
 type mixedProvenancePricer struct {
 	prov map[pricing.Kind]pricing.Provenance
 }
@@ -32,21 +32,21 @@ func (m mixedProvenancePricer) LastLookup(kind pricing.Kind, sku, region string)
 // regression test for audit finding #1 (the provenance half): when a compound
 // price (capacity + IOPS + throughput, or CPU + RAM) is summed from several
 // priced components and different components are answered by different
-// sources — the live API answering one leg and the embedded fallback another
-// — the Finding must report a price-source evidence entry for EVERY
-// contributing component, never just the dominant one. Otherwise the evidence
-// mispresents where the summed number came from.
+// sources — the live API answering one leg and a fixture another — the
+// Finding must report a price-source evidence entry for EVERY contributing
+// component, never just the dominant one. Otherwise the evidence mispresents
+// where the summed number came from.
 //
 // This test drives PriceEvidenceFor directly with a pricer whose provenance
-// says capacity came from the live API and IOPS came from the embedded
-// fallback, then asserts both sources appear on the rendered evidence — each
-// leg keyed distinctly (price_source_capacity / price_source_iops) so a
-// reader can tell which component each source belongs to.
+// says capacity came from the live API and IOPS came from a fixture, then
+// asserts both sources appear on the rendered evidence — each leg keyed
+// distinctly (price_source_capacity / price_source_iops) so a reader can
+// tell which component each source belongs to.
 func TestPriceEvidenceFor_MixedSourceCompoundPriceReportsBothSources(t *testing.T) {
 	p := mixedProvenancePricer{
 		prov: map[pricing.Kind]pricing.Provenance{
 			pricing.KindDiskCapacity: {Source: pricing.SourceLiveAPI, SKU: "pd-ssd", Region: "us-central1"},
-			pricing.KindDiskIOPS:     {Source: pricing.SourceEmbedded, SKU: "pd-ssd", Region: "default"},
+			pricing.KindDiskIOPS:     {Source: pricing.SourceFixture, SKU: "pd-ssd", Region: "default"},
 		},
 	}
 
@@ -76,23 +76,23 @@ func TestPriceEvidenceFor_MixedSourceCompoundPriceReportsBothSources(t *testing.
 	if !ok {
 		t.Fatalf("missing price_source_iops entry; got %+v", got)
 	}
-	if iopsVal != "embedded_fallback sku=pd-ssd region=default" {
-		t.Errorf("iops leg rendered %q; want embedded_fallback provenance", iopsVal)
+	if iopsVal != "fixture sku=pd-ssd region=default" {
+		t.Errorf("iops leg rendered %q; want fixture provenance", iopsVal)
 	}
 
 	// The distinct keys prove the two sources are NOT collapsed onto the
 	// dominant capacity source — the exact defect the finding describes.
-	foundLive, foundEmbedded := false, false
+	foundLive, foundFixture := false, false
 	for _, v := range got {
 		if v == "live_api sku=pd-ssd region=us-central1" {
 			foundLive = true
 		}
-		if v == "embedded_fallback sku=pd-ssd region=default" {
-			foundEmbedded = true
+		if v == "fixture sku=pd-ssd region=default" {
+			foundFixture = true
 		}
 	}
-	if !foundLive || !foundEmbedded {
-		t.Fatalf("expected both live_api and embedded_fallback sources reported; got %+v", got)
+	if !foundLive || !foundFixture {
+		t.Fatalf("expected both live_api and fixture sources reported; got %+v", got)
 	}
 }
 
@@ -104,7 +104,7 @@ func TestPriceEvidenceFor_MixedSourceCompoundPriceReportsBothSources(t *testing.
 func TestPriceEvidenceFor_SingleComponentPreservesSingleKey(t *testing.T) {
 	p := mixedProvenancePricer{
 		prov: map[pricing.Kind]pricing.Provenance{
-			pricing.KindVMInstance: {Source: pricing.SourceOverride, SKU: "n1-standard-4", Region: "default"},
+			pricing.KindVMInstance: {Source: pricing.SourceLiveAPI, SKU: "n1-standard-4", Region: "default"},
 		},
 	}
 
@@ -118,7 +118,7 @@ func TestPriceEvidenceFor_SingleComponentPreservesSingleKey(t *testing.T) {
 	if ev[0].Key != "current_price_source" {
 		t.Errorf("single component must keep the undecorated key, got %q", ev[0].Key)
 	}
-	if ev[0].Value != "price_file sku=n1-standard-4 region=default" {
+	if ev[0].Value != "live_api sku=n1-standard-4 region=default" {
 		t.Errorf("unexpected single-component value %q", ev[0].Value)
 	}
 }

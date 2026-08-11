@@ -2,9 +2,11 @@ package gcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -22,17 +24,19 @@ import (
 // Cloud Billing Catalog pricer
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// CatalogPricer implements pricing.Pricer (plus pricing.ProvenancePricer and
-// pricing.OverlayLoader) over the Cloud Billing Catalog API
-// (cloud.google.com/go/billing/apiv1, CloudCatalogClient), with the embedded
-// StaticPricer as its fallback. Precedence (highest first), enforced right
-// here in UnitPrice, and stated in `tellury scan --help` (see the --price-file
-// flag text in internal/cli/scan.go):
+// CatalogPricer implements pricing.Pricer (plus pricing.ProvenancePricer,
+// pricing.CurrencySetter, pricing.CurrencyReporter and
+// pricing.CatalogueErrorer) over the Cloud Billing Catalog API
+// (cloud.google.com/go/billing/apiv1, CloudCatalogClient).
 //
-//  1. --price-file override (pricing.SourceOverride)
-//  2. live Cloud Billing Catalog API (pricing.SourceLiveAPI), cached for the
-//     lifetime of this CatalogPricer, i.e. for the duration of one scan
-//  3. embedded static price table (pricing.SourceEmbedded)
+// The live API is the ONLY source. There is no embedded fallback table. A
+// price that cannot be resolved from the live catalogue returns ErrNoPrice and
+// the rule skips rather than guessing at a dollar figure.
+//
+// When the TELLURY_PRICE_FIXTURE environment variable is set, the catalogue
+// loads from that file instead of calling the API. This is a test-only hook,
+// never a user-facing flag. The file format is the generic
+// kind -> SKU -> region -> price table.
 //
 // The catalogue is fetched at most once per process (see loadOnce): it is
 // large (thousands of SKUs across the handful of services tellury prices) and
@@ -46,15 +50,6 @@ import (
 type CatalogPricer struct {
 	log    *slog.Logger
 	client *billing.CloudCatalogClient
-	static *StaticPricer
-
-	// staticBaseline is the pristine, never-overlaid embedded StaticPricer
-	// built once at construction. overrideValue resolves a key against it
-	// to decide whether the (overlaid) `static` table genuinely differs
-	// from what the embedded price file would have answered — i.e. whether
-	// --price-file actually set it. Built once and reused across every
-	// UnitPrice call rather than rebuilt-and-decoded per lookup.
-	staticBaseline *StaticPricer
 
 	// ctx is the scan's context, captured at construction (NewCatalogPricer
 	// is handed the scan context by pkg/cloud/gcp.New). The catalogue load —
@@ -82,15 +77,12 @@ type CatalogPricer struct {
 
 	// loaded reports whether the live catalogue indexed at least one SKU. It
 	// is what distinguishes "the requested currency priced the answers" from
-	// "the embedded USD table priced them" in CurrencyInfo.
+	// "no prices resolved" in CurrencyInfo.
 	loaded bool
-	// mixed records that a USD embedded-fallback price was used while a
-	// non-USD currency was requested — the currency-mix trap. Read by
-	// CurrencyInfo for the report's currency_mixed disclosure.
-	mixed bool
+
 	// unsupported is non-nil when the live catalogue rejected the requested
 	// currency (InvalidArgument from ListSkus). Such a failure must surface
-	// to the scan, not silently fall back to the USD embedded table.
+	// to the scan, not silently fall back.
 	unsupported error
 
 	// catalogueProgress, when non-nil, is invoked as the live catalogue
@@ -118,33 +110,30 @@ type resolvedSKU struct {
 var (
 	_ pricing.Pricer           = (*CatalogPricer)(nil)
 	_ pricing.ProvenancePricer = (*CatalogPricer)(nil)
-	_ pricing.OverlayLoader    = (*CatalogPricer)(nil)
 	_ pricing.CurrencySetter   = (*CatalogPricer)(nil)
 	_ pricing.CurrencyReporter = (*CatalogPricer)(nil)
 	_ pricing.CatalogueErrorer = (*CatalogPricer)(nil)
 )
 
-// NewCatalogPricer builds a pricer that prefers the live Cloud Billing
-// Catalog API and falls back to the embedded static table. It performs no
-// RPCs itself: the catalogue is fetched lazily, once, on first UnitPrice
-// call (see loadCatalogue), so a scan with no billing permission never even
-// attempts the call - it just quietly resolves everything through the
-// embedded fallback instead. Failure to build the API client at all
-// (e.g. ADC entirely absent) is likewise non-fatal here: NewCatalogPricer
-// still returns a usable pricer, just one whose live path is permanently
-// unavailable.
+// NewCatalogPricer builds a pricer over the live Cloud Billing Catalog API.
+// It performs no RPCs itself: the catalogue is fetched lazily, once, on first
+// UnitPrice call (see loadCatalogue).
+//
+// When TELLURY_PRICE_FIXTURE is set, the catalogue loads from that file
+// (a generic kind->SKU->region->price table) instead of calling the API.
+// This is a test-only hook, not a user-facing flag.
+//
+// Failure to build the API client at all (e.g. ADC entirely absent) is
+// likewise non-fatal here: NewCatalogPricer still returns a usable pricer,
+// just one whose live path is permanently unavailable. Every price lookup
+// will then return ErrNoPrice and rules will skip.
 //
 // currencyCode is the ISO 4217 code the catalogue is fetched in ("" = USD).
 // The live Cloud Billing API prices the whole catalogue in this currency
 // (ListSkusRequest.CurrencyCode), so the snapshot SKU prices come back
 // converted. A well-formed but unsupported code makes ListSkus fail with
 // InvalidArgument; the pricer records that failure (CatalogueError) and
-// refuses to silently fall back to the USD embedded table, and UnitPrice
 // surfaces it so the scan cannot complete with wrong-currency figures.
-//
-// The pristine embedded baseline used to detect --price-file overrides is
-// built exactly once here and stored (see staticBaseline), so
-// overrideValue never pays a per-lookup rebuild/JSON-decode cost.
 //
 // ctx is retained on the pricer so the eventual lazy catalogue load runs
 // under the scan's context and deadline (it is the `--timeout` derived from
@@ -158,33 +147,18 @@ func NewCatalogPricer(ctx context.Context, log *slog.Logger, currencyCode string
 		ctx = context.Background()
 	}
 	currencyCode = strings.ToUpper(strings.TrimSpace(currencyCode))
-	static, err := NewStaticPricer()
-	if err != nil {
-		return nil, err
-	}
-	// Build the pristine baseline once at construction and reuse it for the
-	// lifetime of the pricer. This is the exact JSON-decoded table the
-	// embedded fallback would answer with before any --price-file overlay:
-	// comparing the live `static` table against it every UnitPrice call
-	// tells us conclusively whether an overlay changed that entry.
-	staticBaseline, err := NewStaticPricer()
-	if err != nil {
-		return nil, err
-	}
 	client, err := billing.NewCloudCatalogClient(ctx)
 	if err != nil {
-		log.Warn("gcp: cloud billing catalog client unavailable; pricing will use the embedded fallback table", "err", err)
+		log.Warn("gcp: cloud billing catalog client unavailable; resources requiring prices will skip", "err", err)
 		client = nil
 	}
 	return &CatalogPricer{
-		log:            log,
-		ctx:            ctx,
-		client:         client,
-		static:         static,
-		staticBaseline: staticBaseline,
-		currencyCode:   currencyCode,
-		skusByKey:      map[skuKey]resolvedSKU{},
-		last:           map[string]pricing.Provenance{},
+		log:          log,
+		ctx:          ctx,
+		client:       client,
+		currencyCode: currencyCode,
+		skusByKey:    map[skuKey]resolvedSKU{},
+		last:         map[string]pricing.Provenance{},
 	}, nil
 }
 
@@ -194,15 +168,6 @@ func (c *CatalogPricer) Close() error {
 		return nil
 	}
 	return c.client.Close()
-}
-
-// OverlayFile implements pricing.OverlayLoader: --price-file always applies
-// on top of the embedded fallback table. It does not touch the live
-// catalogue cache - the override is still consulted first, on every lookup,
-// regardless of whether the live API answered (see UnitPrice), so this is
-// sufficient to give the override the highest precedence.
-func (c *CatalogPricer) OverlayFile(path string) error {
-	return c.static.OverlayFile(path)
 }
 
 // SetCurrency implements pricing.CurrencySetter. It changes the catalogue
@@ -219,10 +184,7 @@ func (c *CatalogPricer) SetCurrency(code string) {
 
 // CurrencyInfo implements pricing.CurrencyReporter. Effective is the
 // requested currency when the live catalogue loaded (the only source that
-// prices in the requested currency), otherwise "USD" — the embedded table's
-// currency. Mixed is true when a non-USD currency was requested and any
-// embedded (USD) price was used, or when the requested currency could not
-// price the catalogue at all (so every answer came from the USD table).
+// prices in the requested currency), otherwise "USD".
 func (c *CatalogPricer) CurrencyInfo() pricing.CurrencyInfo {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -232,12 +194,8 @@ func (c *CatalogPricer) CurrencyInfo() pricing.CurrencyInfo {
 	} else {
 		info.Effective = "USD"
 	}
-	info.Mixed = c.mixed
 	if c.currencyCode != "" && c.currencyCode != "USD" && info.Effective == "USD" {
-		// The requested currency priced nothing: every figure the scan
-		// reports came from the USD embedded table. That is a full currency
-		// mismatch, not the quiet normal degradation of a USD-requesting scan
-		// losing live access.
+		// The requested currency priced nothing.
 		info.Mixed = true
 	}
 	return info
@@ -245,8 +203,7 @@ func (c *CatalogPricer) CurrencyInfo() pricing.CurrencyInfo {
 
 // CatalogueError implements pricing.CatalogueErrorer. Non-nil only when the
 // live catalogue rejected the requested currency (an InvalidArgument from
-// ListSkus), which a scan must surface rather than silently fall back to the
-// USD embedded table.
+// ListSkus), which a scan must surface rather than silently fall back.
 func (c *CatalogPricer) CatalogueError() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -280,27 +237,19 @@ func (c *CatalogPricer) reportCatalogueProgress(done, total int, final bool) {
 	}
 }
 
-// UnitPrice implements pricing.Pricer with the documented precedence:
-// --price-file override > live Cloud Billing Catalog API > embedded table.
+// UnitPrice implements pricing.Pricer with ONE source: the live Cloud Billing
+// Catalog API (or, when TELLURY_PRICE_FIXTURE is set, its recorded
+// replacement). There is no embedded fallback. A price that cannot be
+// resolved returns ErrNoPrice, and the rule skips rather than guessing.
 func (c *CatalogPricer) UnitPrice(kind pricing.Kind, provider, sku, region string) (float64, string, error) {
-	// 1. --price-file override always wins, if this exact key was changed
-	// by an overlay (see overrideValue for how "was changed" is decided).
-	if v, resolvedRegion, ok := c.overrideValue(kind, sku, region); ok {
-		c.record(kind, sku, region, pricing.Provenance{Source: pricing.SourceOverride, SKU: sku, Region: resolvedRegion})
-		return v, resolvedRegion, nil
-	}
-
-	// 2. Live API, cached for the scan's lifetime. The catalogue load runs
-	// against c.ctx — the scan's deadline-bounded context — so a Billing API
-	// hang cannot outlive --timeout.
-	if c.client != nil {
+	// Live API (or price fixture), cached for the scan's lifetime.
+	if c.client != nil || priceFixturePath() != "" {
 		if v, res, err := c.liveUnitPrice(kind, sku, region); err == nil {
 			c.record(kind, sku, region, pricing.Provenance{Source: pricing.SourceLiveAPI, SKU: res.skuID, Region: res.region})
 			return v, res.region, nil
 		} else {
 			// A well-formed-but-unsupported currency is an operator error to
-			// surface, not a degradation to absorb: falling back here would
-			// silently answer the EUR-asking scan in USD.
+			// surface, not a degradation to absorb.
 			var ue *unsupportedCurrencyError
 			if errors.As(err, &ue) {
 				return 0, "", ue
@@ -308,27 +257,7 @@ func (c *CatalogPricer) UnitPrice(kind pricing.Kind, provider, sku, region strin
 		}
 	}
 
-	// 3. Embedded fallback. This table is USD only, so an answer here is
-	// always in USD — record that so CurrencyInfo can flag the mix when a
-	// non-USD currency was requested.
-	v, resolvedRegion, err := c.static.UnitPrice(kind, provider, sku, region)
-	if err != nil {
-		return 0, "", err
-	}
-	c.noteEmbeddedUSD()
-	c.record(kind, sku, region, pricing.Provenance{Source: pricing.SourceEmbedded, SKU: sku, Region: resolvedRegion})
-	return v, resolvedRegion, nil
-}
-
-// noteEmbeddedUSD records that the embedded USD table answered a lookup. When
-// a non-USD currency was requested this is the currency-mix trap and must be
-// disclosed on the report (via CurrencyInfo).
-func (c *CatalogPricer) noteEmbeddedUSD() {
-	c.mu.Lock()
-	if c.currencyCode != "" && c.currencyCode != "USD" {
-		c.mixed = true
-	}
-	c.mu.Unlock()
+	return 0, "", pricing.ErrNoPrice
 }
 
 // MonthlyCost implements pricing.Pricer: price * quantity, using UnitPrice so
@@ -363,31 +292,11 @@ func provKey(kind pricing.Kind, sku, region string) string {
 	return string(kind) + "|" + sku + "|" + region
 }
 
-// overrideValue reports whether (kind, sku, region) resolves differently in
-// the (possibly overlaid) static table than it would in a pristine,
-// never-overlaid embedded table - i.e. it was genuinely set by
-// --price-file. The pristine baseline is built once at construction
-// (staticBaseline) and reused on every lookup, so this comparison never
-// pays a rebuild-and-decode cost per UnitPrice call.
-func (c *CatalogPricer) overrideValue(kind pricing.Kind, sku, region string) (float64, string, bool) {
-	overlaid, resolvedRegion, err := c.static.UnitPrice(kind, "gcp", sku, region)
-	if err != nil {
-		return 0, "", false
-	}
-	baseline := c.staticBaseline
-	if baseline == nil {
-		// Cannot tell the two apart; be conservative rather than claim an
-		// override that might not exist. Falls through to live/embedded.
-		return 0, "", false
-	}
-	pristineVal, _, pristineErr := baseline.UnitPrice(kind, "gcp", sku, region)
-	if pristineErr != nil || pristineVal != overlaid {
-		// Either the embedded table never had this entry at all (the
-		// overlay introduced it), or the value changed: both are
-		// conclusive evidence of a genuine override.
-		return overlaid, resolvedRegion, true
-	}
-	return 0, "", false
+// priceFixturePath returns the value of TELLURY_PRICE_FIXTURE, or "" when
+// unset. This is a test-only hook: it lets golden fixtures price without
+// network access. It is deliberately not a user-facing flag.
+func priceFixturePath() string {
+	return os.Getenv("TELLURY_PRICE_FIXTURE")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -414,10 +323,14 @@ var billingServiceForKind = map[pricing.Kind]string{
 // liveUnitPrice resolves (kind, sku, region) against the cached catalogue,
 // loading it on first use. The load runs against c.ctx (the scan's
 // deadline-bounded context passed to NewCatalogPricer), so a hanging Billing
-// API fails cleanly at --timeout and UnitPrice falls back to the embedded
-// table rather than stalling the rule. sku is tellury's internal SKU token
+// API fails cleanly at --timeout.
+//
+// When TELLURY_PRICE_FIXTURE is set, the catalogue loads from that file
+// instead of calling the API. sku is tellury's internal SKU token
 // (e.g. "pd-ssd", "n1-standard", "STANDARD") - matchSKU below maps that token
-// onto real Cloud Billing SKU descriptions.
+// onto real Cloud Billing SKU descriptions — but when loading from a fixture
+// file, the token is looked up directly (the fixture already uses tellury's
+// internal tokens).
 func (c *CatalogPricer) liveUnitPrice(kind pricing.Kind, sku, region string) (float64, resolvedSKU, error) {
 	c.once.Do(func() { c.loadErr = c.loadCatalogue(c.ctx) })
 	if c.loadErr != nil {
@@ -425,7 +338,7 @@ func (c *CatalogPricer) liveUnitPrice(kind pricing.Kind, sku, region string) (fl
 	}
 
 	// Exact region, then region prefix, then "default"/"global" (SKUs with
-	// no region restriction), same fallback order as the embedded table.
+	// no region restriction), same fallback order the old embedded table used.
 	for _, candidate := range regionCandidates(region) {
 		if res, ok := c.skusByKey[skuKey{kind: kind, sku: sku, region: candidate}]; ok {
 			return res.unitPrice, res, nil
@@ -453,12 +366,16 @@ func (c *CatalogPricer) listSkusRequest(serviceID string) *billingpb.ListSkusReq
 
 // loadCatalogue fetches every SKU of every service this pricer cares about,
 // exactly once, and indexes it into skusByKey. This is the only place the
-// Cloud Billing API is called - everything else in this file reads the
-// cache built here, satisfying the "cache the catalogue for the duration of
-// a scan, do not call the API per resource" requirement. A permission
-// failure here (the expected shape of "caller lacks billing access") is
-// logged once as a warning and returned so liveUnitPrice's caller (UnitPrice)
-// falls back to the embedded table for every subsequent lookup too, since
+// Cloud Billing API is called — everything else in this file reads the
+// cache built here.
+//
+// When TELLURY_PRICE_FIXTURE is set, the catalogue loads from that file
+// (a generic kind->SKU->region->price table) instead of calling the API.
+// This is a test-only hook, not a user-facing flag.
+//
+// A permission failure here (the expected shape of "caller lacks billing
+// access") is logged once as a warning and returned so liveUnitPrice's caller
+// (UnitPrice) returns ErrNoPrice for every subsequent lookup too, since
 // c.loadErr is cached in c.once.Do.
 //
 // A well-formed but unsupported currency (ListSkus InvalidArgument) is NOT
@@ -470,12 +387,24 @@ func (c *CatalogPricer) listSkusRequest(serviceID string) *billingpb.ListSkusReq
 // ListSkus RPC inherits its deadline, so the CLI --timeout bounds this load.
 //
 // The registered catalogue progress callback (SetCatalogueProgress) is
-// invoked as the load proceeds: (0, services, false) before the first
-// service, (i, services, false) after each service — whether it indexed or
-// failed — and (services, services, true) once at the end, or (0, 0, true)
-// when no service could even be resolved. Callers use it to report the load
-// as a progress phase without pre-warming the lazy load.
+// invoked as the load proceeds.
 func (c *CatalogPricer) loadCatalogue(ctx context.Context) error {
+	// TELLURY_PRICE_FIXTURE: load from file, no API call.
+	if path := priceFixturePath(); path != "" {
+		n, err := loadPriceFixture(path, c.skusByKey)
+		if err != nil {
+			c.reportCatalogueProgress(0, 0, true)
+			c.log.Warn("gcp: price fixture load failed; no prices will resolve", "path", path, "err", err)
+			return err
+		}
+		c.mu.Lock()
+		c.loaded = n > 0
+		c.mu.Unlock()
+		c.reportCatalogueProgress(1, 1, true)
+		c.log.Debug("gcp price catalogue loaded from fixture", "entries_indexed", n, "path", path)
+		return nil
+	}
+
 	wantServices := map[string]bool{}
 	for _, name := range billingServiceForKind {
 		wantServices[name] = true
@@ -484,7 +413,7 @@ func (c *CatalogPricer) loadCatalogue(ctx context.Context) error {
 	serviceIDs, err := c.resolveServiceIDs(ctx, wantServices)
 	if err != nil {
 		c.reportCatalogueProgress(0, 0, true)
-		c.log.Warn("gcp: could not list Cloud Billing services; pricing will use the embedded fallback table", "err", err)
+		c.log.Warn("gcp: could not list Cloud Billing services; resources requiring prices will skip", "err", err)
 		return err
 	}
 
@@ -504,7 +433,7 @@ func (c *CatalogPricer) loadCatalogue(ctx context.Context) error {
 				c.reportCatalogueProgress(done, nServices, true)
 				return ue
 			}
-			c.log.Warn("gcp: could not list SKUs for billing service; pricing for it will use the embedded fallback table",
+			c.log.Warn("gcp: could not list SKUs for billing service; resources requiring prices for it will skip",
 				"service", displayName, "err", err)
 		} else {
 			total += n
@@ -517,6 +446,34 @@ func (c *CatalogPricer) loadCatalogue(ctx context.Context) error {
 	c.mu.Unlock()
 	c.log.Debug("cloud billing catalogue loaded", "skus_indexed", total, "services", len(serviceIDs), "currency", c.currencyCode)
 	return nil
+}
+
+// loadPriceFixture loads a generic kind->SKU->region->price table from a
+// JSON file and indexes it into skusByKey. This is the TELLURY_PRICE_FIXTURE
+// path — a test-only hook, never a user-facing flag.
+func loadPriceFixture(path string, skusByKey map[skuKey]resolvedSKU) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	var t table
+	if err := json.Unmarshal(data, &t); err != nil {
+		return 0, err
+	}
+	n := 0
+	for kind, skus := range t {
+		for sku, regions := range skus {
+			for region, price := range regions {
+				skusByKey[skuKey{kind: kind, sku: sku, region: region}] = resolvedSKU{
+					skuID:     sku,
+					unitPrice: price,
+					region:    region,
+				}
+				n++
+			}
+		}
+	}
+	return n, nil
 }
 
 // resolveServiceIDs pages ListServices once and returns the "services/XXXX"
@@ -587,9 +544,7 @@ func (c *CatalogPricer) indexServiceSKUs(ctx context.Context, displayName, servi
 
 // unsupportedCurrencyError wraps the InvalidArgument a ListSkus call returns
 // for a well-formed but unsupported ISO 4217 currency code. A scan must
-// surface it (naming the currency) rather than silently fall back to the USD
-// embedded table: an operator who asked for EUR figures must not get USD
-// numbers without being told the request was impossible.
+// surface it (naming the currency) rather than silently fall back.
 type unsupportedCurrencyError struct {
 	currency string
 	err      error
@@ -606,7 +561,7 @@ func (e *unsupportedCurrencyError) Unwrap() error { return e.err }
 
 // matchSKU derives tellury's (Kind, sku-token) pair from a Cloud Billing SKU's
 // category/description, so the live catalogue lines up with the same SKU
-// vocabulary the embedded table and every rule already use (e.g. "pd-ssd",
+// vocabulary every rule already use (e.g. "pd-ssd",
 // "n1-standard", "unattached", "STANDARD"/"NEARLINE" storage classes).
 // Returns ok=false for every SKU tellury does not model - the vast majority
 // of the catalogue.
@@ -614,9 +569,8 @@ func (e *unsupportedCurrencyError) Unwrap() error { return e.err }
 // The static-IP token is pinned to the exact constant the unused_reserved_ip
 // rule queries: matchSKU returns "unattached" for IP-range/static-IP SKUs,
 // and TestMatchSKU_StaticIPTokenPinned asserts that token equals
-// unused_reserved_ip.StaticIPSKU so a live answer and the embedded fallback
-// can never resolve different keys (and every static-IP price silently fall
-// back to the embedded table) again.
+// unused_reserved_ip.StaticIPSKU so a live answer and the fixture file can
+// never resolve different keys.
 func matchSKU(sk *billingpb.Sku) (pricing.Kind, string, bool) {
 	cat := sk.GetCategory()
 	desc := strings.ToLower(sk.GetDescription())
@@ -680,7 +634,7 @@ func matchSKU(sk *billingpb.Sku) (pricing.Kind, string, bool) {
 			return pricing.KindDiskCapacity, "pd-extreme", true
 		case "iprange", "staticipaddress":
 			// A reserved external (static) IP: a flat per-address-hour rate.
-			// Indexed under the same "unattached" token the embedded table's
+			// Indexed under the same "unattached" token the fixture's
 			// static_ip.unattached entry and the unused_reserved_ip rule use,
 			// so the live catalogue resolves the exact key the rule queries.
 			return pricing.KindStaticIP, "unattached", true
@@ -810,7 +764,7 @@ func regionsOf(sk *billingpb.Sku) []string {
 // message an operator can act on, mirroring mapListAssetsError /
 // mapMonitoringError. A missing billing.viewer role is the expected failure
 // mode for an otherwise-healthy scan; loadCatalogue treats it (and every
-// other error here) as non-fatal and falls back to the embedded table.
+// other error here) as non-fatal: resources requiring prices will skip.
 func mapBillingError(rpc string, err error) error {
 	st, ok := status.FromError(err)
 	if !ok {

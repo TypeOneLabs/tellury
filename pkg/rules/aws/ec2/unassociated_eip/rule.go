@@ -36,7 +36,7 @@ const ID = "unassociated_eip"
 // embedded table and the live catalogue all index this exact string:
 //
 //   - the embedded table's "static_ip.AdditionalAddress" entry
-//     (pkg/pricing/aws/data/aws_prices.json);
+//     (a recorded fixture under pkg/pricing/aws/testdata);
 //   - the live catalogue's indexDoc, which derives the token from the same
 //     operation attribute (pkg/pricing/aws/catalog.go);
 //   - the key this rule queries.

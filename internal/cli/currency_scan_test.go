@@ -11,12 +11,14 @@ import (
 )
 
 // TestScanCurrencyEUROfflineWarnsLoudly drives the currency-mix trap through
-// the REAL runScan pipeline: an offline scan (--fixture, so the pricer is the
-// embedded USD table) with an explicit --currency EUR. Detection cannot run
-// offline and the embedded table is USD-only, so every figure is USD while the
-// operator asked for EUR — and the scan's output must say so loudly, in every
-// format, never silently. This is the acceptance test for the trap.
+// the REAL runScan pipeline: an offline scan (--fixture, so the pricer is a
+// fixture-backed StaticPricer in USD) with an explicit --currency EUR.
+// Detection cannot run offline and the fixture table is USD-only, so every
+// figure is USD while the operator asked for EUR — and the scan's output must
+// say so loudly, in every format, never silently.
 func TestScanCurrencyEUROfflineWarnsLoudly(t *testing.T) {
+	gcpPriceFixtureEnv(t)
+
 	for _, format := range []string{"table", "json"} {
 		t.Run(format, func(t *testing.T) {
 			cfg := config.Scan{
@@ -40,7 +42,7 @@ func TestScanCurrencyEUROfflineWarnsLoudly(t *testing.T) {
 			got := out.String()
 
 			if format == "table" {
-				// The embedded USD table answered an EUR request: the table must
+				// The fixture (USD) answered an EUR request: the table must
 				// carry the loud warning and render the (real) USD amounts with
 				// a "$" — never "8.00 EUR" invented from a USD number.
 				if !strings.Contains(got, "WARNING: prices are in USD, not the requested EUR.") {
@@ -76,6 +78,8 @@ func TestScanCurrencyEUROfflineWarnsLoudly(t *testing.T) {
 // currency fields, "$" amounts — so the findings guardrail that replays
 // fixtures against the pre-change baseline stays green.
 func TestScanCurrencyDefaultOfflineOutputUnchanged(t *testing.T) {
+	gcpPriceFixtureEnv(t)
+
 	cfg := config.Scan{
 		Provider:       "gcp",
 		Project:        "my-project",

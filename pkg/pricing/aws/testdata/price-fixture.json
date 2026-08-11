@@ -1,6 +1,4 @@
 {
-  "version": "2025-06-01",
-  "currency": "USD",
   "disk_capacity": {
     "gp3": {
       "default": 0.08

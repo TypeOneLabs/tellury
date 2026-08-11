@@ -1,6 +1,4 @@
 {
-  "version": "2024-06-01",
-  "currency": "USD",
   "disk_capacity": {
     "pd-standard": {
       "default": 0.04,

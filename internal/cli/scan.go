@@ -79,10 +79,6 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 	f.StringVar(&cfg.CacheFile, "cache-file", "", "read graph from file if it exists, else write it")
 	f.StringSliceVar(&cfg.Fixture, "fixture", nil, "read assets from CAI JSON fixtures instead of the API")
 	f.StringVar(&cfg.OutDir, "out-dir", config.DefaultOutDir, "directory to write scan artifacts into (created if absent)")
-	f.StringVar(&cfg.PriceFile, "price-file", "", "path to a JSON price override file. Price "+
-		"precedence, highest first: --price-file override > live Cloud Billing Catalog API "+
-		"(cached for this scan) > embedded fallback table used when the API is unreachable or "+
-		"billing access is missing")
 	f.StringVar(&cfg.Currency, "currency", "", "ISO 4217 currency code to price the scan in, e.g. EUR. "+
 		"Overrides auto-detection from the billing account; the default (also "+
 		config.CurrencyEnvVar+") is USD. A well-formed but unsupported code fails at the "+
@@ -184,26 +180,15 @@ func runScan(
 		}
 	}()
 
-	// --price-file always wins over whatever pricer the provider built
-	// (live catalog API, itself falling back to the embedded table): any
-	// pricer that supports overrides implements pricing.OverlayLoader.
 	pricer := provider.Pricer()
-	if cfg.PriceFile != "" {
-		ol, ok := pricer.(pricing.OverlayLoader)
-		if !ok {
-			return fmt.Errorf("--price-file is not supported by the %s pricer", cfg.Provider)
-		}
-		if err := ol.OverlayFile(cfg.PriceFile); err != nil {
-			return err
-		}
-	}
 
-	// The live Cloud Billing catalogue loads lazily on the first UnitPrice
-	// call — i.e. inside rule evaluation — so its load is surfaced as its own
-	// progress phase (with the number of billing services as the denominator)
-	// rather than pre-warmed: pre-warming would spend a billing API call even
-	// on a scan whose rules price nothing. A pricer with no lazy catalogue
-	// (the offline static table) simply implements no hook and no phase runs.
+	// The live catalogue loads lazily on the first UnitPrice call — i.e.
+	// inside rule evaluation — so its load is surfaced as its own progress
+	// phase (with the number of billing services as the denominator) rather
+	// than pre-warmed: pre-warming would spend a billing API call even on a
+	// scan whose rules price nothing. A pricer with no lazy catalogue (a
+	// NoPricePricer or StaticPricer) simply implements no hook and no phase
+	// runs.
 	if hook, ok := pricer.(catalogueProgressSetter); ok {
 		var pricePhase *Phase
 		hook.SetCatalogueProgress(func(done, total int, final bool) {
@@ -218,7 +203,7 @@ func runScan(
 				if total > 0 {
 					pricePhase.End("catalogue loaded")
 				} else {
-					pricePhase.End("catalogue unavailable; using embedded price table")
+					pricePhase.End("catalogue unavailable; resources requiring prices will skip")
 				}
 			}
 		})
@@ -271,7 +256,7 @@ func runScan(
 	// A well-formed but unsupported currency makes the Cloud Billing
 	// catalogue reject every ListSkus call with InvalidArgument. That is an
 	// operator error to surface — naming the currency — never a degradation
-	// to absorb by silently pricing the scan from the USD embedded table.
+	// to absorb by silently pricing the scan in USD.
 	if ce, ok := pricer.(pricing.CatalogueErrorer); ok {
 		if cerr := ce.CatalogueError(); cerr != nil {
 			return cerr
@@ -283,9 +268,7 @@ func runScan(
 	rules.SortFindings(res.Findings, cfg.SortOrder())
 
 	// What the figures are ACTUALLY in: the requested currency when the live
-	// catalogue answered, otherwise USD (the embedded table's currency). A
-	// scan that mixed USD fallback prices into a non-USD request must say so
-	// loudly in every output format.
+	// catalogue answered, otherwise USD (the NoPricePricer reports USD).
 	effectiveCurrency, currencyMixed := reportCurrency(pricer, currencyState)
 
 	// The report's ResourcesScanned is the number of real resources, so
@@ -543,8 +526,8 @@ func cacheIfPresent(path string) (*graph.Graph, *graph.Snapshot, error) {
 //
 //   - offline=true  => this is a --fixture or a cache-hit scan: no cloud SDK
 //     client is constructed at all (see aws.WithOffline / gcp.WithOffline).
-//     The embedded static table prices the replay; a fixture, when present,
-//     is wired in.
+//     Pricing loads from TELLURY_PRICE_FIXTURE if set, otherwise every
+//     resource requiring a price skips.
 //   - cacheHit=true => the graph already came from the cache file, so there
 //     is no asset source to build; this is only used for the log line.
 func newProvider(ctx context.Context, cfg config.Scan, log *slog.Logger, offline, cacheHit bool) (cloud.Provider, error) {

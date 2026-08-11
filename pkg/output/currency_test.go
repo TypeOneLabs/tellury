@@ -50,9 +50,9 @@ func TestCurrencyDisclosure_FlagAndDetectedStateHowDecided(t *testing.T) {
 	}
 }
 
-// TestCurrencyDisclosure_MixedWarnsLoudly: the embedded USD fallback answering
-// a non-USD scan is the currency trap, and the disclosure must be a loud
-// warning, never a silent degradation.
+// TestCurrencyDisclosure_MixedWarnsLoudly: USD prices answering a non-USD scan
+// is the currency trap, and the disclosure must be a loud warning, never a
+// silent degradation.
 func TestCurrencyDisclosure_MixedWarnsLoudly(t *testing.T) {
 	// Full fallback: the requested currency priced nothing, every figure is
 	// USD.
@@ -67,15 +67,15 @@ func TestCurrencyDisclosure_MixedWarnsLoudly(t *testing.T) {
 	}
 
 	// Partial contamination: the catalogue answered in EUR but some prices
-	// came from the USD table.
+	// could not be resolved in that currency.
 	partial := currencyDisclosure(Report{
 		Currency: "EUR", CurrencySource: "flag", CurrencyRequested: "EUR", CurrencyMixed: true,
 	})
 	if len(partial) == 0 || !strings.Contains(partial[0], "WARNING") {
 		t.Fatalf("partial-contamination disclosure must start with a WARNING, got %v", partial)
 	}
-	if !strings.Contains(partial[0], "embedded USD fallback table") {
-		t.Fatalf("partial-contamination disclosure must name the embedded USD table, got %v", partial)
+	if !strings.Contains(partial[0], "could not be resolved in EUR") {
+		t.Fatalf("partial-contamination disclosure must state prices could not be resolved, got %v", partial)
 	}
 }
 

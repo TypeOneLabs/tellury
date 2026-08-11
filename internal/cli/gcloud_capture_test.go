@@ -21,6 +21,8 @@ import (
 // `versionedResources` onto RawAsset, this fails instead of the README quietly
 // going stale.
 func TestGcloudCaptureLoadsUnedited(t *testing.T) {
+	gcpPriceFixtureEnv(t)
+
 	cfg := config.Scan{
 		Provider: "gcp",
 		Project:  "my-project",

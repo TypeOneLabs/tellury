@@ -44,15 +44,19 @@ func TestListSkusRequest_CarriesCurrency(t *testing.T) {
 	}
 }
 
-// TestCurrencyInfo_EmbeddedFallbackAnswersUSDFirst is the currency-mix trap
+// TestCurrencyInfo_CatalogueUnavailableReturnsMixed is the currency-mix trap
 // regression: a pricer asked to price in EUR whose live catalogue cannot load
-// (here: a cancelled scan context makes every Billing RPC abort) answers every
-// lookup from the embedded USD table. CurrencyInfo must then report Effective
-// USD and Mixed true — the signal the report uses to tell the operator, loudly,
+// (here: a cancelled scan context makes every Billing RPC abort) returns
+// ErrNoPrice for every lookup. CurrencyInfo must report Effective USD and
+// Mixed true — the signal the report uses to tell the operator, loudly,
 // that the EUR they asked for priced nothing and the figures are USD.
-func TestCurrencyInfo_EmbeddedFallbackAnswersUSDFirst(t *testing.T) {
+//
+// There is no embedded fallback anymore: a failed API means the rule skips
+// rather than getting a silently wrong figure. But the currency metadata
+// must still flag the mismatch so the scan report can disclose it.
+func TestCurrencyInfo_CatalogueUnavailableReturnsMixed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // the live load is guaranteed to fail: embedded answers
+	cancel() // the live load is guaranteed to fail
 
 	p, err := NewCatalogPricer(ctx, slog.New(slog.DiscardHandler), "EUR")
 	if err != nil {
@@ -60,8 +64,10 @@ func TestCurrencyInfo_EmbeddedFallbackAnswersUSDFirst(t *testing.T) {
 	}
 	defer p.Close()
 
-	if _, _, err := p.UnitPrice(pricing.KindDiskCapacity, "gcp", "pd-ssd", "default"); err != nil {
-		t.Fatalf("UnitPrice must fall back to the embedded table: %v", err)
+	// With no embedded fallback, UnitPrice returns ErrNoPrice when the
+	// catalogue is unavailable. The rule skips.
+	if _, _, err := p.UnitPrice(pricing.KindDiskCapacity, "gcp", "pd-ssd", "default"); err != pricing.ErrNoPrice {
+		t.Fatalf("UnitPrice with cancelled context must return ErrNoPrice (no embedded fallback): %v", err)
 	}
 
 	info := p.CurrencyInfo()
@@ -69,10 +75,10 @@ func TestCurrencyInfo_EmbeddedFallbackAnswersUSDFirst(t *testing.T) {
 		t.Errorf("CurrencyInfo.Requested = %q, want EUR", info.Requested)
 	}
 	if info.Effective != "USD" {
-		t.Errorf("CurrencyInfo.Effective = %q, want USD (the embedded table is USD-only)", info.Effective)
+		t.Errorf("CurrencyInfo.Effective = %q, want USD (catalogue unavailable)", info.Effective)
 	}
 	if !info.Mixed {
-		t.Errorf("CurrencyInfo.Mixed = false; a non-USD request answered by the USD table must be flagged")
+		t.Errorf("CurrencyInfo.Mixed = false; a non-USD request with no catalogue must be flagged")
 	}
 }
 

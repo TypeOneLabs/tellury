@@ -16,6 +16,13 @@ import (
 // deterministic across every run (no dependence on time.Now).
 var readmeNow = time.Date(2024, 1, 20, 0, 0, 0, 0, time.UTC)
 
+// gcpPriceFixtureEnv sets TELLURY_PRICE_FIXTURE to the GCP test fixture so
+// golden tests can price without network access.
+func gcpPriceFixtureEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("TELLURY_PRICE_FIXTURE", filepath.Join("..", "..", "pkg", "pricing", "gcp", "testdata", "price-fixture.json"))
+}
+
 // TestReadmeScanExample runs the exact `tellury scan` example the README
 // documents against its own fixture file, through the real runScan pipeline
 // (config.Validate -> rule selection -> offline provider -> ingest -> rules ->
@@ -27,6 +34,8 @@ var readmeNow = time.Date(2024, 1, 20, 0, 0, 0, 0, time.UTC)
 // t.TempDir(), never the source tree, following the same rule artifacts_test.go
 // already applies) so `go test` cannot litter the package directory.
 func TestReadmeScanExample(t *testing.T) {
+	gcpPriceFixtureEnv(t)
+
 	cfg := config.Scan{
 		Provider:       "gcp",
 		Project:        "my-project",
@@ -48,7 +57,7 @@ func TestReadmeScanExample(t *testing.T) {
 	got := out.String()
 	// The table must show the detached disk and the total behind it, exactly
 	// as the README's sample output documents. The exact waste depends on the
-	// embedded pd-standard price ($0.040/GiB) x 200 GiB = $8.00.
+	// pd-standard price ($0.040/GiB) x 200 GiB = $8.00.
 	if !contains(got, "pd-standard-01") {
 		t.Errorf("table output missing the detached disk resource:\n%s", got)
 	}
@@ -66,6 +75,8 @@ func TestReadmeScanExample(t *testing.T) {
 // attached to nothing, whole cost is waste") is exercised against real code.
 // Its artifacts go to a temp directory, never the source tree.
 func TestReadmeUnusedReservedIPExample(t *testing.T) {
+	gcpPriceFixtureEnv(t)
+
 	cfg := config.Scan{
 		Provider:       "gcp",
 		Project:        "my-project",

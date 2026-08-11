@@ -25,6 +25,8 @@ import (
 // dir — never the source tree — and asserts the three artifacts exist and the
 // HTML is stand-alone (no src= or href= to an external resource).
 func TestReadmeOutDirAndHTMLReport(t *testing.T) {
+	gcpPriceFixtureEnv(t)
+
 	outDir := filepath.Join(t.TempDir(), "tellury-out")
 	cfg := config.Scan{
 		Provider:       "gcp",
@@ -100,6 +102,8 @@ func TestReadmeOutDirAndHTMLReport(t *testing.T) {
 // with fixtures) then replays it — the replay carrying its own scope so no
 // --gcp-project is needed — and both runs agree on the finding.
 func TestReadmeCacheFileReplay(t *testing.T) {
+	gcpPriceFixtureEnv(t)
+
 	dir := t.TempDir()
 	cache := filepath.Join(dir, "snap.json")
 	outDir := filepath.Join(dir, "out")

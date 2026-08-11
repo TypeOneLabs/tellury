@@ -138,3 +138,27 @@ environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_SESSION_TOKEN`), the shared credentials file (`~/.aws/credentials`), and
 the profile named by `AWS_PROFILE`. Run `aws configure` or set the environment
 variables — exactly as you would for the AWS CLI.
+
+## Pre-release check: live pricing token pin
+
+Before cutting a release, run the live pricing token-pinning test. It fetches a
+real GetProducts response from the AWS Price List API and asserts that every
+SKU token the catalogue derives — volumeApiName for EBS, usagetype suffix for
+static IPs — still matches the tokens the rules query. A failure means AWS
+renamed an attribute, and if the rename ships, every lookup silently degrades
+to the embedded fallback table.
+
+```bash
+TELLURY_AWS_LIVE_PRICE_TEST=1 go test ./pkg/pricing/aws/ -run TestCatalogPricer_LiveGetProductsTokenPinned -count=1 -v
+```
+
+This test is opt-in because it requires real AWS credentials and network
+access. CI and the default `go test ./...` suite skip it so the build stays
+offline and green.
+
+The test also asserts that all four price kinds (disk_capacity, disk_iops,
+disk_throughput, static_ip) resolve from the live API with `provenance=live_api`
+and a real region — not "default". If any kind falls through to the embedded
+table, the test fails, because that is exactly how the io1 IOPS / gp3
+throughput / static-IP defects shipped: the catalogue missed them and nobody
+knew because the fixture agreed with the code and both disagreed with AWS.

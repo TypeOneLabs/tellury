@@ -24,6 +24,8 @@ const oldSnapshotFixture = "../../pkg/rules/gcp/compute/old_snapshot/testdata/ol
 // too_young, and the size-less snapshot is skipped as missing_attribute. It
 // also logs the real stdout/stderr the guide's commands produce.
 func TestSkillWorkedExample_OldSnapshotScan(t *testing.T) {
+	gcpPriceFixtureEnv(t)
+
 	cfg := config.Scan{
 		Provider:       "gcp",
 		Project:        "my-project",

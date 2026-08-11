@@ -7,6 +7,13 @@
 // fetched lazily, once per pricer (i.e. once per scan), and indexed by
 // (kind, sku, region) — never per resource.
 //
+// There is no embedded fallback table. A price that cannot be resolved from
+// the live API makes the rule SKIP with SkipNoPrice rather than guessing at
+// a dollar figure. When the TELLURY_PRICE_FIXTURE environment variable is set,
+// the catalogue loads from that file instead of calling the API — a test-only
+// hook, never a user-facing flag. The file format is the generic
+// kind -> SKU -> region -> price table.
+//
 // SKU TOKEN DISCIPLINE. This file exists because two SKU-token defects
 // shipped on the GCP side: a static IP and a snapshot each queried tokens the
 // live catalogue did not use, so every lookup missed and fell back silently
@@ -22,10 +29,11 @@
 //     The token is additionally whitelisted against the EC2 SDK's own
 //     VolumeType enum, so a product that is not an EBS volume tellury models
 //     is never indexed at all.
-//   - The Elastic IP SKU token is the product's operation attribute VERBATIM
-//     ("AdditionalAddress" for the hourly charge an unassociated address
-//     accrues). The rule queries that exact constant and the pinning test
-//     asserts catalogue-token == rule-token.
+//   - The static IP SKU token is "AdditionalAddress" — the historical
+//     operation attribute of the old AmazonEC2 "Elastic IP" family product.
+//     The live API now surfaces this charge under serviceCode AmazonVPC with
+//     NO productFamily, matched by usagetype suffix. The indexer maps it to
+//     the canonical "AdditionalAddress" token the rule queries.
 //
 // Both tokens are pinned by pkg/pricing/aws/catalog_test.go against a
 // recorded GetProducts response, so a rename by AWS fails the test before it
@@ -41,6 +49,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"math"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -75,13 +85,14 @@ type catalogueEntry struct {
 	price  float64
 }
 
-// CatalogPricer implements pricing.Pricer over the AWS Price List API, with
-// the embedded StaticPricer as its fallback. Precedence (highest first):
+// CatalogPricer implements pricing.Pricer over the AWS Price List API.
+// The live API is the ONLY source. When the API is unreachable or has no
+// matching product, the pricer returns ErrNoPrice and the rule skips the
+// resource — it never guesses a dollar figure.
 //
-//  1. --price-file override (pricing.SourceOverride)
-//  2. live GetProducts catalogue (pricing.SourceLiveAPI), cached for the
-//     lifetime of this CatalogPricer, i.e. for the duration of one scan
-//  3. embedded static price table (pricing.SourceEmbedded)
+// When TELLURY_PRICE_FIXTURE is set, the catalogue loads from that file
+// instead of calling the API. This is a test-only hook, not a user-facing
+// flag; it exists so golden fixtures can price without network access.
 //
 // Every price is traceable: LastLookup exposes the pricing.Provenance (source
 // + SKU + region) of the most recent answer for a key, which is exactly what
@@ -89,14 +100,6 @@ type catalogueEntry struct {
 type CatalogPricer struct {
 	log    *slog.Logger
 	client *awspricing.Client
-	static *StaticPricer
-
-	// staticBaseline is the pristine, never-overlaid embedded StaticPricer
-	// built once at construction. overrideValue resolves a key against it to
-	// decide whether the (overlaid) `static` table genuinely differs from
-	// what the embedded table would have answered — i.e. whether --price-file
-	// actually set it.
-	staticBaseline *StaticPricer
 
 	// ctx is the scan's context, captured at construction. The catalogue
 	// load — the only RPC path in this pricer — runs against it, so a hanging
@@ -118,15 +121,18 @@ type CatalogPricer struct {
 var (
 	_ pricing.Pricer           = (*CatalogPricer)(nil)
 	_ pricing.ProvenancePricer = (*CatalogPricer)(nil)
-	_ pricing.OverlayLoader    = (*CatalogPricer)(nil)
 	_ pricing.CurrencyReporter = (*CatalogPricer)(nil)
 )
 
-// NewCatalogPricer builds a pricer that prefers the live AWS Price List API
-// and falls back to the embedded static table. It performs no RPCs itself:
-// the catalogue is fetched lazily, once, on first UnitPrice call (see
-// loadCatalogue), so an offline or credential-less scan never pays for the
-// call it cannot make.
+// NewCatalogPricer builds a pricer over the live AWS Price List API. It
+// performs no RPCs itself: the catalogue is fetched lazily, once, on first
+// UnitPrice call (see loadCatalogue).
+//
+// When the environment variable TELLURY_PRICE_FIXTURE is set, it points at a
+// JSON price file in the generic kind->SKU->region->price table format, and
+// the catalogue loads from that file instead of calling the API. This is a
+// test-only hook, not a user-facing flag: it exists so golden fixtures can
+// price without network access or credentials.
 //
 // cfg is the scan's AWS config (the default credential chain); the pricing
 // client is pinned to us-east-1, the only region (with ap-south-1) that
@@ -141,34 +147,14 @@ func NewCatalogPricer(ctx context.Context, log *slog.Logger, cfg aws.Config) (*C
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	static, err := NewStaticPricer()
-	if err != nil {
-		return nil, err
-	}
-	// Build the pristine baseline once at construction and reuse it for the
-	// lifetime of the pricer, exactly like the GCP catalogue pricer.
-	staticBaseline, err := NewStaticPricer()
-	if err != nil {
-		return nil, err
-	}
 	client := awspricing.NewFromConfig(cfg, func(o *awspricing.Options) { o.Region = "us-east-1" })
 	return &CatalogPricer{
-		log:            log,
-		ctx:            ctx,
-		client:         client,
-		static:         static,
-		staticBaseline: staticBaseline,
-		skusByKey:      map[skuKey]resolvedSKU{},
-		last:           map[string]pricing.Provenance{},
+		log:       log,
+		ctx:       ctx,
+		client:    client,
+		skusByKey: map[skuKey]resolvedSKU{},
+		last:      map[string]pricing.Provenance{},
 	}, nil
-}
-
-// OverlayFile implements pricing.OverlayLoader: --price-file always applies
-// on top of the embedded fallback table. It does not touch the live
-// catalogue cache — the override is still consulted first, on every lookup —
-// so this is sufficient to give the override the highest precedence.
-func (c *CatalogPricer) OverlayFile(path string) error {
-	return c.static.OverlayFile(path)
 }
 
 // CurrencyInfo implements pricing.CurrencyReporter. The AWS Price List API
@@ -202,32 +188,18 @@ func (c *CatalogPricer) reportCatalogueProgress(done, total int, final bool) {
 	}
 }
 
-// UnitPrice implements pricing.Pricer with the documented precedence:
-// --price-file override > live Price List API > embedded table.
+// UnitPrice implements pricing.Pricer with ONE source: the live Price List
+// API (or, when TELLURY_PRICE_FIXTURE is set, its recorded replacement).
+// There is no fallback. A price that cannot be resolved returns ErrNoPrice,
+// and the rule skips rather than guessing.
 func (c *CatalogPricer) UnitPrice(kind pricing.Kind, provider, sku, region string) (float64, string, error) {
-	// 1. --price-file override always wins, if this exact key was changed by
-	// an overlay (see overrideValue for how "was changed" is decided).
-	if v, resolvedRegion, ok := c.overrideValue(kind, sku, region); ok {
-		c.record(kind, sku, region, pricing.Provenance{Source: pricing.SourceOverride, SKU: sku, Region: resolvedRegion})
-		return v, resolvedRegion, nil
+	// Live API (or price fixture), cached for the scan's lifetime.
+	if v, res, err := c.liveUnitPrice(kind, sku, region); err == nil {
+		c.record(kind, sku, region, pricing.Provenance{Source: pricing.SourceLiveAPI, SKU: sku, Region: res.region})
+		return v, res.region, nil
 	}
 
-	// 2. Live API, cached for the scan's lifetime. The catalogue load runs
-	// against c.ctx — the scan's deadline-bounded context.
-	if c.client != nil {
-		if v, res, err := c.liveUnitPrice(kind, sku, region); err == nil {
-			c.record(kind, sku, region, pricing.Provenance{Source: pricing.SourceLiveAPI, SKU: sku, Region: res.region})
-			return v, res.region, nil
-		}
-	}
-
-	// 3. Embedded fallback (USD only).
-	v, resolvedRegion, err := c.static.UnitPrice(kind, provider, sku, region)
-	if err != nil {
-		return 0, "", err
-	}
-	c.record(kind, sku, region, pricing.Provenance{Source: pricing.SourceEmbedded, SKU: sku, Region: resolvedRegion})
-	return v, resolvedRegion, nil
+	return 0, "", pricing.ErrNoPrice
 }
 
 // MonthlyCost implements pricing.Pricer: price * quantity, using UnitPrice so
@@ -262,30 +234,18 @@ func provKey(kind pricing.Kind, sku, region string) string {
 	return string(kind) + "|" + sku + "|" + region
 }
 
-// overrideValue reports whether (kind, sku, region) resolves differently in
-// the (possibly overlaid) static table than it would in a pristine,
-// never-overlaid embedded table — i.e. it was genuinely set by --price-file.
-func (c *CatalogPricer) overrideValue(kind pricing.Kind, sku, region string) (float64, string, bool) {
-	overlaid, resolvedRegion, err := c.static.UnitPrice(kind, "aws", sku, region)
-	if err != nil {
-		return 0, "", false
-	}
-	baseline := c.staticBaseline
-	if baseline == nil {
-		return 0, "", false
-	}
-	pristineVal, _, pristineErr := baseline.UnitPrice(kind, "aws", sku, region)
-	if pristineErr != nil || pristineVal != overlaid {
-		return overlaid, resolvedRegion, true
-	}
-	return 0, "", false
+// priceFixturePath returns the value of TELLURY_PRICE_FIXTURE, or "" when
+// unset. This is a test-only hook: it lets golden fixtures price without
+// network access. It is deliberately not a user-facing flag.
+func priceFixturePath() string {
+	return os.Getenv("TELLURY_PRICE_FIXTURE")
 }
 
 // liveUnitPrice resolves (kind, sku, region) against the cached catalogue,
 // loading it on first use. The load runs against c.ctx (the scan's
 // deadline-bounded context), so a hanging Price List API fails cleanly at
-// --timeout and UnitPrice falls back to the embedded table rather than
-// stalling the rule.
+// --timeout. When TELLURY_PRICE_FIXTURE is set, the catalogue loads from that
+// file instead of calling the API.
 func (c *CatalogPricer) liveUnitPrice(kind pricing.Kind, sku, region string) (float64, resolvedSKU, error) {
 	c.once.Do(func() { c.loadErr = c.loadCatalogue(c.ctx) })
 	if c.loadErr != nil {
@@ -303,9 +263,18 @@ func (c *CatalogPricer) liveUnitPrice(kind pricing.Kind, sku, region string) (fl
 	return 0, resolvedSKU{}, pricing.ErrNoPrice
 }
 
-// loadCatalogue fetches the EC2 price list exactly once and indexes every
-// product this pricer models into skusByKey. This is the only place the
-// Price List API is called — everything else reads the cache built here.
+// loadCatalogue fetches prices exactly once and indexes every product this
+// pricer models into skusByKey. This is the only place the Price List API is
+// called — everything else reads the cache built here.
+//
+// When TELLURY_PRICE_FIXTURE is set, the catalogue loads from that file
+// (a generic kind->SKU->region->price table) instead of calling the API.
+//
+// It fetches across two service codes:
+//   - AmazonEC2: EBS Storage (capacity), System Operation (IOPS), and
+//     Provisioned Throughput, each filtered by productFamily.
+//   - AmazonVPC: unfiltered (the address product has NO productFamily), with
+//     usagetype-based matching inside indexDoc.
 //
 // FILTERED BY PRODUCT FAMILY, and verified. Fetching the whole AmazonEC2 list
 // is correct but unusable: it is hundreds of thousands of products — every
@@ -313,30 +282,37 @@ func (c *CatalogPricer) liveUnitPrice(kind pricing.Kind, sku, region string) (fl
 // to find a handful of EBS and address rates. Measured against a live account
 // it spent 1m39s and had still not finished, making the scan's pricing step
 // longer than everything else combined.
-//
-// The reason it was unfiltered is real and worth preserving: a filter on the
-// wrong attribute name returns an empty result with NO error, and a silently
-// empty catalogue is the failure class this file exists to prevent. So the
-// filter is verified rather than trusted — a family that returns nothing is
-// treated as a broken filter, not as an empty catalogue, and the load falls
-// back to the unfiltered fetch. Correctness is preserved; the cost is paid
-// only when a family name has actually drifted.
 func (c *CatalogPricer) loadCatalogue(ctx context.Context) error {
 	c.reportCatalogueProgress(0, 1, false)
 
-	n, err := c.loadFamilies(ctx, priceProductFamilies)
+	// TELLURY_PRICE_FIXTURE: load from file, no API call.
+	if path := priceFixturePath(); path != "" {
+		n, err := loadPriceFixture(path, c.skusByKey)
+		if err != nil {
+			c.reportCatalogueProgress(0, 1, true)
+			c.log.Warn("aws: price fixture load failed; no prices will resolve", "path", path, "err", err)
+			return err
+		}
+		c.mu.Lock()
+		c.loaded = n > 0
+		c.mu.Unlock()
+		c.reportCatalogueProgress(1, 1, true)
+		c.log.Debug("aws price catalogue loaded from fixture", "entries_indexed", n, "path", path)
+		return nil
+	}
+
+	n, err := c.loadServices(ctx, priceServiceFamilies)
 	if err != nil {
 		c.reportCatalogueProgress(0, 1, true)
-		c.log.Warn("aws: GetProducts unavailable; pricing will use the embedded fallback table", "err", err)
+		c.log.Warn("aws: GetProducts unavailable; resources requiring prices will skip", "err", err)
 		return err
 	}
 	if n == 0 {
 		// Every family came back empty. Either the product-family names have
 		// drifted or the filter is being rejected silently; either way the
 		// unfiltered fetch is the honest answer rather than an empty table.
-		c.log.Warn("aws: filtered price fetch returned nothing; retrying unfiltered",
-			"families", priceProductFamilies)
-		n, err = c.loadFamilies(ctx, nil)
+		c.log.Warn("aws: filtered price fetch returned nothing; retrying unfiltered")
+		n, err = c.loadOne(ctx, "AmazonEC2", "")
 		if err != nil {
 			c.reportCatalogueProgress(0, 1, true)
 			return err
@@ -351,35 +327,76 @@ func (c *CatalogPricer) loadCatalogue(ctx context.Context) error {
 	return nil
 }
 
-// priceProductFamilies are the GetProducts productFamily values holding every
-// rate tellury models: EBS capacity, IOPS and throughput live under "Storage",
-// and the hourly charge for an address under "Elastic IP". Both were read from
-// a real GetProducts response, not guessed — the recorded fixture in testdata
-// contains exactly these two.
-var priceProductFamilies = []string{"Storage", "Elastic IP"}
-
-// loadFamilies fetches and indexes the catalogue, one filtered request per
-// family. A nil families slice fetches everything, which is the fallback path.
-func (c *CatalogPricer) loadFamilies(ctx context.Context, families []string) (int, error) {
-	if len(families) == 0 {
-		return c.loadOne(ctx, "")
+// loadPriceFixture loads a generic kind->SKU->region->price table from a
+// JSON file and indexes it into skusByKey.
+func loadPriceFixture(path string, skusByKey map[skuKey]resolvedSKU) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
 	}
-	total := 0
-	for _, f := range families {
-		n, err := c.loadOne(ctx, f)
-		if err != nil {
-			return total, err
+	var t table
+	if err := json.Unmarshal(data, &t); err != nil {
+		return 0, err
+	}
+	n := 0
+	for kind, skus := range t {
+		for sku, regions := range skus {
+			for region, price := range regions {
+				skusByKey[skuKey{kind: kind, sku: sku, region: region}] = resolvedSKU{
+					unitPrice: price,
+					region:    region,
+				}
+				n++
+			}
 		}
-		total += n
+	}
+	return n, nil
+}
+
+// priceServiceFamilies maps each AWS service code to the GetProducts
+// productFamily values holding every rate tellury models:
+//
+//   - AmazonEC2 "Storage"        → disk capacity (GB-Mo / GB-month)
+//   - AmazonEC2 "System Operation" → disk IOPS (IOPS-Mo)
+//   - AmazonEC2 "Provisioned Throughput" → disk throughput (GiBps-mo)
+//   - AmazonVPC nil              → static IP (no productFamily; matched by
+//     usagetype suffix inside indexDoc)
+//
+// All were read from a real GetProducts response, not guessed — the recorded
+// fixture in testdata/getproducts-recorded.json contains all four.
+var priceServiceFamilies = map[string][]string{
+	"AmazonEC2": {"Storage", "System Operation", "Provisioned Throughput"},
+	"AmazonVPC": nil,
+}
+
+// loadServices fetches and indexes the catalogue across multiple service codes.
+func (c *CatalogPricer) loadServices(ctx context.Context, services map[string][]string) (int, error) {
+	total := 0
+	for svc, families := range services {
+		if len(families) == 0 {
+			n, err := c.loadOne(ctx, svc, "")
+			if err != nil {
+				return total, err
+			}
+			total += n
+			continue
+		}
+		for _, f := range families {
+			n, err := c.loadOne(ctx, svc, f)
+			if err != nil {
+				return total, err
+			}
+			total += n
+		}
 	}
 	return total, nil
 }
 
-// loadOne runs a single GetProducts pagination, optionally filtered to one
-// product family, and indexes what it returns.
-func (c *CatalogPricer) loadOne(ctx context.Context, family string) (int, error) {
+// loadOne runs a single GetProducts pagination for one service code,
+// optionally filtered to one product family, and indexes what it returns.
+func (c *CatalogPricer) loadOne(ctx context.Context, serviceCode, family string) (int, error) {
 	in := &awspricing.GetProductsInput{
-		ServiceCode:   aws.String("AmazonEC2"),
+		ServiceCode:   aws.String(serviceCode),
 		FormatVersion: aws.String("aws_v1"),
 		MaxResults:    aws.Int32(100),
 	}
@@ -424,9 +441,11 @@ func (c *CatalogPricer) loadOne(ctx context.Context, family string) (int, error)
 // PriceList element. The shape is fixed by the Price List API's aws_v1
 // format: a "product" block (productFamily, attributes, sku) plus a "terms"
 // block whose OnDemand offer terms carry priceDimensions with a "unit" and a
-// "pricePerUnit" map keyed by currency code.
+// "pricePerUnit" map keyed by currency code. The top-level serviceCode field
+// carries "AmazonEC2" or "AmazonVPC".
 type priceListDoc struct {
-	Product struct {
+	ServiceCode string `json:"serviceCode"`
+	Product     struct {
 		ProductFamily string            `json:"productFamily"`
 		Attributes    map[string]string `json:"attributes"`
 		SKU           string            `json:"sku"`
@@ -508,28 +527,51 @@ func parsePriceListDoc(raw string) (*priceListDoc, error) {
 // document contributes to the catalogue. It is PURE — no I/O, no state — so
 // the SKU-pinning tests can drive the exact path the live load uses.
 //
-// EBS volumes: a product with productFamily "Storage" whose volumeApiName
+// EBS capacity: a product with productFamily "Storage" whose volumeApiName
 // attribute is a real DescribeVolumes.VolumeType value. The SKU token is the
-// volumeApiName attribute VERBATIM — the same string the
-// unattached_ebs_volume rule queries (its volume_type attr comes straight
-// from DescribeVolumes.VolumeType). The price list ALSO carries a
-// human-friendly "volumeType" attribute ("General Purpose" for gp3), which is
-// NOT the token: indexing that would make every lookup miss and silently fall
-// back to the embedded table — the exact defect class this catalogue was
-// written to prevent. Each price dimension is indexed under the pricing.Kind
-// its unit declares: "GB-Mo" -> KindDiskCapacity, "IOPS-Mo" ->
-// KindDiskIOPS, "MBps-Mo" -> KindDiskThroughput. A unit this catalogue does
-// not model is skipped (no price -> the rule skips rather than guesses),
-// never guessed at.
+// volumeApiName attribute VERBATIM. Each price dimension is indexed under the
+// pricing.Kind its unit declares.
 //
-// Elastic IPs: a product with productFamily "Elastic IP". The SKU token is
-// the operation attribute verbatim ("AdditionalAddress" for the hourly charge
-// an unassociated address accrues), indexed under KindStaticIP from the
-// "Hrs" dimension.
+// EBS IOPS: a product with productFamily "System Operation" whose
+// volumeApiName is a real VolumeType and whose group is "EBS IOPS" (the base
+// tier — tiered rates are skipped). Indexed under KindDiskIOPS.
+//
+// EBS throughput: a product with productFamily "Provisioned Throughput" whose
+// volumeApiName is a real VolumeType. The live API prices throughput in
+// GiBps-month ($40.96/GiBps-mo); tellury works in MiB/s, so the price is
+// divided by 1024 (40.96/1024 = 0.04). Indexed under KindDiskThroughput.
+//
+// Static IP: a product with serviceCode "AmazonVPC", NO productFamily, and a
+// usagetype ending in "PublicIPv4:InUseAddress". The SKU token is the
+// canonical "AdditionalAddress" string the unassociated_eip rule queries.
 func indexDoc(doc *priceListDoc) []catalogueEntry {
 	region, ok := regionOfProduct(doc.Product.Attributes)
 	if !ok {
-		// An unmapped location is skipped, never guessed at.
+		return nil
+	}
+
+	// Static IP: AmazonVPC product with no productFamily, matched by
+	// usagetype suffix. This product has no operation attribute and cannot
+	// be found by filtering on productFamily, which is why it was never
+	// fetched before. The SKU is hard-coded to "AdditionalAddress" to match
+	// the rule's EIPSKU constant.
+	if doc.ServiceCode == "AmazonVPC" && doc.Product.ProductFamily == "" {
+		usagetype := doc.Product.Attributes["usagetype"]
+		if strings.HasSuffix(usagetype, "PublicIPv4:InUseAddress") {
+			var out []catalogueEntry
+			for _, dim := range priceDimensions(doc) {
+				if dim.unit != "Hrs" {
+					continue
+				}
+				out = append(out, catalogueEntry{
+					kind:   pricing.KindStaticIP,
+					sku:    "AdditionalAddress",
+					region: region,
+					price:  dim.price,
+				})
+			}
+			return out
+		}
 		return nil
 	}
 
@@ -548,17 +590,52 @@ func indexDoc(doc *priceListDoc) []catalogueEntry {
 			out = append(out, catalogueEntry{kind: kind, sku: apiName, region: region, price: dim.price})
 		}
 		return out
-	case "Elastic IP":
-		op := doc.Product.Attributes["operation"]
-		if op == "" {
+	case "System Operation":
+		apiName := doc.Product.Attributes["volumeApiName"]
+		if !awsVolumeTypes[apiName] {
+			return nil
+		}
+		// Only the base IOPS tier (group "EBS IOPS"), not tiered rates.
+		if doc.Product.Attributes["group"] != "EBS IOPS" {
 			return nil
 		}
 		var out []catalogueEntry
 		for _, dim := range priceDimensions(doc) {
-			if dim.unit != "Hrs" {
+			if dim.unit != "IOPS-Mo" {
 				continue
 			}
-			out = append(out, catalogueEntry{kind: pricing.KindStaticIP, sku: op, region: region, price: dim.price})
+			out = append(out, catalogueEntry{
+				kind:   pricing.KindDiskIOPS,
+				sku:    apiName,
+				region: region,
+				price:  dim.price,
+			})
+		}
+		return out
+	case "Provisioned Throughput":
+		apiName := doc.Product.Attributes["volumeApiName"]
+		if !awsVolumeTypes[apiName] {
+			return nil
+		}
+		var out []catalogueEntry
+		for _, dim := range priceDimensions(doc) {
+			if dim.unit != "GiBps-mo" {
+				continue
+			}
+			// The live API prices throughput per GiBps-month; tellury works
+			// in MiB/s. 1 GiBps = 1024 MiBps, so divide by 1024. Not doing
+			// this makes every throughput charge 1024× too large.
+			// $40.96 / 1024 = $0.04, which is what the embedded table holds.
+			miBpsPrice := dim.price / 1024.0
+			// Round to 6 decimal places to avoid floating-point drift:
+			// 45.056 / 1024 = 0.044 but floating-point can give 0.044000000000000004.
+			miBpsPrice = math.Round(miBpsPrice*1e6) / 1e6
+			out = append(out, catalogueEntry{
+				kind:   pricing.KindDiskThroughput,
+				sku:    apiName,
+				region: region,
+				price:  miBpsPrice,
+			})
 		}
 		return out
 	default:
@@ -570,13 +647,18 @@ func indexDoc(doc *priceListDoc) []catalogueEntry {
 // prices with it. The units are the documented aws_v1 unit strings for EBS
 // dimensions. An unknown unit yields "" (not indexed): the rule then skips
 // for want of a price rather than pricing the dimension under a guessed kind.
+//
+// The Price List API is not consistent in its unit spelling: most products use
+// "GB-Mo" but some (io2) use "GB-month". Both are capacity.
 func kindForUnit(unit string) pricing.Kind {
 	switch unit {
-	case "GB-Mo":
+	case "GB-Mo", "GB-month":
 		return pricing.KindDiskCapacity
 	case "IOPS-Mo":
 		return pricing.KindDiskIOPS
 	case "MBps-Mo":
+		return pricing.KindDiskThroughput
+	case "GiBps-mo":
 		return pricing.KindDiskThroughput
 	default:
 		return ""
@@ -646,4 +728,6 @@ var regionCodeByLocation = map[string]string{
 	"South America (São Paulo)": "sa-east-1",
 	"AWS GovCloud (US-East)":    "us-gov-east-1",
 	"AWS GovCloud (US-West)":    "us-gov-west-1",
+	// The recorded fixture uses "EU (Ireland)" (not "Europe (Ireland)").
+	"EU (Ireland)": "eu-west-1",
 }

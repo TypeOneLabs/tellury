@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 
 	"github.com/TypeOneLabs/tellury/pkg/cloud"
@@ -62,7 +63,7 @@ func WithLister(l AssetLister) Option { return func(p *Provider) { p.lister = l 
 func WithMetricsProvider(m metrics.Provider) Option { return func(p *Provider) { p.metrics = m } }
 
 // WithPricer overrides the cost model (used by tests). Bypasses the default
-// live-catalog-with-embedded-fallback pricer entirely.
+// live-catalog pricer entirely.
 func WithPricer(pr pricing.Pricer) Option { return func(p *Provider) { p.pricer = pr } }
 
 // WithLogger sets the provider logger.
@@ -81,15 +82,15 @@ func WithCurrency(code string) Option { return func(p *Provider) { p.currency = 
 // scans whose graph comes from local data (a --fixture or a --cache-file
 // replay): the lister — if any — must be an offline source (FixtureLister),
 // enrichment is a no-op (p.metrics stays nil, which EnrichMetrics already
-// short-circuits on), and pricing uses the embedded static table only. This
-// is what lets an offline scan run on a host with no credentials.
+// short-circuits on), and pricing uses the TELLURY_PRICE_FIXTURE file if set,
+// or a NoPricePricer (all resources skip) otherwise. This is what lets an
+// offline scan run on a host with no credentials.
 func WithOffline() Option { return func(p *Provider) { p.offline = true } }
 
 // New builds a GCP provider. Defaults: the live CAI client, the live Cloud
 // Monitoring client (pkg/metrics/gcp), the live Cloud Billing Catalog pricer
-// (itself backed by the embedded price table as a fallback when the API is
-// unreachable or the caller lacks billing permission), and the embedded
-// machine catalog.
+// (with no embedded fallback — a missing price makes the rule skip), and the
+// embedded machine catalog.
 //
 // With WithOffline (see runScan: a --fixture/--cache-file offline scan) none
 // of the cloud clients are constructed at all, so New never touches ADC.
@@ -122,10 +123,10 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 	if !p.offline && p.metrics == nil {
 		c, err := metricsgcp.NewClient(ctx, p.log, p.lookupRef)
 		if err != nil {
-			// Non-fatal, mirroring NewCatalogPricer's tolerance: an operator
-			// legitimately may have no Monitoring permission, or no ADC at all
-			// on an offline/partial host. Leave p.metrics nil — EnrichMetrics
-			// short-circuits and metric-dependent rules skip rather than guess.
+			// Non-fatal: an operator legitimately may have no Monitoring
+			// permission, or no ADC at all on an offline/partial host. Leave
+			// p.metrics nil — EnrichMetrics short-circuits and
+			// metric-dependent rules skip rather than guess.
 			p.log.Warn("gcp: Cloud Monitoring client unavailable; metric-dependent rules will skip", "err", err)
 		} else {
 			p.metrics = c
@@ -134,13 +135,8 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 	}
 	if p.pricer == nil {
 		if p.offline {
-			// No Cloud Billing client either: the embedded table is enough for
-			// an offline replay.
-			static, err := pricinggcp.NewStaticPricer()
-			if err != nil {
-				return nil, err
-			}
-			p.pricer = static
+			// Offline: use TELLURY_PRICE_FIXTURE if set, otherwise no prices.
+			p.pricer = offlinePricer(p.log)
 		} else {
 			c, err := pricinggcp.NewCatalogPricer(ctx, p.log, p.currency)
 			if err != nil {
@@ -151,6 +147,24 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 		}
 	}
 	return p, nil
+}
+
+// offlinePricer builds a pricer for an offline scan. When TELLURY_PRICE_FIXTURE
+// is set, it loads from that file; otherwise it returns a NoPricePricer —
+// every resource requiring a price will skip rather than guess.
+func offlinePricer(log *slog.Logger) pricing.Pricer {
+	if path := os.Getenv("TELLURY_PRICE_FIXTURE"); path != "" {
+		static, err := pricinggcp.NewStaticPricerFromFile(path)
+		if err != nil {
+			log.Warn("gcp: TELLURY_PRICE_FIXTURE set but could not load; resources requiring prices will skip",
+				"path", path, "err", err)
+			return pricing.NoPricePricer{}
+		}
+		log.Debug("gcp: offline pricer loaded from TELLURY_PRICE_FIXTURE", "path", path)
+		return static
+	}
+	log.Debug("gcp: no price source available; resources requiring prices will skip")
+	return pricing.NoPricePricer{}
 }
 
 // Name implements cloud.Provider.
