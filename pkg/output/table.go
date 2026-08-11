@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/TypeOneLabs/tellury/pkg/cloud/aws"
 	"github.com/TypeOneLabs/tellury/pkg/rules"
 )
 
@@ -186,6 +187,15 @@ func (t tableRenderer) Render(w io.Writer, r Report) error {
 		return err
 	}
 
+	// Account status: when the scan walked an organization and some accounts
+	// were unreachable or suspended, report them so an operator reading a
+	// total is not silently handed a figure that skips a third of the org.
+	if len(r.AccountStatuses) > 0 {
+		if _, err := fmt.Fprintln(w, accountStatusLines(r.AccountStatuses)); err != nil {
+			return err
+		}
+	}
+
 	// Offline honesty: when the scan's data carried no metrics for some rules,
 	// "no waste" would be a lie — those rules simply could not evaluate. State
 	// which ones explicitly so a fixture run does not look like a clean bill of
@@ -209,15 +219,23 @@ func (t tableRenderer) Render(w io.Writer, r Report) error {
 // the same line.
 //
 // An AWS scan reports the account and the regions it actually covered — "1
-// account analyzed, 2 regions analyzed, ..." — in place of the GCP projects
-// figure. The branch keys on AccountsAnalyzed, which only an AWS report ever
-// sets, so a GCP report renders byte-identically to the pre-AWS build.
+// account analyzed, 2 regions analyzed (resource_explorer), ..." — in place
+// of the GCP projects figure. The region source annotation tells an operator
+// whether the scan was narrowed by Resource Explorer (eventually consistent —
+// a recently created resource may be missed) or swept every enabled region
+// (complete coverage, chattier). The branch keys on AccountsAnalyzed, which
+// only an AWS report ever sets, so a GCP report renders byte-identically to
+// the pre-AWS build.
 func summaryLine(r Report) string {
 	parts := make([]string, 0, 7)
 	if r.AccountsAnalyzed > 0 {
 		parts = append(parts, countPhrase(r.AccountsAnalyzed, "account analyzed", "accounts analyzed"))
 		if r.RegionsAnalyzed > 0 {
-			parts = append(parts, countPhrase(r.RegionsAnalyzed, "region analyzed", "regions analyzed"))
+			regionPart := countPhrase(r.RegionsAnalyzed, "region analyzed", "regions analyzed")
+			if r.RegionSource != "" {
+				regionPart += " (" + r.RegionSource + ")"
+			}
+			parts = append(parts, regionPart)
 		}
 	} else {
 		parts = append(parts, countPhrase(r.ProjectsAnalyzed, "project analyzed", "projects analyzed"))
@@ -239,6 +257,70 @@ func summaryLine(r Report) string {
 		return "Summary: " + r.Scope + " — " + strings.Join(parts, ", ")
 	}
 	return "Summary: " + strings.Join(parts, ", ")
+}
+
+// accountStatusLines renders the account outcome report below the summary
+// line. When an organization scan skipped some accounts — because the role
+// could not be assumed, the account was suspended, or ingestion failed — the
+// total is incomplete and the operator must know exactly which accounts were
+// affected and why.
+func accountStatusLines(statuses []aws.AccountStatus) string {
+	scanned, unreachable, suspended := 0, 0, 0
+	for _, s := range statuses {
+		switch s.Status {
+		case "scanned":
+			scanned++
+		case "unreachable":
+			unreachable++
+		case "suspended":
+			suspended++
+		}
+	}
+
+	// Build a compact report: counts first, then the per-account breakdown
+	// only when something was not scanned.
+	counts := fmt.Sprintf("Account outcomes: %d scanned", scanned)
+	if unreachable > 0 {
+		counts += fmt.Sprintf(", %d unreachable", unreachable)
+	}
+	if suspended > 0 {
+		counts += fmt.Sprintf(", %d suspended", suspended)
+	}
+
+	var b strings.Builder
+	b.WriteString(counts)
+
+	// List unreachable accounts with reasons.
+	for _, s := range statuses {
+		if s.Status == "unreachable" {
+			b.WriteString("\n  unreachable: ")
+			b.WriteString(s.ID)
+			if s.Name != "" && s.Name != s.ID {
+				b.WriteString(" (")
+				b.WriteString(s.Name)
+				b.WriteString(")")
+			}
+			if s.Reason != "" {
+				b.WriteString(" — ")
+				b.WriteString(s.Reason)
+			}
+		}
+	}
+
+	// List suspended accounts.
+	for _, s := range statuses {
+		if s.Status == "suspended" {
+			b.WriteString("\n  suspended: ")
+			b.WriteString(s.ID)
+			if s.Name != "" && s.Name != s.ID {
+				b.WriteString(" (")
+				b.WriteString(s.Name)
+				b.WriteString(")")
+			}
+		}
+	}
+
+	return b.String()
 }
 
 // countPhrase renders "N singular" or "N plural" for the summary line.

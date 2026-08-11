@@ -1,166 +1,142 @@
-# AWS setup
+# AWS setup for tellury
 
-## What works today
+tellury scans AWS accounts for waste — unattached EBS volumes and unassociated
+Elastic IPs today, with more resource types to follow.
 
-`--aws-account` only: one account, using the credentials you give it. Organization and
-organizational-unit scopes are accepted by the CLI but fail with a message saying they
-arrive with Organizations traversal, and there is no cross-account role assumption yet — so
-the credentials must belong to the account you are scanning.
+## Required permissions
 
-Two rules ship: `unattached_ebs_volume` and `unassociated_eip`. Neither needs CloudWatch.
+Every permission below is an IAM action the caller's credentials must allow.
+The table groups them by whether they are needed for every scan or only for
+organization-level scans.
 
-## Authentication
+### Every AWS scan
 
-`tellury` reads the standard AWS credential chain — environment variables, the shared
-credentials file, `AWS_PROFILE`, and an instance role — exactly as the AWS CLI does. There
-is no credentials flag and no key file of tellury's own.
+| Action | Purpose |
+|---|---|
+| `ec2:DescribeRegions` | Discover which regions the account has enabled. |
+| `ec2:DescribeVolumes` | List every EBS volume in a region (paginated). |
+| `ec2:DescribeAddresses` | List every Elastic IP in a region. |
+| `pricing:GetProducts` | Load the live Price List API catalogue. Optional — when missing, the scan degrades to the embedded static price table and logs a warning. |
+| `resource-explorer-2:Search` | Query the aggregator index to find which regions hold resources of the types the selected rules need, so the scan sweeps only those regions instead of every enabled region. Optional — when missing, the scan falls back to `DescribeRegions`. |
+| `resource-explorer-2:ListIndexes` | Check whether an aggregator index exists so tellury can report why discovery was available or unavailable. Optional. |
 
-```bash
-export AWS_PROFILE=tellury
-./tellury scan --aws-account 123456789012
+### Organization / OU scans only
+
+These permissions are needed ONLY when scanning with `--aws-organization` or
+`--aws-organizational-unit`. A single-account scan (`--aws-account`) does not
+use them.
+
+| Action | Purpose |
+|---|---|
+| `organizations:DescribeOrganization` | Read the organization ID (the `o-` string). |
+| `organizations:ListRoots` | List the root(s) of the organization. |
+| `organizations:ListOrganizationalUnitsForParent` | Walk the OU hierarchy. |
+| `organizations:ListAccountsForParent` | List every account under a root or OU. |
+| `sts:AssumeRole` | Assume the cross-account role in each member account. Called once per account. |
+
+### The cross-account role
+
+Every member account (except the caller's own — the management account or a
+delegated administrator that holds the credentials tellury runs under) needs an
+IAM role that the caller can assume. By convention AWS Organizations creates
+this role as **`OrganizationAccountAccessRole`** when an account is created
+through the console.
+
+The role must grant at minimum the **Every AWS scan** permissions above.
+
+If your organization uses a different role name, pass it with:
+
+```
+--aws-role-name MyCustomRoleName
 ```
 
-With no usable credentials the scan fails immediately, naming what is missing. It does not
-fall through to the EC2 instance metadata service and wait for that to time out.
+The default is `OrganizationAccountAccessRole`.
 
-## Permissions
+## Resource Explorer and region narrowing
 
-Three read-only actions. That is the whole surface this build calls:
+When Resource Explorer is available in an account (an aggregator index exists
+and the caller has `resource-explorer-2:Search`), tellury queries it to learn
+which regions actually hold EBS volumes and Elastic IPs. The scan then hydrates
+only those regions — typically 2–4 instead of all 17+ enabled regions — cutting
+the per-account API call count from ~35 to ~10.
+
+When Resource Explorer is unavailable (no aggregator index, missing permission,
+or an API error), the scan falls back to `ec2:DescribeRegions` and sweeps every
+enabled region. This fallback is per-account: in an organization scan, one
+account may be narrowed by discovery while its neighbour falls back to the full
+sweep.
+
+The scan summary tells you which path each account took:
+
+```
+Summary: organizations/o-xxxxxxxxxx — 3 accounts analyzed, 4 regions analyzed (resource_explorer), ...
+```
+
+The `(resource_explorer)` / `(describe_regions)` / `(explicit)` annotation
+appears after the region count in both the table summary line and the JSON
+output (`region_source` field).
+
+### Staleness
+
+The Resource Explorer index is eventually consistent. Tagged resources appear
+within minutes; untagged resources can take up to two hours. Because hydration
+always reads the live EC2 APIs — never the index's cached attributes — a stale
+index can only cause a very recently created resource to be missed. It can
+never produce a stale attribute or a wrong price.
+
+## Example minimal IAM policy
 
 ```json
 {
   "Version": "2012-10-17",
-  "Statement": [{
-    "Sid": "TelluryReadOnlyScan",
-    "Effect": "Allow",
-    "Action": [
-      "ec2:DescribeRegions",
-      "ec2:DescribeVolumes",
-      "ec2:DescribeAddresses"
-    ],
-    "Resource": "*"
-  }]
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeRegions",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeAddresses",
+        "pricing:GetProducts",
+        "resource-explorer-2:Search",
+        "resource-explorer-2:ListIndexes"
+      ],
+      "Resource": "*"
+    }
+  ]
 }
 ```
 
-`ReadOnlyAccess` also works but grants far more than tellury uses.
+For organization scans, add:
 
-### Creating a least-privilege user
-
-Run these as an administrator. They create a user that can read what tellury scans and
-nothing else.
-
-```bash
-aws iam create-policy --policy-name TelluryReadOnlyScan \
-  --policy-document file://tellury-policy.json
-
-aws iam create-user --user-name tellury-scanner
-
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-aws iam attach-user-policy --user-name tellury-scanner \
-  --policy-arn "arn:aws:iam::${ACCOUNT_ID}:policy/TelluryReadOnlyScan"
-
-# Write the key straight into a profile so the secret is never printed.
-CREDS=$(aws iam create-access-key --user-name tellury-scanner \
-          --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text)
-aws configure set aws_access_key_id     "$(printf '%s' "$CREDS" | cut -f1)" --profile tellury
-aws configure set aws_secret_access_key "$(printf '%s' "$CREDS" | cut -f2)" --profile tellury
-aws configure set region eu-west-1 --profile tellury
-unset CREDS
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "organizations:DescribeOrganization",
+    "organizations:ListRoots",
+    "organizations:ListOrganizationalUnitsForParent",
+    "organizations:ListAccountsForParent",
+    "sts:AssumeRole"
+  ],
+  "Resource": "*"
+}
 ```
 
-Two things worth doing afterwards. IAM is eventually consistent, so a new key can take a few
-seconds to work — retry rather than assuming it failed. And confirm the policy is not wider
-than intended by checking that something outside it is refused:
+The `sts:AssumeRole` resource should be scoped to the role ARN pattern in
+member accounts:
 
-```bash
-aws ec2 describe-regions   --profile tellury --query 'length(Regions)' --output text  # a number
-aws ec2 describe-instances --profile tellury                                          # AccessDenied
+```json
+{
+  "Effect": "Allow",
+  "Action": "sts:AssumeRole",
+  "Resource": "arn:aws:iam::*:role/OrganizationAccountAccessRole"
+}
 ```
 
-A read-only policy that quietly grants more than you meant is worth catching, and the only
-way to see it is to assert the denial.
+## Credentials
 
-Prefer IAM Identity Center (`aws configure sso`) if you have it — short-lived credentials
-beat a long-lived access key. Do not create root access keys for this.
-
-## Regions
-
-AWS resources are regional and there is no global inventory API, so a scan sweeps regions:
-
-```
-ec2:DescribeRegions          the regions THIS account has enabled
-  then, per region:          DescribeVolumes + DescribeAddresses
-```
-
-That is roughly `1 + 2N` calls for N enabled regions — about 35 for a typical account, and
-around 15 seconds. `AllRegions=false`, so regions the account has never opted into are never
-queried.
-
-Narrow it when you know where things are:
-
-```bash
-./tellury scan --aws-account 123456789012 --aws-regions eu-west-1,eu-central-1
-```
-
-An availability-zone spelling like `eu-west-1a` is accepted and flattened to its region.
-
-Every scan reports the regions it actually covered, so an empty result is distinguishable
-from a scan that never looked:
-
-```
-Summary: accounts/123456789012 — 1 account analyzed, 17 regions analyzed, 2 resources
-scanned, 2 rules evaluated, 1 finding, 1 resource skipped, 15.285s
-```
-
-## Pricing
-
-Prices come from an embedded table, not the live AWS Price List API. The live catalogue
-exists in `pkg/pricing/aws/catalog.go` but is not yet wired to the provider, so every AWS
-figure currently reads `price_source = embedded`.
-
-The table is dated in the file and covers what the two rules need: EBS capacity, IOPS and
-throughput per volume type, and the hourly rate for an unassociated address.
-
-**Reconcile a finding against your bill before trusting a total.** An embedded table drifts,
-and every pricing defect in this project so far — three of them — was found that way and by
-nothing else. Two were invisible to the entire test suite; one was a test asserting the wrong
-arithmetic, so the suite was green *because* it agreed with the bug.
-
-### Included allowances
-
-EBS bills only provisioning **above** what a volume type includes, and a volume reports its
-total provisioning either way:
-
-| Type | Included | Billed above it |
-|---|---|---|
-| `gp3` | 3000 IOPS, 125 MiB/s | IOPS and throughput |
-| `io1`, `io2` | none | every provisioned IOPS |
-| `gp2`, `st1`, `sc1`, `standard` | — | no separate IOPS or throughput charge |
-
-This matters more than it looks: every gp3 volume reports 3000 IOPS and 125 MiB/s whether
-you chose them or not, so pricing the raw figures adds about $20 a month of cost that does
-not exist, to every gp3 volume. The AWS price list does not encode the allowance — its
-dimension reads "per provisioned IOPS-month" — so it cannot be derived from the API alone.
-
-## Testing against real resources
-
-To see both rules fire, create two resources and delete them the same day:
-
-```bash
-aws ec2 allocate-address --domain vpc --region eu-west-1          # ~$3.65/month
-aws ec2 create-volume --size 200 --volume-type gp3 \
-  --availability-zone eu-west-1a --region eu-west-1               # ~$16/month
-```
-
-`unattached_ebs_volume` requires a volume to have been unattached for **7 days**, which
-suppresses the churn of volumes freed moments ago. To exercise it immediately, move the
-evaluation instant instead of waiting:
-
-```bash
-./tellury scan --aws-account 123456789012 --aws-regions eu-west-1 \
-  --at "$(date -u -d '+8 days' +%Y-%m-%dT%H:%M:%SZ)"
-```
-
-Then release the address and delete the volume — an unassociated Elastic IP bills whether or
-not anything uses it, which is the entire point of the rule.
+tellury reads no key files. It uses the standard AWS SDK credential chain:
+environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_SESSION_TOKEN`), the shared credentials file (`~/.aws/credentials`), and
+the profile named by `AWS_PROFILE`. Run `aws configure` or set the environment
+variables — exactly as you would for the AWS CLI.

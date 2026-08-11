@@ -48,6 +48,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	awspricing "github.com/aws/aws-sdk-go-v2/service/pricing"
+	pricingtypes "github.com/aws/aws-sdk-go-v2/service/pricing/types"
 
 	"github.com/TypeOneLabs/tellury/pkg/pricing"
 )
@@ -306,25 +307,95 @@ func (c *CatalogPricer) liveUnitPrice(kind pricing.Kind, sku, region string) (fl
 // product this pricer models into skusByKey. This is the only place the
 // Price List API is called — everything else reads the cache built here.
 //
-// The whole AmazonEC2 list is fetched (no GetProducts filter): a filter on
-// the wrong attribute name returns nothing with no error, and silently
-// returning an empty catalogue is exactly the failure class this file exists
-// to prevent. indexDoc below rejects every product tellury does not model, so
-// the cost is fetch bandwidth, not correctness.
+// FILTERED BY PRODUCT FAMILY, and verified. Fetching the whole AmazonEC2 list
+// is correct but unusable: it is hundreds of thousands of products — every
+// instance type, every region, every data-transfer rate — paged 100 at a time
+// to find a handful of EBS and address rates. Measured against a live account
+// it spent 1m39s and had still not finished, making the scan's pricing step
+// longer than everything else combined.
+//
+// The reason it was unfiltered is real and worth preserving: a filter on the
+// wrong attribute name returns an empty result with NO error, and a silently
+// empty catalogue is the failure class this file exists to prevent. So the
+// filter is verified rather than trusted — a family that returns nothing is
+// treated as a broken filter, not as an empty catalogue, and the load falls
+// back to the unfiltered fetch. Correctness is preserved; the cost is paid
+// only when a family name has actually drifted.
 func (c *CatalogPricer) loadCatalogue(ctx context.Context) error {
 	c.reportCatalogueProgress(0, 1, false)
-	paginator := awspricing.NewGetProductsPaginator(c.client, &awspricing.GetProductsInput{
+
+	n, err := c.loadFamilies(ctx, priceProductFamilies)
+	if err != nil {
+		c.reportCatalogueProgress(0, 1, true)
+		c.log.Warn("aws: GetProducts unavailable; pricing will use the embedded fallback table", "err", err)
+		return err
+	}
+	if n == 0 {
+		// Every family came back empty. Either the product-family names have
+		// drifted or the filter is being rejected silently; either way the
+		// unfiltered fetch is the honest answer rather than an empty table.
+		c.log.Warn("aws: filtered price fetch returned nothing; retrying unfiltered",
+			"families", priceProductFamilies)
+		n, err = c.loadFamilies(ctx, nil)
+		if err != nil {
+			c.reportCatalogueProgress(0, 1, true)
+			return err
+		}
+	}
+
+	c.mu.Lock()
+	c.loaded = n > 0
+	c.mu.Unlock()
+	c.reportCatalogueProgress(1, 1, true)
+	c.log.Debug("aws price catalogue loaded", "entries_indexed", n)
+	return nil
+}
+
+// priceProductFamilies are the GetProducts productFamily values holding every
+// rate tellury models: EBS capacity, IOPS and throughput live under "Storage",
+// and the hourly charge for an address under "Elastic IP". Both were read from
+// a real GetProducts response, not guessed — the recorded fixture in testdata
+// contains exactly these two.
+var priceProductFamilies = []string{"Storage", "Elastic IP"}
+
+// loadFamilies fetches and indexes the catalogue, one filtered request per
+// family. A nil families slice fetches everything, which is the fallback path.
+func (c *CatalogPricer) loadFamilies(ctx context.Context, families []string) (int, error) {
+	if len(families) == 0 {
+		return c.loadOne(ctx, "")
+	}
+	total := 0
+	for _, f := range families {
+		n, err := c.loadOne(ctx, f)
+		if err != nil {
+			return total, err
+		}
+		total += n
+	}
+	return total, nil
+}
+
+// loadOne runs a single GetProducts pagination, optionally filtered to one
+// product family, and indexes what it returns.
+func (c *CatalogPricer) loadOne(ctx context.Context, family string) (int, error) {
+	in := &awspricing.GetProductsInput{
 		ServiceCode:   aws.String("AmazonEC2"),
 		FormatVersion: aws.String("aws_v1"),
 		MaxResults:    aws.Int32(100),
-	})
+	}
+	if family != "" {
+		in.Filters = []pricingtypes.Filter{{
+			Type:  pricingtypes.FilterTypeTermMatch,
+			Field: aws.String("productFamily"),
+			Value: aws.String(family),
+		}}
+	}
+	paginator := awspricing.NewGetProductsPaginator(c.client, in)
 	n := 0
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			c.reportCatalogueProgress(0, 1, true)
-			c.log.Warn("aws: GetProducts unavailable; pricing will use the embedded fallback table", "err", err)
-			return err
+			return n, err
 		}
 		for _, raw := range page.PriceList {
 			doc, err := parsePriceListDoc(raw)
@@ -342,12 +413,7 @@ func (c *CatalogPricer) loadCatalogue(ctx context.Context) error {
 			}
 		}
 	}
-	c.mu.Lock()
-	c.loaded = n > 0
-	c.mu.Unlock()
-	c.reportCatalogueProgress(1, 1, true)
-	c.log.Debug("aws price catalogue loaded", "entries_indexed", n)
-	return nil
+	return n, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -461,7 +527,7 @@ func parsePriceListDoc(raw string) (*priceListDoc, error) {
 // an unassociated address accrues), indexed under KindStaticIP from the
 // "Hrs" dimension.
 func indexDoc(doc *priceListDoc) []catalogueEntry {
-	region, ok := regionCodeOf(doc.Product.Attributes["location"])
+	region, ok := regionOfProduct(doc.Product.Attributes)
 	if !ok {
 		// An unmapped location is skipped, never guessed at.
 		return nil
@@ -515,6 +581,25 @@ func kindForUnit(unit string) pricing.Kind {
 	default:
 		return ""
 	}
+}
+
+// regionOfProduct resolves a product's region, preferring the regionCode
+// attribute the API already supplies over the display-name table.
+//
+// The display-name map alone silently dropped most of the catalogue. Live
+// products for Ireland carry location "EU (Ireland)" while the table held
+// "Europe (Ireland)", so every Irish rate was skipped and every lookup fell
+// through to the embedded fallback — a scan reported prices that looked
+// entirely reasonable and were not the live ones. A hand-maintained mapping
+// that discards what it does not recognise is the wrong shape when the API
+// hands you the canonical value in the next field along.
+//
+// The table stays as a fallback for older payloads that predate regionCode.
+func regionOfProduct(attrs map[string]string) (string, bool) {
+	if code := strings.TrimSpace(attrs["regionCode"]); code != "" {
+		return code, true
+	}
+	return regionCodeOf(attrs["location"])
 }
 
 // regionCodeOf maps the Price List API's human-readable Location attribute

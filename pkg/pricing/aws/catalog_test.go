@@ -284,6 +284,42 @@ func TestCatalogPricer_Provenance_RecordsSource(t *testing.T) {
 	}
 }
 
+// TestCatalogPricer_OneGiBGp3IsEightCents is the acceptance test for wiring
+// the live catalogue to the provider: a 1 GiB gp3 volume costs exactly
+// $0.08/month through the live-catalogue path (MonthlyCost), and its
+// provenance reads SourceLiveAPI — proving the live API answered, not the
+// embedded table. A gp3 volume includes 3000 IOPS and 125 MiB/s at no charge;
+// the price list dimension reads "per provisioned IOPS-month" with no mention
+// of that allowance, so the allowance arithmetic stays in the rule. If wiring
+// the live catalogue moves or bypasses that logic, a 1 GiB volume goes back
+// to $20.08. This test pins the $0.08 figure through the full MonthlyCost
+// path so that defect is caught here rather than on a real invoice.
+func TestCatalogPricer_OneGiBGp3IsEightCents(t *testing.T) {
+	p := fixtureCatalog(t)
+
+	cost, err := p.MonthlyCost(pricing.Item{
+		Kind:     pricing.KindDiskCapacity,
+		Provider: "aws",
+		SKU:      "gp3",
+		Region:   "us-east-1",
+		Quantity: 1,
+	})
+	if err != nil {
+		t.Fatalf("MonthlyCost(1 GiB gp3): %v", err)
+	}
+	if cost != 0.08 {
+		t.Errorf("1 GiB gp3 monthly cost = %v, want 0.08", cost)
+	}
+
+	prov, ok := p.LastLookup(pricing.KindDiskCapacity, "gp3", "us-east-1")
+	if !ok {
+		t.Fatal("LastLookup returned ok=false after MonthlyCost")
+	}
+	if prov.Source != pricing.SourceLiveAPI {
+		t.Errorf("provenance source = %q, want %q (live_api)", prov.Source, pricing.SourceLiveAPI)
+	}
+}
+
 // TestCatalogPricer_LiveGetProductsTokenPinned is the LIVE counterpart of the
 // fixture pinning tests: it fetches a real GetProducts response for AmazonEC2
 // and asserts the catalogue resolves the exact tokens the rules query. It is

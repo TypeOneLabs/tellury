@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TypeOneLabs/tellury/pkg/cloud/aws"
 	"github.com/TypeOneLabs/tellury/pkg/pricing"
 	"github.com/TypeOneLabs/tellury/pkg/rules"
 )
@@ -48,6 +49,25 @@ type Report struct {
 	// report is byte-identical) and the table summary shows it right after
 	// the account figure.
 	RegionsAnalyzed int `json:"regions_analyzed,omitempty"`
+
+	// RegionSource says how the region list was chosen: "explicit"
+	// (--aws-regions), "resource_explorer" (discovery narrowed the list),
+	// "describe_regions" (fallback full sweep) or "fixture" (offline replay).
+	// It is set only for an AWS scan so the GCP report stays byte-identical,
+	// and it is the JSON counterpart of the "(source)" annotation in the
+	// table summary line — a machine reader can distinguish "discovery
+	// narrowed the scan to two regions" from "DescribeRegions swept seventeen
+	// regions" the same way a human reading the summary can.
+	RegionSource string `json:"region_source,omitempty"`
+
+	// AccountStatuses is the outcome for each account in an organization
+	// scan: which were scanned, which were unreachable and why, and which
+	// were suspended. It is nil for a single-account scan. Each entry carries
+	// the account ID, name, outcome and the reason when the account was not
+	// reachable. The table summary reports the counts (N scanned, N
+	// unreachable, N suspended); the JSON carries the full list so a machine
+	// reader can see exactly which accounts were skipped and why.
+	AccountStatuses []aws.AccountStatus `json:"account_statuses,omitempty"`
 
 	// ResourcesSkipped is the total number of resource-rule skips recorded
 	// during evaluation — the sum of every entry in Skipped, which is exactly
@@ -134,6 +154,16 @@ type Meta struct {
 	AccountsAnalyzed int
 	RegionsAnalyzed  int
 
+	// RegionSource is the AWS region coverage source: "explicit"
+	// (--aws-regions), "resource_explorer" (discovery narrowed the list),
+	// "describe_regions" (fallback full sweep) or "fixture" (offline replay).
+	// It is empty for GCP scans so their reports stay byte-identical.
+	RegionSource string
+
+	// AccountStatuses carries the outcome of every account in an organization
+	// scan. Nil for a single-account scan.
+	AccountStatuses []aws.AccountStatus
+
 	// Duration is the scan's wall-clock duration, measured by the scan's own
 	// clock and never re-measured inside a renderer.
 	Duration time.Duration
@@ -175,6 +205,8 @@ func NewReport(res rules.Result, m Meta) Report {
 		ProjectsAnalyzed:  m.ProjectsAnalyzed,
 		AccountsAnalyzed:  m.AccountsAnalyzed,
 		RegionsAnalyzed:   m.RegionsAnalyzed,
+		RegionSource:      m.RegionSource,
+		AccountStatuses:   m.AccountStatuses,
 		Duration:          m.Duration,
 		MultiProject:      m.MultiProject,
 		Skipped:           res.SkipTotals(),

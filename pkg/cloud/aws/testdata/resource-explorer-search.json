@@ -1,0 +1,22 @@
+[
+  {
+    "Region": "us-east-1",
+    "ResourceType": "AWS::EC2::Volume"
+  },
+  {
+    "Region": "us-east-1",
+    "ResourceType": "AWS::EC2::Volume"
+  },
+  {
+    "Region": "us-east-1",
+    "ResourceType": "AWS::EC2::EIP"
+  },
+  {
+    "Region": "eu-west-1",
+    "ResourceType": "AWS::EC2::Volume"
+  },
+  {
+    "Region": "eu-west-1",
+    "ResourceType": "AWS::EC2::EIP"
+  }
+]

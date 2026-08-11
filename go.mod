@@ -6,6 +6,10 @@ require (
 	cloud.google.com/go/asset v1.22.1
 	cloud.google.com/go/billing v1.21.0
 	cloud.google.com/go/monitoring v1.24.3
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.35
+	github.com/aws/aws-sdk-go-v2/service/organizations v1.53.7
+	github.com/aws/aws-sdk-go-v2/service/resourceexplorer2 v1.27.6
+	github.com/aws/aws-sdk-go-v2/service/sts v1.45.5
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
 	google.golang.org/api v0.274.0
@@ -15,7 +19,6 @@ require (
 )
 
 require (
-	github.com/aws/aws-sdk-go-v2/credentials v1.19.35 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.36 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.36 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.36 // indirect
@@ -25,7 +28,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/signin v1.5.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.33.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.38.5 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sts v1.45.5 // indirect
 	github.com/aws/smithy-go v1.27.7 // indirect
 )
 

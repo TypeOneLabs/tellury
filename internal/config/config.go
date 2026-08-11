@@ -72,6 +72,13 @@ type Scan struct {
 	OrganizationalUnit string
 	AWSOrganization    string
 
+	// AWSRoleName is the name of the IAM role to assume in each member
+	// account during an organization or OU scan. Defaults to
+	// OrganizationAccountAccessRole (the AWS Organizations convention). A
+	// single-account scan (--aws-account) ignores it — the caller's own
+	// credentials are used directly.
+	AWSRoleName string
+
 	// AWSRegions narrows an AWS scan to an explicit region list (--aws-regions).
 	// Empty means the default: every region enabled for the account, resolved
 	// by ec2:DescribeRegions (or an offline fixture's regions on a replay).

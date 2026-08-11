@@ -30,6 +30,12 @@ const (
 	KindAccount      ResourceKind = "account"
 	KindFolder       ResourceKind = "folder"
 	KindOrganization ResourceKind = "organization"
+	// KindOrganizationalUnit is an AWS Organizations OU container node. An OU
+	// sits between the organization root and its accounts in the hierarchy,
+	// exactly as a GCP folder sits between an organization and its projects.
+	// The node ID is the OU's ARN, and containment edges follow the same
+	// "contained → container" convention as every other edge in the graph.
+	KindOrganizationalUnit ResourceKind = "organizational_unit"
 	// KindRegion is the location tier of the hierarchy: a per-project (or
 	// per-account, for AWS) container node ("projects/<id>/regions/<location>"
 	// / "accounts/<id>/regions/<region>") that sits between a resource and
@@ -94,10 +100,11 @@ type Node struct {
 }
 
 // Container reports whether the node is resource-hierarchy scaffolding rather
-// than a billable leaf resource. Organization, folder, project, account and
-// region nodes are containers. They are added during ingestion so a finding
-// can be attributed to a folder or rolled up across projects, but they must
-// never be evaluated by a rule and never appear as a finding.
+// than a billable leaf resource. Organization, folder, project, account,
+// organizational-unit and region nodes are containers. They are added during
+// ingestion so a finding can be attributed to a folder or rolled up across
+// projects, but they must never be evaluated by a rule and never appear as a
+// finding.
 //
 // This exclusion is structural, not per-rule: every rule enters the graph
 // through Graph.ByKind with a leaf ResourceKind, and a container node's Kind
@@ -108,7 +115,7 @@ type Node struct {
 // inherit every one of these guarantees from this single switch.
 func (n *Node) Container() bool {
 	switch n.Kind {
-	case KindOrganization, KindFolder, KindProject, KindAccount, KindRegion:
+	case KindOrganization, KindFolder, KindProject, KindAccount, KindOrganizationalUnit, KindRegion:
 		return true
 	}
 	return false

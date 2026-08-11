@@ -5,7 +5,11 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/service/resourceexplorer2"
 
 	"github.com/TypeOneLabs/tellury/pkg/cloud"
 	"github.com/TypeOneLabs/tellury/pkg/graph"
@@ -186,5 +190,174 @@ func TestIngest_RejectsNilAWSScope(t *testing.T) {
 	defer p.Close()
 	if _, err := p.Ingest(context.Background(), cloud.Scope{Provider: "aws"}, nil); err == nil {
 		t.Fatal("Ingest with no AWS scope block must fail")
+	}
+}
+
+// TestAssetTypesToCloudFormation_MapsKnownTypes verifies the mapping from the
+// provider's own asset-type tokens ("aws.ec2.volume", "aws.ec2.address") to
+// CloudFormation resource type identifiers ("AWS::EC2::Volume",
+// "AWS::EC2::EIP") that Resource Explorer Search expects. The mapping table
+// must stay exhaustive for the types the current rules declare, so a missing
+// mapping is a test failure — the scan silently falls back to DescribeRegions
+// instead of narrowing.
+func TestAssetTypesToCloudFormation_MapsKnownTypes(t *testing.T) {
+	tests := []struct {
+		hint string
+		want string
+	}{
+		{"aws.ec2.volume", "AWS::EC2::Volume"},
+		{"aws.ec2.address", "AWS::EC2::EIP"},
+	}
+	for _, tt := range tests {
+		got := assetTypesToCloudFormation([]string{tt.hint})
+		if len(got) != 1 || got[0] != tt.want {
+			t.Errorf("assetTypesToCloudFormation(%q) = %v, want [%s]", tt.hint, got, tt.want)
+		}
+	}
+}
+
+// TestAssetTypesToCloudFormation_UnknownHintIsDropped: an asset-type hint
+// that has no mapping is dropped, not passed through to Resource Explorer as
+// a bogus type string that would return zero results.
+func TestAssetTypesToCloudFormation_UnknownHintIsDropped(t *testing.T) {
+	got := assetTypesToCloudFormation([]string{"aws.ec2.volume", "aws.s3.bucket", "aws.ec2.address"})
+	want := []string{"AWS::EC2::Volume", "AWS::EC2::EIP"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("assetTypesToCloudFormation = %v, want %v (unknown hints dropped)", got, want)
+	}
+}
+
+// TestAssetTypesToCloudFormation_EmptyInput: nil or empty slice returns nil.
+func TestAssetTypesToCloudFormation_EmptyInput(t *testing.T) {
+	if got := assetTypesToCloudFormation(nil); got != nil {
+		t.Errorf("assetTypesToCloudFormation(nil) = %v, want nil", got)
+	}
+	if got := assetTypesToCloudFormation([]string{}); got != nil {
+		t.Errorf("assetTypesToCloudFormation([]) = %v, want nil", got)
+	}
+}
+
+// TestAssetTypesToCloudFormation_AllUnknown: when none of the hints map, the
+// result is empty — the caller falls through to DescribeRegions.
+func TestAssetTypesToCloudFormation_AllUnknown(t *testing.T) {
+	got := assetTypesToCloudFormation([]string{"aws.s3.bucket", "aws.rds.instance"})
+	if len(got) != 0 {
+		t.Errorf("assetTypesToCloudFormation(all unknown) = %v, want empty (len 0)", got)
+	}
+}
+
+// TestResolveRegions_ExplicitOverridesDiscovery: even with asset type hints,
+// explicit --aws-regions wins and the source is "explicit". The discovery
+// path is never consulted.
+func TestResolveRegions_ExplicitOverridesDiscovery(t *testing.T) {
+	p := &Provider{
+		log:      newTestLogger(),
+		offline:  false,
+		explicit: []string{"us-east-1"},
+	}
+	regions, source, err := p.resolveRegions(context.Background(), []string{"aws.ec2.volume"})
+	if err != nil {
+		t.Fatalf("resolveRegions: %v", err)
+	}
+	if source != "explicit" {
+		t.Errorf("source = %q, want explicit", source)
+	}
+	if len(regions) != 1 || regions[0] != "us-east-1" {
+		t.Errorf("regions = %v, want [us-east-1]", regions)
+	}
+}
+
+// TestResolveRegions_OfflineReturnsFixture: the offline path returns the
+// fixture's regions with source "fixture", ignoring any asset type hints.
+func TestResolveRegions_OfflineReturnsFixture(t *testing.T) {
+	f := loadTestFixture(t)
+	p := &Provider{
+		log:     newTestLogger(),
+		offline: true,
+		fixture: f,
+	}
+	regions, source, err := p.resolveRegions(context.Background(), []string{"aws.ec2.volume"})
+	if err != nil {
+		t.Fatalf("resolveRegions: %v", err)
+	}
+	if source != "fixture" {
+		t.Errorf("source = %q, want fixture", source)
+	}
+	want := canonicaliseRegions(f.RegionNames())
+	if !reflect.DeepEqual(regions, want) {
+		t.Errorf("regions = %v, want %v", regions, want)
+	}
+}
+
+// TestResolveRegions_DiscoveryNarrowsRegions: when the discoverer returns
+// regions, those regions are used and the source is "resource_explorer".
+func TestResolveRegions_DiscoveryNarrowsRegions(t *testing.T) {
+	fake := newDiscovererWithClient(loadSearchFixture(t))
+	p := &Provider{
+		log:        newTestLogger(),
+		offline:    false,
+		discoverer: fake,
+	}
+	regions, source, err := p.resolveRegions(context.Background(), []string{"aws.ec2.volume", "aws.ec2.address"})
+	if err != nil {
+		t.Fatalf("resolveRegions: %v", err)
+	}
+	if source != "resource_explorer" {
+		t.Errorf("source = %q, want resource_explorer", source)
+	}
+	want := []string{"eu-west-1", "us-east-1"}
+	sort.Strings(regions)
+	if !reflect.DeepEqual(regions, want) {
+		t.Errorf("regions = %v, want %v", regions, want)
+	}
+}
+
+// TestResolveRegions_DiscoveryEmptyResultFallsBack: when discovery returns
+// zero regions (valid index, no matching resources), the provider falls back
+// to DescribeRegions.
+func TestResolveRegions_DiscoveryEmptyResultFallsBack(t *testing.T) {
+	emptyDiscoverer := newDiscovererWithClient(&fakeResourceExplorer{
+		pages: []*resourceexplorer2.SearchOutput{
+			{Resources: nil},
+		},
+	})
+
+	p := &Provider{
+		log:        newTestLogger(),
+		offline:    true,
+		discoverer: emptyDiscoverer,
+		fixture:    loadTestFixture(t),
+	}
+
+	regions, source, err := p.resolveRegions(context.Background(), []string{"aws.ec2.volume"})
+	if err != nil {
+		t.Fatalf("resolveRegions: %v", err)
+	}
+	if source != "fixture" {
+		t.Errorf("source = %q, want fixture (offline path after discovery returned empty)", source)
+	}
+	if len(regions) != 2 {
+		t.Errorf("regions = %v, want 2 regions from fixture fallback", regions)
+	}
+}
+
+// TestResolveRegions_NoHintsUsesDescribeRegions: when asset type hints are
+// empty or nil, the discovery path is skipped entirely and the provider falls
+// through to DescribeRegions.
+func TestResolveRegions_NoHintsUsesDescribeRegions(t *testing.T) {
+	p := &Provider{
+		log:     newTestLogger(),
+		offline: true,
+		fixture: loadTestFixture(t),
+	}
+	regions, source, err := p.resolveRegions(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("resolveRegions: %v", err)
+	}
+	if source != "fixture" {
+		t.Errorf("source = %q, want fixture (offline, no hints)", source)
+	}
+	if len(regions) != 2 {
+		t.Errorf("regions = %v, want 2 regions from fixture", regions)
 	}
 }

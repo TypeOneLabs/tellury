@@ -38,6 +38,7 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 			"  tellury scan --gcp-project p --rules detached_disk --format json\n" +
 			"  tellury scan --currency EUR --gcp-project my-gcp-project   # price in EUR\n" +
 			"  tellury scan --aws-account 123456789012   # provider inferred from the AWS scope flag\n" +
+			"  tellury scan --aws-organization o-xxxxxxxxxx   # scan every account in the org\n" +
 			"  tellury scan --cache-file snap.json   # offline replay (full fidelity)\n" +
 			"  tellury scan --fixture cai-assets.json   # offline replay (topology only)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -65,6 +66,9 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 	f.StringSliceVar(&cfg.AWSRegions, "aws-regions", nil,
 		"regions to scan for the AWS provider (default: every region enabled for the account via DescribeRegions; "+
 			"an availability-zone form like us-east-1a is accepted and flattened to its region)")
+	f.StringVar(&cfg.AWSRoleName, "aws-role-name", "",
+		"IAM role name to assume in member accounts during an organization/OU scan "+
+			"(default: OrganizationAccountAccessRole)")
 	f.StringSliceVar(&cfg.Rules, "rules", nil, "rule IDs to run (default: all)")
 	f.StringSliceVar(&cfg.SkipRules, "skip-rules", nil, "rule IDs to exclude")
 	f.StringVar(&cfg.Format, "format", "table", "table|json|csv")
@@ -307,19 +311,26 @@ func runScan(
 	}
 	// AWS region coverage: which regions a scan actually looked at, and how
 	// they were chosen, comes from the provider's own resolution (explicit
-	// --aws-regions, the DescribeRegions default, or the fixture), so the scan
-	// summary's "N regions analyzed" figure and this log line can never drift
-	// from the scan's real coverage. GCP never sets these fields, keeping its
-	// report byte-identical.
+	// --aws-regions, resource_explorer discovery, the DescribeRegions
+	// fallback, or the fixture), so the scan summary's "N regions analyzed
+	// (source)" figure and this log line can never drift from the scan's real
+	// coverage. GCP never sets these fields, keeping its report byte-identical.
 	if cfg.Provider == "aws" {
 		meta.AccountsAnalyzed = gr.CountByKind(graph.KindAccount)
 		if rp, ok := provider.(regionReporter); ok {
 			regions, source := rp.Regions()
 			meta.RegionsAnalyzed = len(regions)
+			meta.RegionSource = source
 			log.Info("aws region coverage",
 				"regions", len(regions),
 				"source", source,
 				"list", strings.Join(regions, ","))
+		}
+		// Account statuses: which accounts were scanned, unreachable, or
+		// suspended. Only the AWS provider reports this; a single-account
+		// scan returns nil and the report field stays empty.
+		if ar, ok := provider.(accountReporter); ok {
+			meta.AccountStatuses = ar.AccountStatuses()
 		}
 	}
 	report := output.NewReport(res, meta)
@@ -375,12 +386,21 @@ func runScan(
 
 // regionReporter is the optional provider capability that reports which
 // regions a scan covered and how they were chosen (explicit --aws-regions,
-// the DescribeRegions default, or a fixture). Only the AWS provider implements
-// it today; the scan summary's "N regions analyzed" figure and the region
-// coverage log line come from it, so the report never guesses about a scan's
-// real coverage.
+// resource_explorer discovery, the DescribeRegions fallback, or a fixture).
+// Only the AWS provider implements it today; the scan summary's "N regions
+// analyzed (source)" figure and the region coverage log line come from it, so
+// the report never guesses about a scan's real coverage.
 type regionReporter interface {
 	Regions() ([]string, string)
+}
+
+// accountReporter is the optional provider capability that reports the status
+// of every account in an organization scan — which accounts were scanned,
+// which were unreachable and why, and which were suspended. Only the AWS
+// provider implements it; a single-account scan returns nil and the report
+// field stays empty.
+type accountReporter interface {
+	AccountStatuses() []aws.AccountStatus
 }
 
 // requestedCurrency renders the currency the scan was asked/detected to price
@@ -555,6 +575,9 @@ func newProvider(ctx context.Context, cfg config.Scan, log *slog.Logger, offline
 		}
 		if len(cfg.AWSRegions) > 0 {
 			opts = append(opts, aws.WithExplicitRegions(cfg.AWSRegions))
+		}
+		if cfg.AWSRoleName != "" {
+			opts = append(opts, aws.WithRoleName(cfg.AWSRoleName))
 		}
 		if offline {
 			opts = append(opts, aws.WithOffline())

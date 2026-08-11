@@ -202,7 +202,11 @@ func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *r
 	nc.Set("provisioned_throughput", mbps)
 
 	return []rules.CostBranch{{
-		Waste:      monthlyWaste,
+		// Rounded like every other rule. Live prices are not round numbers —
+		// 200 GiB at eu-west-1's $0.088/GiB-month is 17.599999999999998 in
+		// float — and a report showing that instead of $17.60 reads as a bug
+		// even though the arithmetic is right.
+		Waste:      pricing.Round2(monthlyWaste),
 		Confidence: 0.85, // creation_fallback age basis: AWS exposes no detach history
 		Label:      "detached",
 	}}, nil
