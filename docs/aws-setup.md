@@ -18,7 +18,6 @@ organization-level scans.
 | `ec2:DescribeAddresses` | List every Elastic IP in a region. |
 | `pricing:GetProducts` | Load the live Price List API catalogue. Optional — when missing, the scan degrades to the embedded static price table and logs a warning. |
 | `resource-explorer-2:Search` | Query the aggregator index to find which regions hold resources of the types the selected rules need, so the scan sweeps only those regions instead of every enabled region. Optional — when missing, the scan falls back to `DescribeRegions`. |
-| `resource-explorer-2:ListIndexes` | Check whether an aggregator index exists so tellury can report why discovery was available or unavailable. Optional. |
 
 ### Organization / OU scans only
 
@@ -97,8 +96,7 @@ never produce a stale attribute or a wrong price.
         "ec2:DescribeVolumes",
         "ec2:DescribeAddresses",
         "pricing:GetProducts",
-        "resource-explorer-2:Search",
-        "resource-explorer-2:ListIndexes"
+        "resource-explorer-2:Search"
       ],
       "Resource": "*"
     }
