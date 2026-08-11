@@ -112,8 +112,10 @@ func (t tableRenderer) Render(w io.Writer, r Report) error {
 	}
 
 	if len(r.Findings) == 0 {
-		if _, err := fmt.Fprintf(w, "No waste found in %s (%d resources, %d rules).\n",
-			r.Scope, r.ResourcesScanned, r.RulesEvaluated); err != nil {
+		// Deliberately short: the summary line below already names the scope,
+		// the resources scanned and the rules evaluated, and repeating them
+		// here made two consecutive lines say the same thing.
+		if _, err := fmt.Fprintln(w, "No waste found."); err != nil {
 			return err
 		}
 	} else {
@@ -213,6 +215,15 @@ func summaryLine(r Report) string {
 		countPhrase(r.FindingCount, "finding", "findings"),
 		countPhrase(r.ResourcesSkipped, "resource skipped", "resources skipped"),
 		formatDuration(r.Duration),
+	}
+	// The scope leads the line. Without it a findings table says nothing about
+	// what it is a scan OF: the PROJECT column only appears when findings span
+	// more than one project, so a single-project run named the project nowhere
+	// at all, and a table pasted into a ticket or scrolled past in CI could not
+	// be attributed. The empty-result path has always named the scope
+	// ("No waste found in projects/x"); this makes the two consistent.
+	if r.Scope != "" {
+		return "Summary: " + r.Scope + " — " + strings.Join(parts, ", ")
 	}
 	return "Summary: " + strings.Join(parts, ", ")
 }

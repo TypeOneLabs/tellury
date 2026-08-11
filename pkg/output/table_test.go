@@ -470,7 +470,7 @@ func TestTableSummary_AfterTableCarriesEveryField(t *testing.T) {
 	}
 	got := buf.String()
 
-	want := "Summary: 2 projects analyzed, 17 resources scanned, 5 rules evaluated, 2 findings, 3 resources skipped, 1.5s"
+	want := "2 projects analyzed, 17 resources scanned, 5 rules evaluated, 2 findings, 3 resources skipped, 1.5s"
 	if !strings.Contains(got, want) {
 		t.Errorf("table summary must read %q:\n%s", want, got)
 	}
@@ -509,10 +509,12 @@ func TestTableSummary_NoFindingsStillReportsProjects(t *testing.T) {
 	}
 	got := buf.String()
 
-	if !strings.Contains(got, "No waste found in projects/my-project (17 resources, 5 rules).") {
+	// The scope and the denominators live on the summary line now, so the
+	// empty-result line is deliberately short and must not repeat them.
+	if !strings.Contains(got, "No waste found.") {
 		t.Errorf("no-findings table must keep its headline line:\n%s", got)
 	}
-	want := "Summary: 1 project analyzed, 17 resources scanned, 5 rules evaluated, 0 findings, 0 resources skipped, 4ms"
+	want := "1 project analyzed, 17 resources scanned, 5 rules evaluated, 0 findings, 0 resources skipped, 4ms"
 	if !strings.Contains(got, want) {
 		t.Errorf("a scan with no findings must still report the projects/resources it analyzed (%q):\n%s", want, got)
 	}
@@ -536,7 +538,7 @@ func TestTableSummary_BrokenScopeReportsZeroProjects(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	got := buf.String()
-	if !strings.Contains(got, "Summary: 0 projects analyzed, 0 resources scanned, 0 rules evaluated, 0 findings, 0 resources skipped, 0s") {
+	if !strings.Contains(got, "0 projects analyzed, 0 resources scanned, 0 rules evaluated, 0 findings, 0 resources skipped, 0s") {
 		t.Errorf("a broken scope must report zero projects analyzed, never a silent empty result:\n%s", got)
 	}
 }

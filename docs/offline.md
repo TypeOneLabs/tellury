@@ -21,7 +21,7 @@ RESOURCE            RULE         MONTHLY WASTE
 disk/pd-standard-01 detached_disk        $8.00
 ----------------------------------------------
 TOTAL               1 findings           $8.00
-Summary: 1 project analyzed, 1 resource scanned, 5 rules evaluated, 1 finding, 0 resources skipped, 734µs
+Summary: projects/my-project — 1 project analyzed, 1 resource scanned, 5 rules evaluated, 1 finding, 0 resources skipped, 2ms
 
 2 rule(s) could not be evaluated for lack of metric data: no_lifecycle_policy, underutilized_instance
 (use --cache-file from a live `scan` or an enriched `graph export` to evaluate them)

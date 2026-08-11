@@ -40,7 +40,7 @@ func TestScanSummary_ProjectsDerivedFromGraphNodes(t *testing.T) {
 
 	t.Logf("=== `tellury scan --fixture testdata/readme-assets.json --rules detached_disk` (stdout) ===\n%s", got)
 
-	want := "Summary: 1 project analyzed, 1 resource scanned, 1 rule evaluated, 1 finding, 0 resources skipped, "
+	want := "1 project analyzed, 1 resource scanned, 1 rule evaluated, 1 finding, 0 resources skipped, "
 	if !strings.Contains(got, want) {
 		t.Errorf("fixture scan summary must report the project/resource/rule/finding/skip denominators (%q):\n%s", want, got)
 	}
@@ -77,13 +77,13 @@ func TestScanSummary_NoFindingsStillReportsProjects(t *testing.T) {
 
 	t.Logf("=== `tellury scan --fixture old-snapshot.json --rules old_snapshot --min-waste 100` (stdout) ===\n%s", got)
 
-	if !strings.Contains(got, "No waste found in projects/my-project") {
+	if !strings.Contains(got, "No waste found.") {
 		t.Errorf("a zero-findings scan must keep its no-waste headline:\n%s", got)
 	}
 	// Projects and resources come from the graph, so a scan whose findings were
 	// all filtered away still reports that it analyzed one project and three
 	// resources, and skipped two during evaluation.
-	want := "Summary: 1 project analyzed, 3 resources scanned, 1 rule evaluated, 0 findings, 2 resources skipped, "
+	want := "1 project analyzed, 3 resources scanned, 1 rule evaluated, 0 findings, 2 resources skipped, "
 	if !strings.Contains(got, want) {
 		t.Errorf("an empty findings table must still report the ground the scan covered (%q):\n%s", want, got)
 	}

@@ -26,7 +26,7 @@ RESOURCE            RULE         MONTHLY WASTE
 disk/pd-standard-01 detached_disk        $8.00
 ----------------------------------------------
 TOTAL               1 findings           $8.00
-Summary: 1 project analyzed, 1 resource scanned, 1 rule evaluated, 1 finding, 0 resources skipped, 1ms
+Summary: projects/my-project — 1 project analyzed, 1 resource scanned, 1 rule evaluated, 1 finding, 0 resources skipped, 2ms
 ```
 
 Against a real project:
