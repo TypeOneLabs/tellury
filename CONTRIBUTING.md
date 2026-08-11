@@ -46,6 +46,44 @@ go test -race ./...
 All four should be clean. Add a test for anything you change, and a fixture-based test for a
 new rule.
 
+## Cutting a release
+
+The steps below are the process, not a suggestion — every one of them has caught
+something real.
+
+1. **Write the changelog entry** for the net change against the last tag, not the churn
+   within it. A feature added and removed between releases never shipped and does not
+   belong in it. Say plainly when behaviour changes, and lead the Fixed section with
+   anything that affects figures a user already relies on.
+2. **Run every command the docs claim.** Not copied from `--help` — executed. A broken
+   `graph export` example shipped once because it was written from a flag list, and a
+   README quick-start went stale for two releases after the column layout changed.
+3. **Check internal links and anchors.** Sections get renamed; the links to them do not.
+4. `go build ./...`, `go vet ./...`, `go test ./...`.
+5. **Run the live pricing token pin.** It needs real AWS credentials, so the default suite
+   skips it and CI cannot:
+
+   ```bash
+   TELLURY_AWS_LIVE_PRICE_TEST=1 go test ./pkg/pricing/aws/ \
+     -run TestCatalogPricer_LiveGetProductsTokenPinned -count=1 -v
+   ```
+
+   It fetches a real `GetProducts` response and asserts that every SKU token the catalogue
+   derives still matches the tokens the rules query, and that all four price kinds resolve
+   with `provenance=live_api` and a real region rather than `default`. A failure means AWS
+   renamed an attribute; if that ships, the affected resources stop being priced.
+
+   The first time anyone ran this it failed four of five lookups, which is how the gp3
+   IOPS, throughput and static-IP defects were found. An opt-in test nobody runs is not a
+   check — put it here so cutting a release is when it gets run.
+6. **Reconcile one figure against a real invoice.** Every pricing defect in this project —
+   four of them — was found this way and by nothing else. Two were invisible to the entire
+   test suite; one had a test asserting the wrong arithmetic.
+7. **Tag with an annotated message** saying what changed and who should upgrade, then push
+   the branch and the tag.
+8. **Verify the tag from a clean clone**: build it, run its tests, and run the binary once.
+   That catches anything that only works because of untracked files in your working tree.
+
 ## Licence
 
 `tellury` is [Apache 2.0](LICENSE), and contributions are made under the same licence. That's
