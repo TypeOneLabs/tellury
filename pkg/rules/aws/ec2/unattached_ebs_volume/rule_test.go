@@ -12,6 +12,7 @@
 package unattached_ebs_volume
 
 import (
+	"math"
 	"context"
 	"strings"
 	"testing"
@@ -215,8 +216,16 @@ func TestEval_AllCostComponents_Fires(t *testing.T) {
 	if len(findings) != 1 {
 		t.Fatalf("want 1 finding, got %d (%+v)", len(findings), findings)
 	}
-	if f := findings[0]; f.MonthlyWasteUSD != 33.00 {
-		t.Errorf("MonthlyWasteUSD = %v, want 33.00 (capacity 8.00 + iops 15.00 + throughput 10.00)", f.MonthlyWasteUSD)
+	// 100 GiB x $0.08 = $8.00 capacity.
+	// 3000 provisioned IOPS is exactly gp3's included allowance, so $0.00.
+	// 250 MiB/s less the included 125 leaves 125 billable x $0.04 = $5.00.
+	//
+	// This assertion previously read 33.00 — capacity plus the FULL 3000 IOPS
+	// and FULL 250 MiB/s — which encoded the overcharge rather than catching
+	// it. The suite passed while every gp3 volume was priced $20/month too
+	// high, because the test asserted the same wrong arithmetic the rule used.
+	if f := findings[0]; f.MonthlyWasteUSD != 13.00 {
+		t.Errorf("MonthlyWasteUSD = %v, want 13.00 (capacity 8.00 + iops 0.00, the allowance + throughput 5.00)", f.MonthlyWasteUSD)
 	}
 }
 
@@ -411,5 +420,57 @@ func TestEval_SkipsAndFindingsDisjoint(t *testing.T) {
 	}
 	if len(skips) != 0 {
 		t.Errorf("a firing volume must record zero skips (skips and findings are disjoint), got %+v", skips)
+	}
+}
+
+// TestCost_GP3BaselineIsNotBilled pins the included-allowance arithmetic.
+//
+// gp3 ships 3000 IOPS and 125 MiB/s at no charge and EVERY gp3 volume reports
+// those figures, so pricing the raw provisioning added $20/month of cost that
+// does not exist to every gp3 volume in an account: 3000 x $0.005 + 125 x
+// $0.04. A real 1 GiB volume was reported at $20.08 against an actual $0.08 —
+// a 250x overstatement, and a flat error regardless of volume size.
+//
+// The offer file cannot catch this: its dimension reads "per provisioned
+// IOPS-month" with no mention of the allowance, so deriving SKU tokens from
+// live data was necessary but not sufficient. Only comparing a figure against
+// what AWS actually charges exposed it.
+func TestCost_GP3BaselineIsNotBilled(t *testing.T) {
+	cases := []struct {
+		name       string
+		sizeGB     float64
+		iops, mbps float64
+		want       float64
+	}{
+		{
+			name: "default gp3: the whole allowance is free",
+			// 1 GiB x $0.08. The 3000 IOPS and 125 MiB/s are included.
+			sizeGB: 1, iops: 3000, mbps: 125, want: 0.08,
+		},
+		{
+			name: "provisioning above the allowance is billable",
+			// 100 x 0.08 + (4000-3000) x 0.005 + (200-125) x 0.04
+			sizeGB: 100, iops: 4000, mbps: 200, want: 8 + 5 + 3,
+		},
+		{
+			name: "below the allowance is never negative",
+			sizeGB: 10, iops: 1000, mbps: 50, want: 0.8,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			billIOPS := billableAbove(tc.iops, includedIOPS["gp3"])
+			billMBps := billableAbove(tc.mbps, includedThroughputMBps["gp3"])
+			got := tc.sizeGB*0.08 + billIOPS*0.005 + billMBps*0.04
+			if math.Abs(got-tc.want) > 1e-9 {
+				t.Errorf("monthly cost = %v, want %v (billable IOPS %v, MiB/s %v)",
+					got, tc.want, billIOPS, billMBps)
+			}
+		})
+	}
+
+	// io2 has no allowance: every provisioned IOPS is billable.
+	if got := billableAbove(5000, includedIOPS["io2"]); got != 5000 {
+		t.Errorf("io2 billable IOPS = %v, want 5000: io1/io2 include no free IOPS", got)
 	}
 }

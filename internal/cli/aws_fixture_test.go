@@ -56,7 +56,7 @@ func TestAwsFixtureScanFiresBothRules(t *testing.T) {
 	for _, want := range []string{
 		"unattached_ebs_volume",
 		"unassociated_eip",
-		"$33.00", // vol-0aaa: capacity + iops + throughput
+		"$13.00", // vol-0aaa: capacity + iops + throughput
 		"$3.65",  // eipalloc-0d1: 0.005/hr x 730
 		"2 findings",
 	} {

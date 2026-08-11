@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"path/filepath"
 	"errors"
 	"io"
 	"os"
@@ -113,6 +114,20 @@ func TestExecute_AWSAccountAloneSelectsAWS(t *testing.T) {
 	// The SDK honours this variable by skipping IMDS entirely, so the test
 	// exercises the same no-credentials path with no network at all.
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+	// This test asserts the NO-CREDENTIALS path, so it must not inherit any
+	// the developer happens to have. Without this it passes on CI and fails on
+	// a machine with a working AWS profile — the scan succeeds there and
+	// returns a different exit code. Clearing them makes the test say the same
+	// thing everywhere.
+	for _, v := range []string{
+		"AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+		"AWS_SESSION_TOKEN", "AWS_DEFAULT_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION",
+	} {
+		t.Setenv(v, "")
+	}
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "no-credentials"))
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "no-config"))
 
 	code, execErr, stdout, _ := runExecute(t, "scan", "--aws-account", "123456789012")
 

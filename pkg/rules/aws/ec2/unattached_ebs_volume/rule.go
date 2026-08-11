@@ -177,10 +177,22 @@ func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *r
 	iops, _ := n.Num(awsrules.AttrIops)
 	mbps, _ := n.Num(awsrules.AttrThroughput)
 
-	monthlyWaste := sizeGB*capPrice + iops*iopsPrice + mbps*thrPrice
+	// Only provisioning ABOVE the type's included baseline is billable. gp3
+	// ships 3000 IOPS and 125 MiB/s free and EVERY gp3 volume reports them,
+	// so charging the raw figures added $20/month of cost that does not exist
+	// to every gp3 volume in an account — a 1 GiB volume priced at $20.08
+	// against a real $0.08. The offer file does not encode this: its price
+	// dimension reads "per provisioned IOPS-month" with no mention of the
+	// allowance, which is why deriving the tokens from it was not enough.
+	billableIOPS := billableAbove(iops, includedIOPS[sku])
+	billableMBps := billableAbove(mbps, includedThroughputMBps[sku])
+
+	monthlyWaste := sizeGB*capPrice + billableIOPS*iopsPrice + billableMBps*thrPrice
 
 	// Stash the values ExtraEvidence needs. The price-source entries are
 	// rendered here because ExtraEvidence has no Pass to reach the pricer.
+	nc.Set("billable_iops", billableIOPS)
+	nc.Set("billable_throughput", billableMBps)
 	nc.Set("currency", rules.CurrencyOf(p))
 	nc.Set("disk_sku", sku)
 	nc.Set("cap_price", capPrice)
@@ -280,4 +292,35 @@ func diskPricedComponents(sku, region, capRegion string, iopsPrice float64, iops
 		})
 	}
 	return comps
+}
+
+
+// includedIOPS and includedThroughputMBps are the provisioning each volume type
+// includes at no charge. AWS bills only what is provisioned ABOVE these, and a
+// volume reports its TOTAL provisioning, so charging the reported figure bills
+// the free allowance too.
+//
+// gp3's allowance is 3000 IOPS and 125 MiB/s, which every gp3 volume has by
+// default — so the error was not an edge case but a flat overcharge on the most
+// common volume type. io1/io2 have no allowance: every provisioned IOPS is
+// billable. Types absent here (gp2, st1, sc1, standard) have no separate IOPS
+// or throughput charge at all and never reach this multiplication, because the
+// catalogue has no price for them.
+var includedIOPS = map[string]float64{
+	"gp3": 3000,
+	"io1": 0,
+	"io2": 0,
+}
+
+var includedThroughputMBps = map[string]float64{
+	"gp3": 125,
+}
+
+// billableAbove returns the provisioning that exceeds an included allowance,
+// never a negative number.
+func billableAbove(provisioned, included float64) float64 {
+	if provisioned <= included {
+		return 0
+	}
+	return provisioned - included
 }

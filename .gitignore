@@ -7,3 +7,6 @@
 .DS_Store
 graphify-out/
 tellury-out/
+
+# Local scan settings: names a real account, and may name a profile.
+.env
