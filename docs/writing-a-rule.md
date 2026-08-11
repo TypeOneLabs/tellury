@@ -1,13 +1,11 @@
----
-name: write-a-tellury-rule
-description: Use when writing a new cost-waste rule for the tellury scanner against the NodeRule interface — detecting an idle or unattached resource (a snapshot, disk, address, instance, bucket) and pricing its monthly waste. Walks through the interface method by method, the typed skip-code vocabulary, the registration step and its silent-nothing trap, and the mandatory mutation check, with a complete worked example (the old_snapshot rule) implemented in this repo. Do NOT use for changing the engine, graph, pricing, or ingestion layers themselves — that is core-work, not rule work. If the rule must rank nodes against each other (cross-node), stop and use the plain Rule interface instead.
----
-
 # Write a tellury rule (NodeRule)
 
-This skill teaches you, from a cold start, to write one new tellury cost-waste rule
-against the `NodeRule` interface, wire it into the registry so it actually runs,
-prove with a mutation check that its test tests the condition, and ship it. The
+How to write one tellury cost-waste rule from a cold start: implement the `NodeRule`
+interface, wire it into the registry so it actually runs, prove with a mutation check that
+its test tests the condition, and ship it.
+
+This document is written to be followed by a person or by a coding agent — the steps are
+the same, and every command in it was run to produce the output shown. The
 worked example — `old_snapshot`, a rule that flags persistent-disk snapshots
 older than the retention window and prices their flat per-GiB-month storage cost —
 is **real code in this repo**: `pkg/rules/gcp/compute/old_snapshot/`. You can read
@@ -28,7 +26,7 @@ them before writing anything.
 - One shipped rule as a model: `pkg/rules/gcp/compute/unused_reserved_ip/rule.go` (smallest) and `pkg/rules/gcp/compute/detached_disk/rule.go` (richest).
 - One shipped test as a model: `pkg/rules/gcp/compute/unused_reserved_ip/rule_test.go`.
 
-Every command in this skill was run to produce the output shown. Do not trust a
+Every command below was run to produce the output shown. Do not trust a
 command's output until you have run it yourself.
 
 ## 1. The interface, method by method
@@ -100,7 +98,7 @@ node is skipped as `SkipBelowMinWaste`.
 - Read raw attributes from `n` directly; read guard-computed values from `nc`.
 - Give every branch a `Label` (e.g. `"delete_snapshot"`, `"rightsize"`,
   `"stop_delete"`) — it shows up in diagnostics.
-- An "idle/unattached resource with a flat cost" (the shape of this skill's
+- An "idle/unattached resource with a flat cost" (the shape of this guide's
   example) has exactly one branch: `size × flat monthly unit rate`, confidence
   documented, no partial component.
 

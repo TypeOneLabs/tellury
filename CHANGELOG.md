@@ -8,6 +8,14 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
+### Changed
+
+- The rule-writing guide moved from `.claude/skills/write-a-tellury-rule/` to
+  [docs/writing-a-rule.md](docs/writing-a-rule.md), where it is neither hidden nor tied to
+  one vendor's tooling — it is documentation, and it reads the same for a person or a
+  coding agent. Repository conventions now live in `AGENTS.md`, the cross-tool convention,
+  with a one-line `CLAUDE.md` pointing at it so the two cannot drift.
+
 ## [0.1.4] — 2026-08-10
 
 A scan now says what it looked at and shows its progress while it runs, and the HTML report

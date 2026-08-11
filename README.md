@@ -116,7 +116,8 @@ means nothing wasteful, never nothing scanned.
 | [CLI reference](docs/cli.md) | Every command, flag, environment variable and exit code |
 | [GCP setup](docs/gcp-setup.md) | Authentication, IAM roles, APIs, currency detection |
 | [Offline scanning](docs/offline.md) | Fixtures, snapshots, `graph export`, scan artifacts |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Writing a rule |
+| [Writing a rule](docs/writing-a-rule.md) | The `NodeRule` interface end to end, with a worked example |
+| [AGENTS.md](AGENTS.md) | Repository conventions, for people and coding agents |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 
 ## Build
@@ -156,10 +157,13 @@ Neither affects a scan's results.
 
 ## Contributing
 
-Rules are the point — see [CONTRIBUTING.md](CONTRIBUTING.md). The contributor skill at
-`.claude/skills/write-a-tellury-rule/` walks the `NodeRule` interface, the skip vocabulary,
-the registration step and its silent-failure trap, and the required mutation check, with
-`old_snapshot` as a worked example in the repository. No CLA.
+Rules are the point. [docs/writing-a-rule.md](docs/writing-a-rule.md) walks the `NodeRule`
+interface, the skip vocabulary, registration and its silent-failure trap, and the required
+mutation check, with `old_snapshot` as a worked example that is real code in this
+repository. It reads the same whether you are a person or a coding agent.
+
+[AGENTS.md](AGENTS.md) carries the repository conventions in one place; see
+[CONTRIBUTING.md](CONTRIBUTING.md) for the process. No CLA.
 
 ## License
 

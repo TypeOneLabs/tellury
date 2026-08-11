@@ -12,17 +12,17 @@ import (
 
 // oldSnapshotFixture is the fixture the `old_snapshot` rule ships with, one
 // level down from the rule package it lives beside. The scan below runs the
-// exact command shape the contributor skill documents against it, through the
+// exact command shape docs/writing-a-rule.md documents against it, through the
 // real runScan pipeline (rule selection -> offline provider -> ingest ->
-// rules -> table render + --explain-skips), so the skill's worked example is
+// rules -> table render + --explain-skips), so the guide's worked example is
 // not help text: it is this test.
 const oldSnapshotFixture = "../../pkg/rules/gcp/compute/old_snapshot/testdata/old-snapshot.json"
 
 // TestSkillWorkedExample_OldSnapshotScan pins the worked example the
-// contributor skill ships: at a fixed evaluation instant (--at) the old
+// rule-writing guide ships: at a fixed evaluation instant (--at) the old
 // snapshot fires at its exact flat cost, the young snapshot is skipped as
 // too_young, and the size-less snapshot is skipped as missing_attribute. It
-// also logs the real stdout/stderr the skill's commands produce.
+// also logs the real stdout/stderr the guide's commands produce.
 func TestSkillWorkedExample_OldSnapshotScan(t *testing.T) {
 	cfg := config.Scan{
 		Provider:       "gcp",
@@ -39,7 +39,7 @@ func TestSkillWorkedExample_OldSnapshotScan(t *testing.T) {
 	}
 	g := &globalFlags{LogLevel: "warn"}
 	var out, errOut bytes.Buffer
-	// The exact evaluation instant the skill documents:
+	// The exact evaluation instant the guide documents:
 	// 2024-01-20T00:00:00Z, making every age deterministic.
 	scanAt := readmeNow // 2024-01-20T00:00:00Z
 	if err := runScan(context.Background(), &out, &errOut, g, cfg, scanAt); err != nil {
