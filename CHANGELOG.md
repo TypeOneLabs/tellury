@@ -8,13 +8,72 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-11
+
+AWS is a second provider, and the resource graph gained a region tier that both providers
+use. A scan still runs one provider at a time.
+
+### Added
+
+- **AWS**, scoped with `--aws-account` (and `TELLURY_AWS_ACCOUNT`). Credentials come from the
+  standard AWS chain — environment, shared credentials file, `AWS_PROFILE`, instance role —
+  with no credentials flag and no key file of tellury's own. Three read-only permissions are
+  the entire surface it calls: `ec2:DescribeRegions`, `ec2:DescribeVolumes`,
+  `ec2:DescribeAddresses`. See [docs/aws-setup.md](docs/aws-setup.md).
+- Two AWS rules, neither needing CloudWatch: `unattached_ebs_volume` (a volume in state
+  `available`, priced by capacity plus any IOPS and throughput above the type's included
+  allowance) and `unassociated_eip` (an Elastic IP that bills hourly for doing nothing).
+- `--aws-regions` narrows the region sweep. Without it a scan covers every region the
+  account has enabled, discovered through `DescribeRegions` rather than a fixed list, so
+  regions the account never opted into are never queried. An availability-zone spelling like
+  `eu-west-1a` is accepted and flattened to its region. Every scan reports the regions it
+  actually covered.
+- Scope flags are mutually exclusive across providers: passing a `--gcp-*` and an `--aws-*`
+  flag together fails before any work with a usage error naming both. The provider is
+  inferred from the scope flag, so `--provider` is not needed.
+- A **region tier** in the resource graph, between a resource and its project or account:
+  `resource → region → project → folder → organization`. Region nodes are per-project or
+  per-account, so waste rolls up by place as well as by owner, and the HTML report gained a
+  waste-by-region breakdown — suppressed when everything is in one region, where a single
+  full-width bar carries no information.
+
 ### Changed
 
-- The rule-writing guide moved from `.claude/skills/write-a-tellury-rule/` to
-  [docs/writing-a-rule.md](docs/writing-a-rule.md), where it is neither hidden nor tied to
-  one vendor's tooling — it is documentation, and it reads the same for a person or a
-  coding agent. Repository conventions now live in `AGENTS.md`, the cross-tool convention,
-  with a one-line `CLAUDE.md` pointing at it so the two cannot drift.
+- Location strings are canonicalised once, at ingestion, through a single function shared
+  with pricing. Cloud Storage reports `EU` and `EUROPE-WEST4` where Compute reports `eu` and
+  `us-central1`; treating those as different places split a region's rollup across two nodes
+  that both looked plausible.
+- Graph snapshots are version 3. A version 2 snapshot replays with its region tier rebuilt
+  from each node's location, so existing `--cache-file` snapshots keep working.
+- The README was rewritten and reference material moved into [docs/](docs/): a CLI
+  reference, per-provider setup, and offline scanning. The rule-writing guide moved out of a
+  vendor-specific directory to [docs/writing-a-rule.md](docs/writing-a-rule.md), with
+  repository conventions in `AGENTS.md`.
+- A findings table names its scope on the summary line. The `PROJECT` column only appears
+  when findings span several projects, so a single-project scan previously named the project
+  nowhere at all, and a table pasted into a ticket could not be attributed.
+
+### Fixed
+
+- **EBS volumes were priced about $20/month too high, each.** gp3 includes 3000 IOPS and
+  125 MiB/s at no charge and every gp3 volume reports those figures, so billing the raw
+  provisioning charged the free allowance: a real 1 GiB volume was reported at $20.08 when
+  it costs $0.08. io1 and io2 have no allowance and are unaffected. The AWS price list does
+  not encode the allowance — its dimension reads "per provisioned IOPS-month" — so this
+  could not be derived from the API, and two tests asserted the overcharge rather than
+  catching it.
+- The region canonicaliser mangled AWS regions. It treated any single-character trailing
+  segment as a zone suffix, which is right for the `a` in `us-central1-a` and wrong for the
+  `1` in `us-east-1`, turning the most-used AWS region into one that has never existed. The
+  three shapes are now distinguished by what the trailing segment is rather than how long it
+  is.
+- An AWS scan with no credentials waited for the EC2 instance metadata service to time out
+  and then reported a failure about IMDS. Credentials are resolved up front and the error
+  names what is missing. This also stopped `go test ./...` reaching the network.
+- A rule with no resources to evaluate is no longer reported as blocked for lack of metric
+  data. An organization with no compute instances was told `underutilized_instance` could
+  not be evaluated, which sent operators looking for a Monitoring permission they did not
+  need.
 
 ## [0.1.4] — 2026-08-10
 
@@ -254,7 +313,8 @@ First release. GCP only.
   documentation rather than captured from the API normalizes to a node with empty
   attributes rather than failing loudly.
 
-[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/TypeOneLabs/tellury/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/TypeOneLabs/tellury/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/TypeOneLabs/tellury/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/TypeOneLabs/tellury/compare/v0.1.1...v0.1.2

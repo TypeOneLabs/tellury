@@ -6,8 +6,8 @@ A single-binary CLI that reads your cloud inventory, builds an in-memory resourc
 and evaluates deterministic rules against it. Each finding carries the evidence behind it,
 the arithmetic that produced its figure, and which price source answered.
 
-> **Early development.** GCP only. Five rules. The CLI surface and the rule interface may
-> change between minor releases.
+> **Early development.** GCP and AWS. Seven rules. The CLI surface and the rule interface
+> may change between minor releases.
 
 ## Quick start
 
@@ -57,32 +57,54 @@ Summary: organizations/123456789012 — 3 projects analyzed, 4 resources scanned
 `--gcp-folder` scopes to a folder. Each scan also writes a graph snapshot, findings JSON and
 an HTML report into `tellury-out/`.
 
+AWS works the same way, against one account:
+
+```bash
+export AWS_PROFILE=my-profile
+./tellury scan --aws-account 123456789012
+```
+
+```
+RESOURCE             RULE            MONTHLY WASTE
+address/203.0.113.42 unassociated_eip        $3.65
+--------------------------------------------------
+TOTAL                1 findings              $3.65
+Summary: accounts/123456789012 — 1 account analyzed, 17 regions analyzed, 2 resources scanned, 2 rules evaluated, 1 finding, 1 resource skipped, 15.285s
+```
+
+Three read-only permissions are enough — see [AWS setup](docs/aws-setup.md). A scan runs one
+provider at a time: passing both `--gcp-*` and `--aws-*` flags fails before doing any work.
+
 No credentials to hand? `tellury` runs the whole pipeline offline from a captured inventory
 or a saved snapshot — see [Offline scanning](docs/offline.md).
 
 ## What it does
 
 - Reads GCP inventory from Cloud Asset Inventory, metrics from Cloud Monitoring, prices
-  from the Cloud Billing Catalog.
+  from the Cloud Billing Catalog; and AWS inventory from the EC2 API.
 - Builds a resource graph: instances, disks, snapshots, addresses, networks and buckets,
-  plus the organization/folder/project hierarchy.
+  plus the hierarchy above them — organization, folder and project on GCP, account on AWS,
+  with a region tier beneath, so waste rolls up by place as well as by owner.
 - Evaluates rules against it and prices each finding, in USD or your billing account's own
   currency.
 - Writes a directory of artifacts per scan: a replayable graph snapshot, findings JSON, and
   a self-contained HTML report.
 - Runs fully offline from a fixture or a saved snapshot.
 
-Not there yet: AWS and Azure. The provider seam exists; only GCP is implemented.
+Not there yet: Azure. On AWS, only single-account scans work — organization and
+organizational-unit scopes, cross-account access and live pricing are still to come.
 
 ## Rules
 
-| ID | Service | Severity | Detects |
+| ID | Provider / service | Severity | Detects |
 |---|---|---|---|
-| `detached_disk` | compute | medium | Persistent disks attached to nothing |
-| `underutilized_instance` | compute | high | Instances overprovisioned for their CPU load |
-| `old_snapshot` | compute | low | Snapshots past the retention window |
-| `unused_reserved_ip` | compute | medium | Reserved external IPs attached to nothing |
-| `no_lifecycle_policy` | gcs | low | Buckets with no lifecycle rules |
+| `detached_disk` | gcp / compute | medium | Persistent disks attached to nothing |
+| `underutilized_instance` | gcp / compute | high | Instances overprovisioned for their CPU load |
+| `old_snapshot` | gcp / compute | low | Snapshots past the retention window |
+| `unused_reserved_ip` | gcp / compute | medium | Reserved external IPs attached to nothing |
+| `no_lifecycle_policy` | gcp / gcs | low | Buckets with no lifecycle rules |
+| `unattached_ebs_volume` | aws / ec2 | medium | EBS volumes attached to nothing |
+| `unassociated_eip` | aws / ec2 | medium | Elastic IPs associated with nothing |
 
 `underutilized_instance` and `no_lifecycle_policy` read Cloud Monitoring. Without metric
 access they skip and say so — they never guess a value from missing data.
@@ -115,6 +137,7 @@ means nothing wasteful, never nothing scanned.
 |---|---|
 | [CLI reference](docs/cli.md) | Every command, flag, environment variable and exit code |
 | [GCP setup](docs/gcp-setup.md) | Authentication, IAM roles, APIs, currency detection |
+| [AWS setup](docs/aws-setup.md) | Credentials, the three permissions, regions, pricing caveats |
 | [Offline scanning](docs/offline.md) | Fixtures, snapshots, `graph export`, scan artifacts |
 | [Writing a rule](docs/writing-a-rule.md) | The `NodeRule` interface end to end, with a worked example |
 | [AGENTS.md](AGENTS.md) | Repository conventions, for people and coding agents |
