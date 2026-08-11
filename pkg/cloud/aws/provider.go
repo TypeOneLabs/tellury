@@ -44,6 +44,7 @@ type ec2API interface {
 // tests can provide a fake.
 type stsAPI interface {
 	AssumeRole(ctx context.Context, params *sts.AssumeRoleInput, optFns ...func(*sts.Options)) (*sts.AssumeRoleOutput, error)
+	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
 }
 
 // AccountStatus records the outcome of attempting to scan one member account.
@@ -450,11 +451,55 @@ func (p *Provider) ingestOrganization(ctx context.Context, scope cloud.AWSScope,
 	scanned := 0
 	p.accountStatuses = make([]AccountStatus, 0, len(tree.AccountIDs))
 
+	// An organization almost always contains the account the credentials
+	// themselves belong to — usually the management account. You cannot assume
+	// a role into yourself unless someone has explicitly created one, and
+	// OrganizationAccountAccessRole is created in accounts that Organizations
+	// creates, not in the management account. Without this, the one account an
+	// operator is guaranteed to have access to is the one account the scan
+	// always reports as unreachable.
+	callerAccount := p.callerAccountID(ctx)
+
 	for _, accountID := range tree.AccountIDs {
 		acctNode, ok := tree.Nodes["accounts/"+accountID]
 		acctName := accountID
 		if ok && acctNode.Name != "" {
 			acctName = acctNode.Name
+		}
+
+		// The caller's own account needs no assumption: the credentials in hand
+		// already address it.
+		if accountID != "" && accountID == callerAccount {
+			ownGraph, err := p.ingestAccountWithClient(ctx, accountID, p.ec2Client, p.discoverer, assetTypeHints)
+			if err != nil {
+				p.log.Warn("aws: scanning the caller's own account failed",
+					"account", accountID, "err", err)
+				p.accountStatuses = append(p.accountStatuses, AccountStatus{
+					ID: accountID, Name: acctName, Status: "unreachable",
+					Reason: fmt.Sprintf("scan failed: %v", err),
+				})
+				continue
+			}
+			ownGraph.Nodes(func(n *graph.Node) bool {
+				if !n.Container() {
+					_ = addNode(n)
+				}
+				return true
+			})
+			ownGraph.Nodes(func(n *graph.Node) bool {
+				for _, e := range ownGraph.Out(n.ID) {
+					if e.Kind != graph.EdgeContains {
+						emit(e)
+					}
+				}
+				return true
+			})
+			scanned++
+			p.accountStatuses = append(p.accountStatuses, AccountStatus{
+				ID: accountID, Name: acctName, Status: "scanned",
+				Reason: "caller's own account; no role assumed",
+			})
+			continue
 		}
 
 		// Assume the cross-account role.
@@ -576,6 +621,22 @@ func (p *Provider) ingestOrganization(ctx context.Context, scope cloud.AWSScope,
 		"dangling_edges", g.DanglingEdges())
 
 	return g, nil
+}
+
+// callerAccountID returns the account the current credentials belong to, or ""
+// if it cannot be determined. sts:GetCallerIdentity needs no IAM permission —
+// it is always allowed — so a failure here means the credentials themselves
+// are unusable, which the scan will discover anyway.
+func (p *Provider) callerAccountID(ctx context.Context) string {
+	if p.stsClient == nil {
+		return ""
+	}
+	out, err := p.stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil || out == nil || out.Account == nil {
+		p.log.Debug("aws: could not determine the caller's own account; every account will be assumed into", "err", err)
+		return ""
+	}
+	return *out.Account
 }
 
 // assumeRole calls sts:AssumeRole to obtain temporary credentials for the

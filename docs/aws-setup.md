@@ -51,6 +51,34 @@ If your organization uses a different role name, pass it with:
 
 The default is `OrganizationAccountAccessRole`.
 
+## Scanning an organization or OU
+
+```bash
+tellury scan --aws-organization o-xxxxxxxxxx
+tellury scan --aws-organizational-unit ou-xxxx-xxxxxxxx
+```
+
+The organization must be the one your credentials belong to. `DescribeOrganization` answers
+for the caller and takes no ID, so a mismatched `--aws-organization` is refused rather than
+silently traversing a different organization under the requested name.
+
+Accounts are reached by assuming a role, `OrganizationAccountAccessRole` by default. Two
+things follow:
+
+- **Your own account needs no role.** The account your credentials belong to — usually the
+  management account — is scanned directly. You cannot assume into yourself unless someone
+  has explicitly created a role, and Organizations creates that role in accounts it creates,
+  not in the management account.
+- **Every other account needs that role to exist there**, and your identity must hold
+  `sts:AssumeRole` on it. Accounts that refuse are reported by name and reason in both the
+  summary and the JSON, rather than dropped — a total that quietly omits part of an
+  organization is worse than an error.
+
+```
+Summary: organizations/o-xxxxxxxxxx — 1 account analyzed, ...
+Account outcomes: 1 scanned
+```
+
 ## Resource Explorer and region narrowing
 
 When Resource Explorer is available in an account (an aggregator index exists

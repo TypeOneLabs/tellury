@@ -2,11 +2,13 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	orgtypes "github.com/aws/aws-sdk-go-v2/service/organizations/types"
 
 	"github.com/TypeOneLabs/tellury/pkg/cloud"
@@ -66,5 +68,41 @@ func TestBuildOrgTree_RejectsMismatchedOrganization(t *testing.T) {
 	}
 	if _, err := buildOrgTree(context.Background(), client, cloud.AWSScope{OrganizationalUnit: "ou-abc"}); err != nil {
 		t.Errorf("an OU scan names no organization and must be accepted: %v", err)
+	}
+}
+
+
+// fakeSTS is an STS stand-in whose AssumeRole always fails, so a test can
+// prove the caller's own account is scanned WITHOUT one.
+type fakeSTS struct{ account string }
+
+func (f *fakeSTS) GetCallerIdentity(context.Context, *sts.GetCallerIdentityInput, ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {
+	return &sts.GetCallerIdentityOutput{Account: aws.String(f.account)}, nil
+}
+
+func (f *fakeSTS) AssumeRole(context.Context, *sts.AssumeRoleInput, ...func(*sts.Options)) (*sts.AssumeRoleOutput, error) {
+	return nil, errors.New("AccessDenied: not authorized to perform sts:AssumeRole")
+}
+
+// TestCallerAccountID_ReadsOwnAccount pins the lookup that makes an
+// organization scan usable at all.
+//
+// An organization almost always contains the account the credentials belong
+// to, usually the management account. You cannot assume a role into yourself
+// unless someone created one, and OrganizationAccountAccessRole exists in
+// accounts Organizations CREATED, not in the management account. Before this,
+// the one account an operator is guaranteed to have access to was the one
+// account every organization scan reported as unreachable.
+func TestCallerAccountID_ReadsOwnAccount(t *testing.T) {
+	p := &Provider{log: newTestLogger(), stsClient: &fakeSTS{account: "111122223333"}}
+	if got := p.callerAccountID(context.Background()); got != "111122223333" {
+		t.Errorf("callerAccountID = %q, want %q", got, "111122223333")
+	}
+
+	// No STS client at all must not panic; it degrades to assuming into
+	// every account, which is the pre-existing behaviour.
+	empty := &Provider{log: newTestLogger()}
+	if got := empty.callerAccountID(context.Background()); got != "" {
+		t.Errorf("callerAccountID without an STS client = %q, want empty", got)
 	}
 }
