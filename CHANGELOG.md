@@ -8,6 +8,15 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-08-12
+
+AWS grows from single-account scans to whole organizations, and pricing becomes live-only.
+
+**Upgrading:** `--price-file` is gone and there is no embedded price table. A scan without
+access to the pricing API now reports resources as skipped and unpriced where it previously
+printed figures from a hand-maintained table. That table is why four pricing defects went
+unnoticed — each time a live lookup failed, a plausible number appeared in its place.
+
 ### Added
 
 - **AWS organization and organizational-unit scopes.** `--aws-organization` and
@@ -377,7 +386,8 @@ First release. GCP only.
   documentation rather than captured from the API normalizes to a node with empty
   attributes rather than failing loudly.
 
-[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/TypeOneLabs/tellury/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/TypeOneLabs/tellury/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/TypeOneLabs/tellury/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/TypeOneLabs/tellury/compare/v0.1.2...v0.1.3
