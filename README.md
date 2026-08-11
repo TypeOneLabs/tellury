@@ -15,28 +15,50 @@ the arithmetic that produced its figure, and which price source answered.
 git clone https://github.com/TypeOneLabs/tellury.git && cd tellury
 go build -o tellury ./cmd/tellury
 
-# Offline, no credentials. --at pins the clock so this reproduces on any day.
-./tellury scan --gcp-project my-project \
-  --fixture internal/cli/testdata/readme-assets.json \
-  --rules detached_disk --at 2024-01-20T00:00:00Z
+gcloud auth application-default login
 ```
 
-```
-RESOURCE            RULE         MONTHLY WASTE
-disk/pd-standard-01 detached_disk        $8.00
-----------------------------------------------
-TOTAL               1 findings           $8.00
-Summary: projects/my-project — 1 project analyzed, 1 resource scanned, 1 rule evaluated, 1 finding, 0 resources skipped, 2ms
-```
+Read-only access is enough. See [GCP setup](docs/gcp-setup.md) for the four roles and what
+each one buys you.
 
-Against a real project:
+Scan a project:
 
 ```bash
-gcloud auth application-default login
 ./tellury scan --gcp-project my-project
 ```
 
-Read-only access is enough — see [GCP setup](docs/gcp-setup.md).
+```
+RESOURCE               RULE              MONTHLY WASTE
+disk/pd-standard-01    detached_disk             $8.00
+address/reserved-ip-01 unused_reserved_ip        $7.30
+------------------------------------------------------
+TOTAL                  2 findings               $15.30
+Summary: projects/my-project — 1 project analyzed, 2 resources scanned, 5 rules evaluated, 2 findings, 0 resources skipped, 2ms
+```
+
+Or a whole organization, which adds a `PROJECT` column and rolls the total up across every
+project beneath it:
+
+```bash
+./tellury scan --gcp-organization 123456789012
+```
+
+```
+RESOURCE               PROJECT       RULE              MONTHLY WASTE
+disk/old-cache         ml-training   detached_disk            $20.00
+disk/pd-standard-01    data-platform detached_disk             $8.00
+disk/scratch-disk      web-frontend  detached_disk             $8.00
+address/reserved-ip-01 data-platform unused_reserved_ip        $7.30
+--------------------------------------------------------------------
+TOTAL                  4 findings                             $43.30
+Summary: organizations/123456789012 — 3 projects analyzed, 4 resources scanned, 5 rules evaluated, 4 findings, 0 resources skipped, 2ms
+```
+
+`--gcp-folder` scopes to a folder. Each scan also writes a graph snapshot, findings JSON and
+an HTML report into `tellury-out/`.
+
+No credentials to hand? `tellury` runs the whole pipeline offline from a captured inventory
+or a saved snapshot — see [Offline scanning](docs/offline.md).
 
 ## What it does
 
