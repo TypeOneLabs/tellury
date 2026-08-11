@@ -56,7 +56,7 @@ func Execute() (int, error) {
 
 	root := &cobra.Command{
 		Use:           "tellury",
-		Short:         "Find and price cloud waste. Zero bloat.",
+		Short:         "Find and price cloud waste",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

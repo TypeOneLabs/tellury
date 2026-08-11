@@ -1,0 +1,155 @@
+# CLI reference
+
+Every command, flag and exit code. For a short introduction see the
+[README](../README.md).
+
+## Commands
+
+| Command | Purpose |
+|---|---|
+| `tellury scan` | Scan a scope for waste |
+| `tellury rules list` | List registered rules |
+| `tellury rules explain <id>` | Print a rule's full declaration |
+| `tellury graph export` | Write a resource-graph snapshot |
+| `tellury version` | Print version, commit and build time |
+
+## Global flags
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--log-level` | `warn` | `error`, `warn`, `info`, `debug`. Diagnostics on stderr. |
+| `--no-color` | off | Disable ANSI colour. |
+| `--timeout` | `5m` | Overall deadline for the run, including every API call. |
+
+## `tellury scan`
+
+### Scope
+
+Exactly one scope is required. Flags take precedence over environment variables.
+
+| Flag | Environment | Scope |
+|---|---|---|
+| `--gcp-project` | `TELLURY_GCP_PROJECT` | One project |
+| `--gcp-folder` | `TELLURY_GCP_FOLDER` | A folder and everything under it |
+| `--gcp-organization` | `TELLURY_GCP_ORGANIZATION` | An organization and everything under it |
+
+The scope is passed to Cloud Asset Inventory's `SearchAllResources` as its parent. Scanning
+a folder or organization builds the whole hierarchy from that one result — no separate
+Resource Manager calls.
+
+`--provider` selects the cloud provider and defaults to `gcp`, which is the only one
+implemented. It exists because the scope flags are provider-specific.
+
+### Selecting rules
+
+| Flag | Meaning |
+|---|---|
+| `--rules` | Run only these rule IDs (comma-separated). Default: all. |
+| `--skip-rules` | Exclude these rule IDs. |
+
+Rule selection also narrows what is fetched: only the asset types and metric keys the
+selected rules declare are requested, so `--rules detached_disk` does not pay for
+Cloud Monitoring calls.
+
+### Filtering output
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--min-waste` | none | Hide findings below this monthly amount. |
+| `--min-confidence` | none | Hide findings below this confidence (0–1). |
+| `--sort` | `waste` | `waste`, `resource` or `rule`. Applies to terminal, JSON and CSV; the HTML report is always waste-descending. |
+
+These filter what is **reported**, not what is evaluated. A rule's own noise floor
+(`MinWasteUSD`) is applied earlier and independently.
+
+### Time and metrics
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--window` | `14` | Metric lookback in days, 7–30. |
+| `--at` | now | Evaluation instant (RFC3339). Pins age-based predicates so a scan is reproducible. |
+
+### Pricing
+
+| Flag | Environment | Meaning |
+|---|---|---|
+| `--currency` | `TELLURY_CURRENCY` | ISO 4217 code to price in, e.g. `EUR`. Overrides auto-detection. |
+| `--price-file` | — | JSON price overrides. |
+
+Price precedence, highest first: `--price-file`, then the live Cloud Billing Catalog
+(cached for the scan), then an embedded fallback table. Every figure records which of the
+three answered it. See [GCP setup](gcp-setup.md#currency) for how currency is detected.
+
+### Output
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--format` | `table` | `table`, `json` or `csv`, on stdout. |
+| `--out-dir` | `tellury-out` | Directory for scan artifacts. |
+| `--explain-skips` | off | Print the per-rule skip tally to stderr. |
+| `--progress` | `auto` | `auto`, `on`, `off`. See below. |
+| `--fail-on-findings` | `true` | Exit `3` when findings exist. |
+
+`table` shows the ten largest findings and links to the HTML report for the rest. `json`
+and `csv` always contain every finding — they are consumed by other tools.
+
+### Offline input
+
+| Flag | Meaning |
+|---|---|
+| `--fixture` | Read assets from Cloud Asset Inventory JSON instead of the API. |
+| `--cache-file` | Read the graph from this file if it exists, otherwise write it. |
+
+The two are not equivalent. See [Offline mode](offline.md).
+
+## `tellury graph export`
+
+Writes a resource-graph snapshot that `scan --cache-file` replays.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--out` | stdout | Output file. |
+| `--no-enrich-metrics` | off | Topology only, no Cloud Monitoring series. Metric-dependent rules will skip on replay. |
+
+It also takes the scope, `--rules`, `--skip-rules`, `--window` and `--fixture` flags, which
+have the same meaning as on `scan`.
+
+## Progress
+
+`--progress` (or `TELLURY_PROGRESS`) reports each scan phase — asset discovery, metric
+enrichment, pricing catalogue, rule evaluation — on **stderr**:
+
+```
+tellury: asset discovery: done (689ms, 17 resources)
+tellury: metric enrichment: done 6/6 fetches (1.263s, 3 projects)
+tellury: pricing catalogue: 1/2 services (7.977s)
+```
+
+- `auto` (default) reports only when stderr is an interactive terminal.
+- `on` always reports; off a terminal it degrades to plain periodic lines and never emits
+  ANSI escapes or carriage returns, so redirected logs stay readable.
+- `off` silences it.
+
+Progress never touches stdout, so `--format json` still pipes into a parser with progress
+enabled. It is a status channel independent of `--log-level`.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Ran clean, no findings. |
+| `2` | Usage error — a bad flag or an invalid value. |
+| `3` | Ran clean, findings present. Disable with `--fail-on-findings=false`. |
+| other | Error. |
+
+## Environment variables
+
+| Variable | Equivalent flag |
+|---|---|
+| `TELLURY_GCP_PROJECT` | `--gcp-project` |
+| `TELLURY_GCP_FOLDER` | `--gcp-folder` |
+| `TELLURY_GCP_ORGANIZATION` | `--gcp-organization` |
+| `TELLURY_CURRENCY` | `--currency` |
+| `TELLURY_PROGRESS` | `--progress` |
+
+A flag always overrides its environment variable.
