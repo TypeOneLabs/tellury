@@ -96,6 +96,19 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 }
 
 // runScan is the whole pipeline, in order, with no hidden magic.
+// scopeSpansManyOwners reports whether the scan's scope can contain more than
+// one project or account, and therefore whether a finding's owner is knowable
+// from the scope alone.
+func scopeSpansManyOwners(sc cloud.Scope) bool {
+	if sc.GCP != nil && (sc.GCP.Organization != "" || sc.GCP.Folder != "") {
+		return true
+	}
+	if sc.AWS != nil && (sc.AWS.Organization != "" || sc.AWS.OrganizationalUnit != "") {
+		return true
+	}
+	return false
+}
+
 func runScan(
 	ctx context.Context,
 	out io.Writer,
@@ -286,7 +299,17 @@ func runScan(
 		RulesEvaluated:    len(selected),
 		ProjectsAnalyzed:  gr.ProjectContainerCount(),
 		Duration:          time.Since(start),
-		MultiProject:      gr.ProjectCount() > 1,
+		// Show the owner column whenever the SCOPE can hold more than one owner,
+		// not only when the resources found happen to span several.
+		//
+		// A --gcp-project or --aws-account scan needs no column: every finding
+		// obviously belongs to the scope named on the command line. An
+		// organization, folder or OU scan is the opposite — a finding could be
+		// in any account beneath it, and without the column the operator cannot
+		// tell which. Keying this off the resources meant an organization scan
+		// whose findings all landed in one account printed no column at all,
+		// which is precisely when the reader has no other way to know.
+		MultiProject:      gr.ProjectCount() > 1 || scopeSpansManyOwners(scope),
 		Currency:          effectiveCurrency,
 		CurrencySource:    currencyState.source,
 		CurrencyRequested: requestedCurrency(currencyState),

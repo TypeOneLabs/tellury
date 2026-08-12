@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"github.com/TypeOneLabs/tellury/pkg/cloud"
 	"bytes"
 	"context"
 	"path/filepath"
@@ -130,5 +131,33 @@ func TestScanSummary_JSONCarriesSummaryFields(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("scan JSON must carry %s:\n%s", want, got)
 		}
+	}
+}
+
+// TestScopeSpansManyOwners pins when the owner column appears.
+//
+// It used to key off the resources found: an organization scan whose findings
+// all landed in one account printed no ACCOUNT column — precisely the case
+// where the reader has no other way to know which account a finding is in.
+// A single-account or single-project scan needs no column, because the owner
+// is named on the command line.
+func TestScopeSpansManyOwners(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		scope cloud.Scope
+		want  bool
+	}{
+		{"aws organization", cloud.Scope{Provider: "aws", AWS: &cloud.AWSScope{Organization: "o-1"}}, true},
+		{"aws organizational unit", cloud.Scope{Provider: "aws", AWS: &cloud.AWSScope{OrganizationalUnit: "ou-1"}}, true},
+		{"aws single account", cloud.Scope{Provider: "aws", AWS: &cloud.AWSScope{Account: "111122223333"}}, false},
+		{"gcp organization", cloud.Scope{Provider: "gcp", GCP: &cloud.GCPScope{Organization: "1234"}}, true},
+		{"gcp folder", cloud.Scope{Provider: "gcp", GCP: &cloud.GCPScope{Folder: "5678"}}, true},
+		{"gcp single project", cloud.Scope{Provider: "gcp", GCP: &cloud.GCPScope{Project: "p"}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := scopeSpansManyOwners(tc.scope); got != tc.want {
+				t.Errorf("scopeSpansManyOwners = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
