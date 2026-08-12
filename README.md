@@ -6,7 +6,7 @@ A single-binary CLI that reads your cloud inventory, builds an in-memory resourc
 and evaluates deterministic rules against it. Each finding carries the evidence behind it,
 the arithmetic that produced its figure, and which price source answered.
 
-> **Early development.** GCP and AWS. Seven rules. The CLI surface and the rule interface
+> **Early development.** GCP and AWS. Eight rules. The CLI surface and the rule interface
 > may change between minor releases.
 
 ## Quick start
@@ -14,18 +14,36 @@ the arithmetic that produced its figure, and which price source answered.
 ```bash
 git clone https://github.com/TypeOneLabs/tellury.git && cd tellury
 go build -o tellury ./cmd/tellury
-
-gcloud auth application-default login
 ```
 
-Read-only access is enough. See [GCP setup](docs/gcp-setup.md) for the four roles and what
-each one buys you. **Pricing requires API access.** Without a live pricing API connection
-(or the `TELLURY_PRICE_FIXTURE` environment variable for tests), resources are found and
-reported as skipped (unpriced) rather than carrying a dollar total.
+Read-only credentials are enough on either cloud. **Pricing requires live API access** — a
+scan that cannot reach the pricing API finds your resources and reports them as skipped
+(unpriced) rather than inventing a dollar figure.
 
-Scan a project:
+### AWS
 
 ```bash
+export AWS_PROFILE=my-profile
+./tellury scan --aws-account 123456789012 --aws-regions eu-west-1
+```
+
+```
+RESOURCE              RULE               MONTHLY WASTE
+volume/vol-0a1b2c3d   unattached_ebs_volume     $17.60
+address/203.0.113.42  unassociated_eip           $3.65
+------------------------------------------------------
+TOTAL                 2 findings                $21.25
+Summary: accounts/123456789012 — 1 account analyzed, 1 region analyzed (explicit), 5 resources scanned, 3 rules evaluated, 2 findings, 3 resources skipped, 8.1s
+```
+
+Without `--aws-regions` every enabled region is swept, which is thorough and slow; narrowing
+it is the single biggest lever on scan time. See [AWS setup](docs/aws-setup.md) for the six
+read-only permissions.
+
+### GCP
+
+```bash
+gcloud auth application-default login
 ./tellury scan --gcp-project my-project
 ```
 
@@ -38,11 +56,16 @@ TOTAL                  2 findings               $15.30
 Summary: projects/my-project — 1 project analyzed, 2 resources scanned, 5 rules evaluated, 2 findings, 0 resources skipped, 2ms
 ```
 
-Or a whole organization, which adds a `PROJECT` column and rolls the total up across every
-project beneath it:
+See [GCP setup](docs/gcp-setup.md) for the four roles and what each one buys you.
+
+### Scanning a whole organization
+
+Both clouds take an organization scope, which adds an owner column and rolls the total up
+across everything beneath it:
 
 ```bash
 ./tellury scan --gcp-organization 123456789012
+./tellury scan --aws-organization o-abc123 --aws-regions eu-west-1
 ```
 
 ```
@@ -56,36 +79,19 @@ TOTAL                  4 findings                             $43.30
 Summary: organizations/123456789012 — 3 projects analyzed, 4 resources scanned, 5 rules evaluated, 4 findings, 0 resources skipped, 2ms
 ```
 
-`--gcp-folder` scopes to a folder. Each scan also writes a graph snapshot, findings JSON and
-an HTML report into `tellury-out/`.
+`--gcp-folder` and `--aws-organizational-unit` scope to a subtree. On AWS, member accounts
+are reached by assuming a role in each; an account that cannot be reached is reported in the
+account outcomes rather than failing the scan.
 
-AWS works the same way, against one account:
-
-```bash
-export AWS_PROFILE=my-profile
-./tellury scan --aws-account 123456789012
-```
-
-```
-RESOURCE             RULE            MONTHLY WASTE
-address/203.0.113.42 unassociated_eip        $3.65
---------------------------------------------------
-TOTAL                1 findings              $3.65
-Summary: accounts/123456789012 — 1 account analyzed, 17 regions analyzed, 2 resources scanned, 2 rules evaluated, 1 finding, 1 resource skipped, 15.285s
-```
-
-Three read-only permissions are enough — see [AWS setup](docs/aws-setup.md). A scan runs one
-provider at a time: passing both `--gcp-*` and `--aws-*` flags fails before doing any work.
-
-No credentials to hand? `tellury` runs the whole pipeline offline from a captured inventory
-or a saved snapshot — see [Offline scanning](docs/offline.md). An offline scan without
-pricing will find resources but report them as skipped (unpriced).
+A scan runs one provider at a time: passing both `--gcp-*` and `--aws-*` flags fails before
+doing any work. Each scan writes a graph snapshot, findings JSON and an HTML report into
+`tellury-out/`.
 
 ## What it does
 
-- Reads GCP inventory from Cloud Asset Inventory, metrics from Cloud Monitoring, prices
-  from the Cloud Billing Catalog; and AWS inventory from the EC2 API, prices from the
-  Price List API (pricing:GetProducts).
+- Reads GCP inventory from Cloud Asset Inventory, metrics from Cloud Monitoring, prices from
+  the Cloud Billing Catalog; and AWS inventory from the EC2 API, metrics from CloudWatch,
+  prices from the Price List API (pricing:GetProducts).
 - Builds a resource graph: instances, disks, snapshots, addresses, networks and buckets,
   plus the hierarchy above them — organization, folder and project on GCP, account on AWS,
   with a region tier beneath, so waste rolls up by place as well as by owner.
@@ -93,13 +99,13 @@ pricing will find resources but report them as skipped (unpriced).
   currency.
 - Writes a directory of artifacts per scan: a replayable graph snapshot, findings JSON, and
   a self-contained HTML report.
-- Runs fully offline from a fixture or a saved snapshot. Inventory replays without the
-  network; pricing requires the live API (or a test fixture via `TELLURY_PRICE_FIXTURE`).
+- Replays a captured inventory or a saved snapshot without the network, for reproducing a
+  scan — though pricing always needs the live API. See [Offline scanning](docs/offline.md).
 
 On AWS, organization and organizational-unit scopes work through Organizations traversal
 with cross-account role assumption, and Resource Explorer narrows the region sweep to where
 resources actually are. Prices come from the live Price List API — EBS capacity, IOPS and
-throughput, and the hourly address charge.
+throughput, the hourly address charge, and On-Demand instance rates.
 
 Not there yet: Azure.
 
@@ -114,9 +120,12 @@ Not there yet: Azure.
 | `no_lifecycle_policy` | gcp / gcs | low | Buckets with no lifecycle rules |
 | `unattached_ebs_volume` | aws / ec2 | medium | EBS volumes attached to nothing |
 | `unassociated_eip` | aws / ec2 | medium | Elastic IPs associated with nothing |
+| `underutilized_ec2` | aws / ec2 | high | EC2 instances overprovisioned for their CPU load |
 
-`underutilized_instance` and `no_lifecycle_policy` read Cloud Monitoring. Without metric
-access they skip and say so — they never guess a value from missing data.
+`underutilized_instance` and `no_lifecycle_policy` read Cloud Monitoring; `underutilized_ec2`
+reads CloudWatch. Without metric access they skip and say so — they never guess a value from
+missing data. Neither cloud publishes guest memory without an agent installed in the VM, so
+every rule here judges CPU only.
 
 `tellury rules list` shows the catalogue; `tellury rules explain <id>` prints one rule's full
 declaration.
@@ -147,7 +156,7 @@ never as free.
 |---|---|
 | [CLI reference](docs/cli.md) | Every command, flag, environment variable and exit code |
 | [GCP setup](docs/gcp-setup.md) | Authentication, IAM roles, APIs, currency detection |
-| [AWS setup](docs/aws-setup.md) | Credentials, the three permissions, regions, pricing caveats |
+| [AWS setup](docs/aws-setup.md) | Credentials, IAM permissions, regions, pricing caveats |
 | [Offline scanning](docs/offline.md) | Fixtures, snapshots, `graph export`, scan artifacts |
 | [Writing a rule](docs/writing-a-rule.md) | The `NodeRule` interface end to end, with a worked example |
 | [AGENTS.md](AGENTS.md) | Repository conventions, for people and coding agents |
@@ -172,23 +181,26 @@ cmd/tellury/       CLI entry point
 internal/cli/     command wiring, flags, output selection
 pkg/graph/        in-memory resource graph
 pkg/cloud/gcp/    Cloud Asset Inventory ingestion and normalization
-pkg/metrics/      metric registry and GCP backends
+pkg/cloud/aws/    EC2, Organizations and Resource Explorer ingestion
+pkg/metrics/      metric registry, with GCP and AWS backends
 pkg/pricing/      pricing interfaces, live API clients, test fixtures
 pkg/rules/        rule engine, NodeRule interface, skip vocabulary
-pkg/rules/gcp/    the shipped rules
+pkg/rules/gcp/    the shipped GCP rules
+pkg/rules/aws/    the shipped AWS rules
 pkg/output/       table, JSON, CSV and HTML renderers
 ```
 
 ## Known issues
 
-Neither affects a scan's results.
-
-- A raw CAI fixture can only evaluate topology rules. By design, and stated at the end of
-  every fixture run — see [Offline scanning](docs/offline.md).
 - When several metric fetches fail, the failures are joined and render as one dense line,
   though each stays individually inspectable via `errors.Is`.
-- An offline scan without a price source (no live API, no `TELLURY_PRICE_FIXTURE`) reports
-  resources as skipped (unpriced). This is by design: the tool refuses to guess at money.
+- `underutilized_ec2` recommends a smaller size only within the same instance family and only
+  when that family has a member with fewer vCPUs. Several AWS families (t3 below `xlarge`,
+  for instance) hold vCPU count constant and vary only memory, so instances there can only be
+  reported as stop/delete candidates. Sizing on memory would need a guest agent neither cloud
+  requires.
+- EC2 instances are not priced on the offline path, so `underutilized_ec2` produces no
+  findings from a fixture. See [Offline scanning](docs/offline.md).
 
 ## Contributing
 

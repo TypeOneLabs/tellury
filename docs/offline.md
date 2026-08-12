@@ -31,6 +31,15 @@ Summary: projects/my-project — 1 project analyzed, 1 resource scanned, 5 rules
 5 rule(s) could not be evaluated for lack of metric data: …
 ```
 
+**EC2 instances are never priced offline.** `TELLURY_PRICE_FIXTURE` carries flat
+per-SKU rates, which covers disks, snapshots and addresses. An instance price is
+resolved by a targeted lookup keyed on (region, instance type, operating system)
+and does not come from that table, so an offline scan reports every instance as
+skipped (unpriced) and `underutilized_ec2` produces no findings. This is a
+deliberate limit rather than an oversight: pricing needs the API, and building a
+second offline pricing path would mean maintaining two answers to the same
+question — which is what the embedded price tables did before they were removed.
+
 With a price fixture (test-only):
 
 ```bash

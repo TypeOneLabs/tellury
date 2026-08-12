@@ -13,12 +13,6 @@ import (
 	"sync"
 )
 
-// ResourceEC2Instance is the monitored-resource token for EC2 instances. The
-// ingestion join index in pkg/cloud/aws maps InstanceId to graph.Ref using
-// this token, and the metric specs register against it, so both sides agree
-// on the exact string without importing cloud code.
-const ResourceEC2Instance = "AWS::EC2::Instance"
-
 // Spec is the immutable declaration of how a metrics.Key is produced by
 // CloudWatch: namespace, metric name, dimension, statistic, and period. It
 // is deliberately different from the GCP Spec — CloudWatch has no aligner,

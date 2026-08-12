@@ -18,12 +18,6 @@ import (
 	"github.com/TypeOneLabs/tellury/pkg/metrics"
 )
 
-// RefLookup resolves an InstanceId dimension value back to the graph ref that
-// owns it. Built during ingestion in pkg/cloud/aws and handed to the
-// enrichment client here. When the client already has a pre-built instance
-// list, RefLookup is optional (used only as a fallback for result matching).
-type RefLookup func(resourceType, instanceID string) (graph.Ref, bool)
-
 // maxConcurrentFetches bounds the number of simultaneous GetMetricData calls
 // Fill issues. Concurrency here is across (metric key, account, region) jobs,
 // not per-instance: one GetMetricData call can carry up to 500 queries, so
@@ -63,7 +57,6 @@ type InstanceRef struct {
 // contract as the GCP client.
 type Client struct {
 	log       *slog.Logger
-	lookup    RefLookup
 	instances map[AccountRegion][]InstanceRef
 	clients   map[AccountRegion]CloudWatchAPI
 }
@@ -74,11 +67,11 @@ var _ metrics.Provider = (*Client)(nil)
 // and per-(account, region) instance lists. The caller
 // (pkg/cloud/aws.Provider.EnrichMetrics) owns credential acquisition and
 // client construction; this constructor receives the ready-to-use state.
-func NewClient(log *slog.Logger, lookup RefLookup, instances map[AccountRegion][]InstanceRef, clients map[AccountRegion]CloudWatchAPI) *Client {
+func NewClient(log *slog.Logger, instances map[AccountRegion][]InstanceRef, clients map[AccountRegion]CloudWatchAPI) *Client {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Client{log: log, lookup: lookup, instances: instances, clients: clients}
+	return &Client{log: log, instances: instances, clients: clients}
 }
 
 // Supports implements metrics.Provider: every registered AWS metric spec key

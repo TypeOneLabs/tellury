@@ -60,7 +60,7 @@ func requestKey(params *cloudwatch.GetMetricDataInput) string {
 // TestClient_SupportsCPUUtilizationP95 verifies that the AWS metrics client
 // supports the cpu_utilization_p95 key when the compute specs are registered.
 func TestClient_SupportsCPUUtilizationP95(t *testing.T) {
-	c := metricsaws.NewClient(newTestLogger(), nil, nil, nil)
+	c := metricsaws.NewClient(newTestLogger(), nil, nil)
 	if !c.Supports(metrics.KeyCPUUtilizationP95) {
 		t.Fatal("cpu_utilization_p95 must be supported — is pkg/metrics/aws/compute imported?")
 	}
@@ -72,7 +72,7 @@ func TestClient_SupportsCPUUtilizationP95(t *testing.T) {
 // told the metric is unavailable — never silently treat missing data as low
 // memory usage.
 func TestClient_SupportsMemUtilizationP95_False(t *testing.T) {
-	c := metricsaws.NewClient(newTestLogger(), nil, nil, nil)
+	c := metricsaws.NewClient(newTestLogger(), nil, nil)
 	if c.Supports(metrics.KeyMemUtilizationP95) {
 		t.Fatal("mem_utilization_p95 must NOT be supported on AWS — EC2 publishes no memory metric without the CloudWatch agent")
 	}
@@ -111,7 +111,7 @@ func TestFill_PercentageToFractionConversion(t *testing.T) {
 		ar: {{Ref: "accounts/123456789012/regions/us-east-1/instances/i-test", InstanceID: "i-test"}},
 	}
 
-	c := metricsaws.NewClient(newTestLogger(), nil, instances, clients)
+	c := metricsaws.NewClient(newTestLogger(), instances, clients)
 
 	var gotValue float64
 	set := func(ref graph.Ref, key string, v graph.MetricValue) {
@@ -171,7 +171,7 @@ func TestFill_MissingInstanceGetsNoMetric(t *testing.T) {
 		ar: {{Ref: "accounts/123456789012/regions/us-east-1/instances/i-missing", InstanceID: "i-missing"}},
 	}
 
-	c := metricsaws.NewClient(newTestLogger(), nil, instances, clients)
+	c := metricsaws.NewClient(newTestLogger(), instances, clients)
 
 	setCalled := false
 	set := func(ref graph.Ref, key string, v graph.MetricValue) {
@@ -225,7 +225,7 @@ func TestFill_MultipleInstancesBatched(t *testing.T) {
 		},
 	}
 
-	c := metricsaws.NewClient(newTestLogger(), nil, instances, clients)
+	c := metricsaws.NewClient(newTestLogger(), instances, clients)
 
 	got := make(map[string]graph.MetricValue)
 	set := func(ref graph.Ref, key string, v graph.MetricValue) {

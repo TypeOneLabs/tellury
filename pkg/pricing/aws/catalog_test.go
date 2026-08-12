@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -1002,3 +1003,87 @@ func TestDumpInstanceFixtureForInspection(t *testing.T) {
 
 // Ensure fmt is used (logCapture method).
 var _ = fmt.Sprintf
+
+// TestInstanceFilters_CompleteAndPinned pins the eight attributes that
+// identify an On-Demand instance price.
+//
+// The five constant filters are the ones that matter and the ones nothing
+// could see: a wrong constant does not error, it returns a real price for the
+// wrong product (a capacity reservation, a dedicated host, a BYOL rate). This
+// project has shipped four pricing defects and every one was a wrong SKU
+// match that the whole suite agreed with. The values below are asserted
+// against the RECORDED response in testdata, so they track what the live API
+// actually returns rather than what the code assumes.
+func TestInstanceFilters_CompleteAndPinned(t *testing.T) {
+	got := instanceFilters("eu-west-1", "t3.micro", "Linux")
+	want := map[string]string{
+		"instanceType":    "t3.micro",
+		"regionCode":      "eu-west-1",
+		"operatingSystem": "Linux",
+		"tenancy":         "Shared",
+		"capacitystatus":  "Used",
+		"preInstalledSw":  "NA",
+		"licenseModel":    "No License required",
+		"termType":        "OnDemand",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("filter count = %d, want %d: %+v", len(got), len(want), got)
+	}
+	for _, f := range got {
+		w, ok := want[f.Field]
+		if !ok {
+			t.Errorf("unexpected filter %q", f.Field)
+			continue
+		}
+		if f.Value != w {
+			t.Errorf("filter %s = %q, want %q", f.Field, f.Value, w)
+		}
+		delete(want, f.Field)
+	}
+	for missing := range want {
+		t.Errorf("filter %q missing: without it GetProducts can return a "+
+			"plausible price for the wrong product", missing)
+	}
+}
+
+// TestFetchInstancePriceFromFixture_RejectsWrongConstant proves the fixture
+// path enforces the constant filters rather than only the three that vary.
+// Before the shared filter table, this test could not be written: the matcher
+// compared instanceType, regionCode and operatingSystem only, so a recorded
+// capacity-reservation document resolved as if it were the On-Demand rate.
+func TestFetchInstancePriceFromFixture_RejectsWrongConstant(t *testing.T) {
+	const recorded = "testdata/getproducts-instance-recorded.json"
+	raw, err := os.ReadFile(recorded)
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	c := &CatalogPricer{log: slog.New(slog.DiscardHandler)}
+
+	// The genuine document resolves.
+	price, err := c.fetchInstancePriceFromFixture(recorded, "us-east-1", "t3.medium", "Linux")
+	if err != nil {
+		t.Fatalf("recorded fixture did not resolve: %v", err)
+	}
+	if price <= 0 {
+		t.Fatalf("price = %v, want > 0", price)
+	}
+
+	// Flip one constant to a capacity-reservation value. The product is
+	// otherwise identical and its price is unchanged, so a matcher that only
+	// checks the varying three would still return it.
+	altered := strings.Replace(string(raw),
+		`"capacitystatus": "Used"`, `"capacitystatus": "UnusedCapacityReservation"`, 1)
+	if altered == string(raw) {
+		t.Fatal("fixture does not contain capacitystatus: Used — update this test")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "altered.json")
+	if err := os.WriteFile(path, []byte(altered), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.fetchInstancePriceFromFixture(path, "us-east-1", "t3.medium", "Linux"); err == nil {
+		t.Error("a capacity-reservation product resolved as the On-Demand price: " +
+			"the constant filters are not enforced on the fixture path")
+	}
+}

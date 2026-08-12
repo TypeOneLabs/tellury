@@ -632,6 +632,38 @@ func (c *CatalogPricer) InstancePrice(ctx context.Context, region, instanceType,
 	return price, nil
 }
 
+// instanceFilter is one attribute that must match for a product to be THE
+// On-Demand price of an instance type.
+type instanceFilter struct{ Field, Value string }
+
+// instanceFilters returns the complete set of attributes identifying exactly
+// one On-Demand instance price.
+//
+// It is the SINGLE source of truth for both paths: the live GetProducts
+// request is built from it, and the fixture matcher asserts every entry
+// against a recorded document. That shared origin is the whole point.
+// Previously the live path sent eight filters while the fixture matcher
+// checked three, so no test could tell capacitystatus=Used from
+// capacitystatus=UnusedCapacityReservation — the five constant filters were
+// exactly the ones nothing could see, and a wrong constant does not fail: it
+// returns a real price for the wrong product.
+//
+// Those five are what separate the On-Demand rate from the
+// capacity-reservation, dedicated-host, preinstalled-software and BYOL
+// variants of the same instance type in the same region.
+func instanceFilters(region, instanceType, operatingSystem string) []instanceFilter {
+	return []instanceFilter{
+		{"instanceType", instanceType},
+		{"regionCode", region},
+		{"operatingSystem", operatingSystem},
+		{"tenancy", "Shared"},
+		{"capacitystatus", "Used"},
+		{"preInstalledSw", "NA"},
+		{"licenseModel", "No License required"},
+		{"termType", "OnDemand"},
+	}
+}
+
 // fetchInstancePrice runs the targeted GetProducts call for one (region,
 // instanceType, operatingSystem) tuple. It is the live-API path of
 // InstancePrice; the caller handles caching.
@@ -647,20 +679,19 @@ func (c *CatalogPricer) fetchInstancePrice(ctx context.Context, region, instance
 	// (tenancy, capacitystatus, preInstalledSw, licenseModel, termType) can
 	// silently return a capacity-reservation, dedicated-host, or
 	// preinstalled-software variant whose price looks plausible but is wrong.
+	filters := make([]pricingtypes.Filter, 0, 8)
+	for _, f := range instanceFilters(region, instanceType, operatingSystem) {
+		filters = append(filters, pricingtypes.Filter{
+			Type:  pricingtypes.FilterTypeTermMatch,
+			Field: aws.String(f.Field),
+			Value: aws.String(f.Value),
+		})
+	}
 	in := &awspricing.GetProductsInput{
 		ServiceCode:   aws.String("AmazonEC2"),
 		FormatVersion: aws.String("aws_v1"),
 		MaxResults:    aws.Int32(100),
-		Filters: []pricingtypes.Filter{
-			{Type: pricingtypes.FilterTypeTermMatch, Field: aws.String("instanceType"), Value: aws.String(instanceType)},
-			{Type: pricingtypes.FilterTypeTermMatch, Field: aws.String("regionCode"), Value: aws.String(region)},
-			{Type: pricingtypes.FilterTypeTermMatch, Field: aws.String("operatingSystem"), Value: aws.String(operatingSystem)},
-			{Type: pricingtypes.FilterTypeTermMatch, Field: aws.String("tenancy"), Value: aws.String("Shared")},
-			{Type: pricingtypes.FilterTypeTermMatch, Field: aws.String("capacitystatus"), Value: aws.String("Used")},
-			{Type: pricingtypes.FilterTypeTermMatch, Field: aws.String("preInstalledSw"), Value: aws.String("NA")},
-			{Type: pricingtypes.FilterTypeTermMatch, Field: aws.String("licenseModel"), Value: aws.String("No License required")},
-			{Type: pricingtypes.FilterTypeTermMatch, Field: aws.String("termType"), Value: aws.String("OnDemand")},
-		},
+		Filters:       filters,
 	}
 
 	paginator := awspricing.NewGetProductsPaginator(c.client, in)
@@ -705,15 +736,22 @@ func (c *CatalogPricer) fetchInstancePriceFromFixture(path, region, instanceType
 		if err != nil {
 			continue
 		}
-		// Match by instance type, region, and operating system attributes.
+		// Assert EVERY filter the live path sends, not only the three that
+		// vary, so a wrong constant fails a test instead of shipping. termType
+		// is a term-level concept rather than a product attribute; it is
+		// satisfied by reading the OnDemand terms below.
 		attrs := doc.Product.Attributes
-		if attrs["instanceType"] != instanceType {
-			continue
+		matched := true
+		for _, f := range instanceFilters(region, instanceType, operatingSystem) {
+			if f.Field == "termType" {
+				continue
+			}
+			if attrs[f.Field] != f.Value {
+				matched = false
+				break
+			}
 		}
-		if attrs["regionCode"] != region {
-			continue
-		}
-		if attrs["operatingSystem"] != operatingSystem {
+		if !matched {
 			continue
 		}
 		// Extract the OnDemand hourly rate.

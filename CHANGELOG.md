@@ -8,6 +8,84 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-12
+
+tellury reads metrics on AWS. The first metric-dependent AWS rule ships with it.
+
+**Upgrading — action required.** The scanner needs three IAM permissions it did not need
+before: `ec2:DescribeInstances`, `ec2:DescribeInstanceTypes` and `cloudwatch:GetMetricData`.
+Without them `underutilized_ec2` cannot run; the scan still succeeds and says what it could
+not evaluate, but it will find nothing. The full policy is in
+[docs/aws-setup.md](docs/aws-setup.md).
+
+Two other things to expect. `cloudwatch:GetMetricData` sits outside the CloudWatch free tier
+at $0.01 per 1,000 metrics requested — a scan needs tens of thousands of instances before
+that rounds to a cent, but it is not free. And a new rule means new findings, so an account
+that exited `0` may now exit `3`; `--fail-on-findings=false` restores the old behaviour.
+
+### Added
+
+- **CloudWatch metric enrichment.** `pkg/metrics/aws` implements the same provider-agnostic
+  seam GCP uses, so the cross-cloud metric vocabulary means one thing on both clouds.
+  `cpu_utilization_p95` comes from `AWS/EC2 CPUUtilization` via `GetMetricData`, batched up
+  to 500 queries per call, fanned out per account and region with bounded concurrency.
+  CloudWatch reports CPU as a percentage and the graph stores a fraction, so the conversion
+  happens once on the AWS side — the existing thresholds are written against fractions, and
+  a missing conversion would have produced findings that looked entirely reasonable.
+- **`underutilized_ec2`.** A running, non-spot EC2 instance whose p95 CPU leaves more than
+  40% headroom. Recommends a smaller size in the same family, or stop/delete when the family
+  has no smaller member. Auto Scaling group members are skipped with their own code: a
+  group owns its members' size, so a per-member recommendation is advice nobody can take.
+- **EC2 instance discovery.** `DescribeInstances` with shapes resolved live through
+  `DescribeInstanceTypes`, including the full size ladder of each family present so a
+  rightsizing candidate can be found. No embedded instance-type table — the same reasoning
+  that removed the price tables in 0.3.0.
+- **Live On-Demand instance pricing.** A targeted `GetProducts` lookup per
+  (region, instance type, OS), cached for the scan. Instance prices are deliberately not
+  preloaded like other product families: `Compute Instance` is the largest family in the
+  price list, and fetching it whole was measured at over a minute without finishing.
+  One filter table now feeds both the live request and the fixture matcher, so a wrong
+  constant — `capacitystatus`, `tenancy`, `licenseModel` — fails a test instead of silently
+  returning a real price for the wrong product.
+
+### Changed
+
+- The owner column (`ACCOUNT` on AWS, `PROJECT` on GCP) now appears whenever the scope can
+  hold more than one owner, rather than when the findings happen to span several. An
+  organization scan whose findings all landed in one account previously printed no column at
+  all — exactly the case where the reader cannot infer the owner from the scope.
+- The AWS rule for overprovisioned instances is `underutilized_ec2`. It briefly carried a
+  different ID during development; no released version used it.
+
+### Fixed
+
+- `Provider.Sizer()` returned nil, making the rightsizing branch unreachable: every
+  overprovisioned instance would have been reported as stop/delete with its full cost as
+  waste, even where a smaller size existed.
+- EC2 tags never reached node labels, so the Auto Scaling guard read an always-absent label
+  and every ASG member would have received a recommendation its operator cannot apply.
+- Metric enrichment treated an unknown caller identity as "every account is my own", the
+  opposite of what ingestion does. A transient `sts:GetCallerIdentity` failure would have
+  had an organization scan query member accounts with the caller's own credentials and skip
+  every metric rule without saying why.
+- The price fixture loader wrote two maps outside the lock that price lookups read under it.
+- A missing `state` attribute was reported as "not running", telling the operator an
+  instance was stopped when the truth was that its state had not parsed.
+- Removed the GCP `mem_utilization_p95` spec. No rule declared it, so it was never fetched;
+  had one declared it, `percent_used` (0–100) and `balloon/ram_used` (bytes) were both
+  registered as a ratio clamped to 1, so every instance would have reported 100% memory
+  used. Neither cloud publishes guest memory without an agent in the VM, and the correct
+  units are recorded in a comment for whoever re-adds it.
+
+### Documentation
+
+- The quick start covers AWS and GCP evenly instead of leading with GCP, and organization
+  scanning is shown for both.
+- `docs/cli.md` listed only the `--gcp-*` scope flags and still claimed GCP was the only
+  provider implemented, three releases after AWS shipped.
+- `docs/aws-setup.md` documents the three new permissions.
+- `docs/offline.md` states plainly that EC2 instances are not priced offline.
+
 ## [0.3.0] — 2026-08-12
 
 AWS grows from single-account scans to whole organizations, and pricing becomes live-only.
@@ -386,7 +464,8 @@ First release. GCP only.
   documentation rather than captured from the API normalizes to a node with empty
   attributes rather than failing loudly.
 
-[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/TypeOneLabs/tellury/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/TypeOneLabs/tellury/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/TypeOneLabs/tellury/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/TypeOneLabs/tellury/compare/v0.1.3...v0.1.4

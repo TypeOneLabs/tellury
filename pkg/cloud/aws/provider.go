@@ -779,18 +779,6 @@ func (p *Provider) EnrichMetrics(ctx context.Context, g *graph.Graph, sc cloud.S
 		return nil
 	}
 
-	// Build a lookup that resolves (resourceType, instanceID) → graph.Ref.
-	lookup := func(resourceType, instanceID string) (graph.Ref, bool) {
-		for _, irs := range instances {
-			for _, ir := range irs {
-				if ir.InstanceID == instanceID {
-					return ir.Ref, true
-				}
-			}
-		}
-		return "", false
-	}
-
 	// Build CloudWatch clients per (account, region).
 	clients := make(map[metricsaws.AccountRegion]metricsaws.CloudWatchAPI)
 
@@ -844,7 +832,7 @@ func (p *Provider) EnrichMetrics(ctx context.Context, g *graph.Graph, sc cloud.S
 		return fmt.Errorf("aws: no CloudWatch clients could be constructed for metric enrichment")
 	}
 
-	mc := metricsaws.NewClient(p.log, lookup, instances, clients)
+	mc := metricsaws.NewClient(p.log, instances, clients)
 	return mc.Fill(ctx, req, func(ref graph.Ref, key string, v graph.MetricValue) {
 		g.SetMetric(ref, key, v)
 	})
