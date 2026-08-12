@@ -101,6 +101,11 @@ type Provider struct {
 	lastRegions      []string
 	lastRegionSource string
 
+	// sizer answers "what else exists in this instance's family", which is
+	// what lets a rule recommend a smaller size rather than only stop/delete.
+	// Populated during Ingest from ec2:DescribeInstanceTypes.
+	sizer *Sizer
+
 	// accountStatuses records the outcome for every account in the tree
 	// (scanned, unreachable, suspended, etc.). It is populated during Ingest
 	// and reported in the scan summary and JSON output.
@@ -165,7 +170,7 @@ func WithRoleName(name string) Option {
 const credentialResolveTimeout = 2 * time.Second
 
 func New(ctx context.Context, opts ...Option) (*Provider, error) {
-	p := &Provider{log: slog.Default()}
+	p := &Provider{log: slog.Default(), sizer: NewSizer()}
 	for _, opt := range opts {
 		opt(p)
 	}
@@ -259,7 +264,12 @@ func (p *Provider) Pricer() pricing.Pricer { return p.pricer }
 
 // Sizer implements cloud.Provider. AWS has no rightsizing catalog yet, so nil
 // is returned (the CLI's rules Pass treats nil as "no catalog available").
-func (p *Provider) Sizer() pricing.Sizer { return nil }
+func (p *Provider) Sizer() pricing.Sizer {
+	if p.sizer == nil {
+		return nil
+	}
+	return p.sizer
+}
 
 // Close implements cloud.Provider. There are no long-lived clients to release.
 func (p *Provider) Close() error { return nil }
@@ -358,6 +368,31 @@ func (p *Provider) ingestAccountWithClient(
 		volumes, addrs, instances, shapes, err := p.hydrateRegion(ctx, client)
 		if err != nil {
 			return nil, fmt.Errorf("aws: %s: %s: %w", account, region, err)
+		}
+
+		// Resolve the full size ladder for every family present, so a rule
+		// can recommend a smaller sibling rather than only stop/delete.
+		// Ingest's own DescribeInstanceTypes call resolves ONLY the types
+		// actually running, which describes an instance but cannot rightsize
+		// it — the candidates are by definition the types that are not
+		// running. Failure is non-fatal and logged: without a ladder the rule
+		// degrades to stop/delete, which is the pre-Sizer behaviour.
+		if p.sizer != nil && len(instances) > 0 {
+			seen := map[string]bool{}
+			var families []string
+			for i := range instances {
+				f := FamilyOf(string(instances[i].InstanceType))
+				if f == "" || seen[f] {
+					continue
+				}
+				seen[f] = true
+				families = append(families, f)
+			}
+			sort.Strings(families)
+			if err := p.sizer.LoadFamilies(ctx, client, families); err != nil {
+				p.log.Warn("aws: could not resolve instance-type families; rightsizing candidates unavailable",
+					"region", region, "err", err)
+			}
 		}
 
 		rn := regionNode(accountToken, account, region)
@@ -771,10 +806,17 @@ func (p *Provider) EnrichMetrics(ctx context.Context, g *graph.Graph, sc cloud.S
 
 	for ar := range instances {
 		var cwCfg aws.Config
-		if ar.Account == callerAccount || callerAccount == "" {
+		if ar.Account != "" && ar.Account == callerAccount {
 			// The caller's own account: use the provider's config directly.
 			// No role assumption needed — the credentials in hand already
 			// address this account.
+			//
+			// An UNKNOWN caller (callerAccount == "") deliberately falls to
+			// the assume-role branch, matching ingestOrganization. Treating
+			// unknown as "every account is my own" fails open: an org scan
+			// would query every member account's CloudWatch with the caller's
+			// own credentials, get nothing back, and skip every
+			// metric-dependent rule with no operator-visible reason.
 			cwCfg = p.awsCfg
 		} else {
 			// Member account: assume the cross-account role to get temporary

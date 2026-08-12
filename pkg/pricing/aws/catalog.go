@@ -338,13 +338,27 @@ func (c *CatalogPricer) loadCatalogue(ctx context.Context) error {
 
 	// TELLURY_PRICE_FIXTURE: load from file, no API call.
 	if path := priceFixturePath(); path != "" {
-		n, err := loadPriceFixture(path, c.skusByKey, c.instancePrices)
+		// Load into LOCAL maps and publish them under the lock. Writing
+		// c.skusByKey / c.instancePrices directly races with a concurrent
+		// InstancePrice, which reads instancePrices under c.mu: rule
+		// evaluation runs rules in parallel, and the first UnitPrice call
+		// triggers this load while another rule is already asking for an
+		// instance price.
+		localSKUs := map[skuKey]resolvedSKU{}
+		localInstance := map[instancePriceKey]float64{}
+		n, err := loadPriceFixture(path, localSKUs, localInstance)
 		if err != nil {
 			c.reportCatalogueProgress(0, 1, true)
 			c.log.Warn("aws: price fixture load failed; no prices will resolve", "path", path, "err", err)
 			return err
 		}
 		c.mu.Lock()
+		for k, v := range localSKUs {
+			c.skusByKey[k] = v
+		}
+		for k, v := range localInstance {
+			c.instancePrices[k] = v
+		}
 		c.loaded = n > 0
 		c.instancePricesLoaded = true
 		c.mu.Unlock()

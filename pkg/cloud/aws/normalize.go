@@ -275,6 +275,21 @@ func NormalizeInstance(inst *ec2types.Instance, shape *InstanceTypeInfo, account
 	// falling back to Name.
 	n.SetAttr(AttrInstanceID, id)
 
+	// EC2 tags become node Labels, which is where rules look for them. The
+	// Auto Scaling guard depends on this: an ASG member carries the
+	// aws:autoscaling:groupName tag, and without the tags reaching Labels the
+	// guard reads an always-absent label, always passes, and every ASG member
+	// is recommended for rightsizing an operator cannot act on.
+	for _, t := range inst.Tags {
+		if t.Key == nil || *t.Key == "" || t.Value == nil {
+			continue
+		}
+		if n.Labels == nil {
+			n.Labels = map[string]string{}
+		}
+		n.Labels[*t.Key] = *t.Value
+	}
+
 	// state — always written from the SDK's InstanceState.Name.
 	if inst.State != nil {
 		n.SetAttr(AttrState, string(inst.State.Name))

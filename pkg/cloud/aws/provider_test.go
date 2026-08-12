@@ -419,3 +419,32 @@ func TestResolveRegions_NoHintsUsesDescribeRegions(t *testing.T) {
 		t.Errorf("regions = %v, want 2 regions from fixture", regions)
 	}
 }
+
+// TestProvider_SizerIsWired pins that a provider hands rules a usable Sizer.
+//
+// This is deliberately a test of the WIRING, not of the ladder logic. The
+// underutilized rule shipped with Provider.Sizer() returning nil, which made
+// its rightsize branch unreachable in production: every overprovisioned
+// instance was reported as stop/delete with the full cost as waste, even where
+// a smaller sibling existed. The rule's own tests passed throughout, because
+// they injected a fake Sizer — nothing asserted the real provider supplied one.
+func TestProvider_SizerIsWired(t *testing.T) {
+	p, err := New(context.Background(), WithOffline(), WithLogger(newTestLogger()))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	s := p.Sizer()
+	if s == nil {
+		t.Fatal("Provider.Sizer() is nil: the rule's rightsize branch is unreachable and every finding degrades to stop/delete")
+	}
+	// And it must be usable: a swept family produces an ordered ladder.
+	if err := p.sizer.LoadFamilies(context.Background(), &sizerFakeEC2{}, []string{"t3"}); err != nil {
+		t.Fatalf("LoadFamilies: %v", err)
+	}
+	if got := len(s.Ladder("t3")); got == 0 {
+		t.Error("Ladder is empty after a successful sweep")
+	}
+	if fam := s.Family("t3.micro"); fam != "t3" {
+		t.Errorf("Family(t3.micro) = %q, want t3", fam)
+	}
+}

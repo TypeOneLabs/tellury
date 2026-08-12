@@ -603,3 +603,35 @@ func TestInstanceNode_EnrichedThenStub(t *testing.T) {
 		t.Errorf("after re-adding enriched: instance_type = %q, want t3.medium", got)
 	}
 }
+
+// TestNormalizeInstance_TagsBecomeLabels pins the wiring the Auto Scaling
+// guard depends on. The guard reads Node.Label("aws:autoscaling:groupName");
+// before this, NormalizeInstance never wrote Tags to Labels at all, so the
+// label was always absent, the guard always passed, and every ASG member was
+// recommended for rightsizing an operator cannot act on. The rule's own test
+// passed only because it set Labels by hand — something the pipeline never did.
+func TestNormalizeInstance_TagsBecomeLabels(t *testing.T) {
+	inst := &ec2types.Instance{
+		InstanceId:   strp("i-abc"),
+		InstanceType: ec2types.InstanceTypeT3Micro,
+		State:        &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+		Tags: []ec2types.Tag{
+			{Key: strp("aws:autoscaling:groupName"), Value: strp("web-asg")},
+			{Key: strp("Name"), Value: strp("web-1")},
+			{Key: nil, Value: strp("dropped")},
+		},
+	}
+	n := NormalizeInstance(inst, nil, "111122223333", "eu-west-1")
+	if n == nil {
+		t.Fatal("NormalizeInstance returned nil")
+	}
+	if got := n.Labels["aws:autoscaling:groupName"]; got != "web-asg" {
+		t.Errorf("ASG label = %q, want %q — the Auto Scaling guard is dead without it", got, "web-asg")
+	}
+	if got := n.Labels["Name"]; got != "web-1" {
+		t.Errorf("Name label = %q, want %q", got, "web-1")
+	}
+	if len(n.Labels) != 2 {
+		t.Errorf("labels = %v, want exactly the two well-formed tags", n.Labels)
+	}
+}

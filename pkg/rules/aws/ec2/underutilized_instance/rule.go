@@ -91,8 +91,18 @@ func (rule) Guards() []rules.Guard {
 				return !ok
 			}},
 
-		// P1: running. EC2 InstanceState.Name is lowercase ("running"),
-		// unlike GCP's uppercase "RUNNING".
+		// P1: running. The presence check is a SEPARATE guard from the value
+		// check, mirroring the GCP rule's status_present. Collapsing them
+		// reports "instance is not running" for an instance whose state
+		// attribute simply failed to parse — a diagnosis the operator would
+		// act on incorrectly.
+		{Name: "state_present", SkipCode: rules.SkipMissingAttr,
+			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
+				v, ok := n.Str(awsrules.AttrState)
+				return ok && v != ""
+			}},
+		// EC2 InstanceState.Name is lowercase ("running"), unlike GCP's
+		// uppercase "RUNNING".
 		{Name: "running", SkipCode: rules.SkipNotRunning,
 			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
 				s, _ := n.Str(awsrules.AttrState)
