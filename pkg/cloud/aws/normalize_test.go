@@ -11,6 +11,7 @@ import (
 
 func strp(s string) *string     { return &s }
 func i32p(v int32) *int32       { return &v }
+func i64p(v int64) *int64       { return &v }
 func tp(t time.Time) *time.Time { return &t }
 
 // TestNormalizeVolume_Attrs pin the exact attribute keys and values the
@@ -188,5 +189,417 @@ func TestNormalizeAddress_Unassociated(t *testing.T) {
 func TestNormalizeAddress_NilIsDropped(t *testing.T) {
 	if n := NormalizeAddress(nil, "a", "r"); n != nil {
 		t.Errorf("NormalizeAddress(nil) = %#v, want nil", n)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NormalizeInstance tests
+// ---------------------------------------------------------------------------
+
+// TestNormalizeInstance_Attrs pin the exact attribute keys and values
+// NormalizeInstance writes. An on-demand Linux instance with a resolved
+// shape carries every attribute the rule's guards read.
+func TestNormalizeInstance_Attrs(t *testing.T) {
+	launched := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	inst := &ec2types.Instance{
+		InstanceId:   strp("i-0cafe"),
+		InstanceType: ec2types.InstanceTypeT3Medium,
+		State:        &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+		LaunchTime:   tp(launched),
+		Platform:     "", // Linux
+		Architecture: ec2types.ArchitectureValuesX8664,
+		Placement: &ec2types.Placement{
+			AvailabilityZone: strp("us-east-1b"),
+			Tenancy:          ec2types.TenancyDefault,
+		},
+		InstanceLifecycle: "", // on-demand
+	}
+	shape := &InstanceTypeInfo{VCPU: 2, MemoryGiB: 4}
+	n := NormalizeInstance(inst, shape, "123456789012", "us-east-1")
+	if n == nil {
+		t.Fatal("NormalizeInstance returned nil")
+	}
+
+	if n.Kind != graph.KindInstance || n.Provider != "aws" || n.Service != "ec2" {
+		t.Errorf("kind/provider/service = %s/%s/%s, want instance/aws/ec2", n.Kind, n.Provider, n.Service)
+	}
+	if n.Name != "i-0cafe" {
+		t.Errorf("Name = %q, want i-0cafe", n.Name)
+	}
+	if n.Project != "123456789012" {
+		t.Errorf("Project = %q, want account id", n.Project)
+	}
+	if n.Location != "us-east-1" {
+		t.Errorf("Location = %q, want us-east-1 (canonicalised from us-east-1b)", n.Location)
+	}
+	if n.AssetType != "aws.ec2.instance" {
+		t.Errorf("AssetType = %q, want aws.ec2.instance", n.AssetType)
+	}
+
+	// instance_id — always written.
+	if got, _ := n.Str(AttrInstanceID); got != "i-0cafe" {
+		t.Errorf("instance_id = %q, want i-0cafe", got)
+	}
+	// state — from State.Name.
+	if got, _ := n.Str(AttrState); got != "running" {
+		t.Errorf("state = %q, want running", got)
+	}
+	// instance_type.
+	if got, _ := n.Str(AttrInstanceType); got != "t3.medium" {
+		t.Errorf("instance_type = %q, want t3.medium", got)
+	}
+	// launch_time — RFC3339.
+	if got, _ := n.Str(AttrLaunchTime); got != "2024-01-15T10:30:00Z" {
+		t.Errorf("launch_time = %q, want 2024-01-15T10:30:00Z", got)
+	}
+	// platform — always written, empty means Linux.
+	if got, _ := n.Str(AttrPlatform); got != "" {
+		t.Errorf("platform = %q, want empty for Linux", got)
+	}
+	// architecture.
+	if got, _ := n.Str(AttrArchitecture); got != "x86_64" {
+		t.Errorf("architecture = %q, want x86_64", got)
+	}
+	// tenancy.
+	if got, _ := n.Str(AttrTenancy); got != "default" {
+		t.Errorf("tenancy = %q, want default", got)
+	}
+	// availability_zone.
+	if got, _ := n.Str(AttrAvailabilityZone); got != "us-east-1b" {
+		t.Errorf("availability_zone = %q, want us-east-1b", got)
+	}
+	// lifecycle — always written, empty means on-demand.
+	if got, _ := n.Str(AttrLifecycle); got != "" {
+		t.Errorf("lifecycle = %q, want empty for on-demand", got)
+	}
+	// provisioning_model — derived.
+	if got, _ := n.Str(AttrProvisioningModel); got != "STANDARD" {
+		t.Errorf("provisioning_model = %q, want STANDARD", got)
+	}
+	// machine_family — derived.
+	if got, _ := n.Str(AttrMachineFamily); got != "t3" {
+		t.Errorf("machine_family = %q, want t3", got)
+	}
+	// vcpu_count — from shape.
+	if got, _ := n.Num(AttrVCpuCount); got != 2 {
+		t.Errorf("vcpu_count = %v, want 2", got)
+	}
+	// memory_gib — from shape.
+	if got, _ := n.Num(AttrMemoryGiB); got != 4 {
+		t.Errorf("memory_gib = %v, want 4", got)
+	}
+
+	// The ID format matches the stub.
+	wantID := graph.Ref("accounts/123456789012/regions/us-east-1/instances/i-0cafe")
+	if n.ID != wantID {
+		t.Errorf("ID = %q, want %q", n.ID, wantID)
+	}
+}
+
+// TestNormalizeInstance_Spot carries lifecycle "spot" and provisioning_model
+// "SPOT", so a rule's not-spot guard can read the present value.
+func TestNormalizeInstance_Spot(t *testing.T) {
+	inst := &ec2types.Instance{
+		InstanceId:        strp("i-0spot"),
+		InstanceType:      ec2types.InstanceTypeT3Medium,
+		State:             &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+		InstanceLifecycle: ec2types.InstanceLifecycleTypeSpot,
+	}
+	n := NormalizeInstance(inst, nil, "123456789012", "us-east-1")
+	if n == nil {
+		t.Fatal("NormalizeInstance returned nil")
+	}
+	// lifecycle is written unconditionally.
+	if got, _ := n.Str(AttrLifecycle); got != "spot" {
+		t.Errorf("lifecycle = %q, want spot", got)
+	}
+	// provisioning_model is derived.
+	if got, _ := n.Str(AttrProvisioningModel); got != "SPOT" {
+		t.Errorf("provisioning_model = %q, want SPOT", got)
+	}
+	// Shape is nil, so vcpu_count and memory_gib are absent.
+	if _, ok := n.Num(AttrVCpuCount); ok {
+		t.Errorf("vcpu_count must be absent when shape is nil")
+	}
+	if _, ok := n.Num(AttrMemoryGiB); ok {
+		t.Errorf("memory_gib must be absent when shape is nil")
+	}
+}
+
+// TestNormalizeInstance_NoShape: when the shape is nil, vcpu_count and
+// memory_gib are absent — never zero and never a guess.
+func TestNormalizeInstance_NoShape(t *testing.T) {
+	inst := &ec2types.Instance{
+		InstanceId:   strp("i-0noshape"),
+		InstanceType: ec2types.InstanceTypeT3Medium,
+		State:        &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+	}
+	n := NormalizeInstance(inst, nil, "123456789012", "us-east-1")
+	if n == nil {
+		t.Fatal("NormalizeInstance returned nil")
+	}
+	if _, ok := n.Num(AttrVCpuCount); ok {
+		t.Errorf("vcpu_count must be absent when shape is nil")
+	}
+	if _, ok := n.Num(AttrMemoryGiB); ok {
+		t.Errorf("memory_gib must be absent when shape is nil")
+	}
+	// But other attributes are still present.
+	if got, _ := n.Str(AttrInstanceType); got != "t3.medium" {
+		t.Errorf("instance_type = %q, want t3.medium", got)
+	}
+	if got, _ := n.Str(AttrInstanceID); got != "i-0noshape" {
+		t.Errorf("instance_id = %q, want i-0noshape", got)
+	}
+}
+
+// TestNormalizeInstance_ShapeZeroVCPU: a shape whose DefaultVCpus is nil or 0
+// still writes the attribute (0.0), so a rule can tell the shape was
+// resolved but reports zero — distinct from "absent".
+func TestNormalizeInstance_ShapeZeroVCPU(t *testing.T) {
+	inst := &ec2types.Instance{
+		InstanceId:   strp("i-0zero"),
+		InstanceType: ec2types.InstanceTypeT3Medium,
+		State:        &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+	}
+	// Shape with zero VCPU and zero memory — degenerate but the attribute is
+	// present, so a rule knows the shape was resolved.
+	shape := &InstanceTypeInfo{VCPU: 0, MemoryGiB: 0}
+	n := NormalizeInstance(inst, shape, "123456789012", "us-east-1")
+	if n == nil {
+		t.Fatal("NormalizeInstance returned nil")
+	}
+	if got, _ := n.Num(AttrVCpuCount); got != 0 {
+		t.Errorf("vcpu_count = %v, want 0 (shape resolved, value is zero)", got)
+	}
+	if got, _ := n.Num(AttrMemoryGiB); got != 0 {
+		t.Errorf("memory_gib = %v, want 0 (shape resolved, value is zero)", got)
+	}
+}
+
+// TestNormalizeInstance_NilAndUnidentifiedAreDropped: a nil instance or one
+// with no InstanceId is dropped.
+func TestNormalizeInstance_NilAndUnidentifiedAreDropped(t *testing.T) {
+	if n := NormalizeInstance(nil, nil, "a", "r"); n != nil {
+		t.Errorf("NormalizeInstance(nil) = %#v, want nil", n)
+	}
+	if n := NormalizeInstance(&ec2types.Instance{}, nil, "a", "r"); n != nil {
+		t.Errorf("NormalizeInstance(no InstanceId) = %#v, want nil", n)
+	}
+}
+
+// TestNormalizeInstance_NoPlacement: an instance with no Placement still gets
+// tenancy "" written, and no availability_zone. The node's Location falls
+// back to the region argument.
+func TestNormalizeInstance_NoPlacement(t *testing.T) {
+	inst := &ec2types.Instance{
+		InstanceId:   strp("i-0noplace"),
+		InstanceType: ec2types.InstanceTypeT3Medium,
+		State:        &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+	}
+	n := NormalizeInstance(inst, nil, "123456789012", "us-east-1")
+	if n == nil {
+		t.Fatal("NormalizeInstance returned nil")
+	}
+	if got, _ := n.Str(AttrTenancy); got != "" {
+		t.Errorf("tenancy = %q, want empty for no placement", got)
+	}
+	if _, ok := n.Str(AttrAvailabilityZone); ok {
+		t.Errorf("availability_zone must be absent when placement is nil")
+	}
+	if n.Location != "us-east-1" {
+		t.Errorf("Location = %q, want region fallback us-east-1", n.Location)
+	}
+}
+
+// TestNormalizeInstance_NoState: when State is nil, state is written as "".
+func TestNormalizeInstance_NoState(t *testing.T) {
+	inst := &ec2types.Instance{
+		InstanceId:   strp("i-0nostate"),
+		InstanceType: ec2types.InstanceTypeT3Medium,
+	}
+	n := NormalizeInstance(inst, nil, "123456789012", "us-east-1")
+	if n == nil {
+		t.Fatal("NormalizeInstance returned nil")
+	}
+	if got, _ := n.Str(AttrState); got != "" {
+		t.Errorf("state = %q, want empty when State is nil", got)
+	}
+}
+
+// TestNormalizeInstance_LifecycleAlwaysWritten: even for on-demand instances
+// (empty lifecycle), the attribute is present so a rule can distinguish "not
+// spot" from "payload not parsed".
+func TestNormalizeInstance_LifecycleAlwaysWritten(t *testing.T) {
+	inst := &ec2types.Instance{
+		InstanceId:   strp("i-0ondemand"),
+		InstanceType: ec2types.InstanceTypeT3Medium,
+	}
+	// Intentionally not setting InstanceLifecycle — on-demand.
+	n := NormalizeInstance(inst, nil, "123456789012", "us-east-1")
+	if n == nil {
+		t.Fatal("NormalizeInstance returned nil")
+	}
+	// lifecycle must be present even for on-demand.
+	if _, ok := n.Str(AttrLifecycle); !ok {
+		t.Errorf("lifecycle must always be written, even for on-demand (empty)")
+	}
+	if got, _ := n.Str(AttrLifecycle); got != "" {
+		t.Errorf("lifecycle = %q, want empty for on-demand", got)
+	}
+	if got, _ := n.Str(AttrProvisioningModel); got != "STANDARD" {
+		t.Errorf("provisioning_model = %q, want STANDARD for empty lifecycle", got)
+	}
+}
+
+// TestNormalizeInstance_MachineFamily extracts the prefix before the dot.
+func TestNormalizeInstance_MachineFamily(t *testing.T) {
+	tests := []struct {
+		instanceType string
+		want         string
+	}{
+		{"t3.medium", "t3"},
+		{"m6i.xlarge", "m6i"},
+		{"c7g.large", "c7g"},
+		{"r6gd.16xlarge", "r6gd"},
+		{"p4d.24xlarge", "p4d"},
+		{"", ""},
+		{"nodot", "nodot"},
+	}
+	for _, tt := range tests {
+		got := machineFamily(tt.instanceType)
+		if got != tt.want {
+			t.Errorf("machineFamily(%q) = %q, want %q", tt.instanceType, got, tt.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Instance stub + enriched node reconciliation
+// ---------------------------------------------------------------------------
+
+// TestInstanceNode_StubThenEnriched: when a stub is added to the graph first
+// (as happens when an EBS volume references the instance) and then the
+// enriched instance replaces it, the final node carries every attribute. This
+// proves that "last write wins" preserves all attributes when instances are
+// processed after volumes.
+func TestInstanceNode_StubThenEnriched(t *testing.T) {
+	g := graph.New()
+	account := "123456789012"
+	region := "us-east-1"
+
+	// Step 1: add the stub (as the EBS attachment path does).
+	stub := instanceNode("i-0cafe", account, region)
+	if err := g.AddNode(stub); err != nil {
+		t.Fatalf("add stub: %v", err)
+	}
+
+	// Step 2: add the enriched instance (as DescribeInstances does).
+	launched := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	inst := &ec2types.Instance{
+		InstanceId:   strp("i-0cafe"),
+		InstanceType: ec2types.InstanceTypeT3Medium,
+		State:        &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+		LaunchTime:   tp(launched),
+		Architecture: ec2types.ArchitectureValuesX8664,
+		Placement: &ec2types.Placement{
+			AvailabilityZone: strp("us-east-1b"),
+			Tenancy:          ec2types.TenancyDefault,
+		},
+	}
+	shape := &InstanceTypeInfo{VCPU: 2, MemoryGiB: 4}
+	enriched := NormalizeInstance(inst, shape, account, region)
+	if err := g.AddNode(enriched); err != nil {
+		t.Fatalf("add enriched: %v", err)
+	}
+
+	// Read the node back and verify all attributes are present.
+	n, ok := g.Node(graph.Ref("accounts/123456789012/regions/us-east-1/instances/i-0cafe"))
+	if !ok {
+		t.Fatal("node not found in graph")
+	}
+	if n.Kind != graph.KindInstance {
+		t.Errorf("Kind = %s, want instance", n.Kind)
+	}
+	if got, _ := n.Str(AttrInstanceID); got != "i-0cafe" {
+		t.Errorf("instance_id = %q, want i-0cafe", got)
+	}
+	if got, _ := n.Str(AttrInstanceType); got != "t3.medium" {
+		t.Errorf("instance_type = %q, want t3.medium", got)
+	}
+	if got, _ := n.Str(AttrState); got != "running" {
+		t.Errorf("state = %q, want running", got)
+	}
+	if got, _ := n.Num(AttrVCpuCount); got != 2 {
+		t.Errorf("vcpu_count = %v, want 2", got)
+	}
+	if got, _ := n.Num(AttrMemoryGiB); got != 4 {
+		t.Errorf("memory_gib = %v, want 4", got)
+	}
+	if got, _ := n.Str(AttrLifecycle); got != "" {
+		t.Errorf("lifecycle = %q, want empty (on-demand)", got)
+	}
+	if got, _ := n.Str(AttrProvisioningModel); got != "STANDARD" {
+		t.Errorf("provisioning_model = %q, want STANDARD", got)
+	}
+}
+
+// TestInstanceNode_EnrichedThenStub: if the enriched instance arrives first and
+// a stub arrives second (the reverse of the guaranteed ingestion order), the
+// stub would overwrite and drop all attributes. This test documents the
+// requirement that instances MUST be processed after volumes, and proves the
+// problem exists if the order is reversed.
+func TestInstanceNode_EnrichedThenStub(t *testing.T) {
+	g := graph.New()
+	account := "123456789012"
+	region := "us-east-1"
+
+	// Step 1: add the enriched instance first (wrong order).
+	launched := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	inst := &ec2types.Instance{
+		InstanceId:   strp("i-0cafe"),
+		InstanceType: ec2types.InstanceTypeT3Medium,
+		State:        &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+		LaunchTime:   tp(launched),
+		Architecture: ec2types.ArchitectureValuesX8664,
+		Placement: &ec2types.Placement{
+			AvailabilityZone: strp("us-east-1b"),
+			Tenancy:          ec2types.TenancyDefault,
+		},
+	}
+	shape := &InstanceTypeInfo{VCPU: 2, MemoryGiB: 4}
+	enriched := NormalizeInstance(inst, shape, account, region)
+	if err := g.AddNode(enriched); err != nil {
+		t.Fatalf("add enriched: %v", err)
+	}
+
+	// Step 2: add the stub (wrong order — this would overwrite the enriched node).
+	stub := instanceNode("i-0cafe", account, region)
+	if err := g.AddNode(stub); err != nil {
+		t.Fatalf("add stub: %v", err)
+	}
+
+	n, ok := g.Node(graph.Ref("accounts/123456789012/regions/us-east-1/instances/i-0cafe"))
+	if !ok {
+		t.Fatal("node not found in graph")
+	}
+
+	// The stub has no attributes — prove that the enriched attributes are LOST
+	// when the stub is the last write. This test exists to document why the
+	// ingestion loop must always process instances AFTER volumes.
+	if _, ok := n.Str(AttrInstanceType); ok {
+		t.Errorf("instance_type should be absent after stub overwrites enriched node; got %q", n.Attrs[AttrInstanceType])
+	}
+	if _, ok := n.Num(AttrVCpuCount); ok {
+		t.Errorf("vcpu_count should be absent after stub overwrites enriched node")
+	}
+
+	// Re-apply enriched to recover — proves the fix is to process instances last.
+	if err := g.AddNode(NormalizeInstance(inst, shape, account, region)); err != nil {
+		t.Fatalf("re-add enriched: %v", err)
+	}
+	n2, _ := g.Node(graph.Ref("accounts/123456789012/regions/us-east-1/instances/i-0cafe"))
+	if got, _ := n2.Str(AttrInstanceType); got != "t3.medium" {
+		t.Errorf("after re-adding enriched: instance_type = %q, want t3.medium", got)
 	}
 }

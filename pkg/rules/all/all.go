@@ -1,11 +1,12 @@
-// Package all registers every built-in rule via import side effects. This is
-// the ONLY place rule packages are referenced, keeping pkg/rules free of any
+// Package all registers every built-in rule via import side effects. This is the
+// ONLY place rule packages are referenced, keeping pkg/rules free of any
 // dependency on concrete rules.
 package all
 
 import (
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/unassociated_eip"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/unattached_ebs_volume"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/underutilized_instance"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/detached_disk"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/old_snapshot"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/underutilized_instance"

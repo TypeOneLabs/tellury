@@ -12,14 +12,15 @@ import (
 )
 
 // Fixture is the offline data source for an AWS scan. It replays captured EC2
-// volumes and addresses per region from local JSON, so ingestion is testable
-// and `tellury scan --fixture ... --provider aws --aws-account <id>` runs with
-// no AWS credentials and no network — the AWS analog of GCP's FakeLister.
+// volumes, addresses, instances and instance types per region from local JSON,
+// so ingestion is testable and `tellury scan --fixture ... --provider aws
+// --aws-account <id>` runs with no AWS credentials and no network — the AWS
+// analog of GCP's FakeLister.
 //
-// Each volume/address element in a fixture file is the JSON form of the EC2
-// SDK's own types.Volume / types.Address, so a capture produced by the AWS
-// CLI or SDK feeds the fixture unedited and the normalizers read exactly the
-// fields the live Describe calls would have returned.
+// Each element in a fixture file is the JSON form of the EC2 SDK's own types,
+// so a capture produced by the AWS CLI or SDK feeds the fixture unedited and
+// the normalizers read exactly the fields the live Describe calls would have
+// returned.
 type Fixture struct {
 	// Regions maps a region name to that region's captured resources. Keys
 	// may use the availability-zone form ("us-east-1a"); the provider
@@ -30,8 +31,10 @@ type Fixture struct {
 
 // RegionFixture holds one region's captured EC2 resources.
 type RegionFixture struct {
-	Volumes   []ec2types.Volume  `json:"volumes"`
-	Addresses []ec2types.Address `json:"addresses"`
+	Volumes        []ec2types.Volume           `json:"volumes"`
+	Addresses      []ec2types.Address          `json:"addresses"`
+	Instances      []ec2types.Instance         `json:"instances"`
+	InstanceTypes  []ec2types.InstanceTypeInfo `json:"instance_types"`
 }
 
 // RegionNames returns the fixture's region keys, canonicalised through
@@ -51,7 +54,9 @@ func (f *Fixture) RegionNames() []string {
 //
 //  1. The canonical envelope:
 //     {"regions": {"us-east-1": {"volumes": [ ...types.Volume... ],
-//     "addresses": [ ...types.Address... ]}}}
+//     "addresses": [ ...types.Address... ],
+//     "instances": [ ...types.Instance... ],
+//     "instance_types": [ ...types.InstanceTypeInfo... ]}}}
 //  2. A bare JSON object mapping region name to the same per-region shape,
 //     which is what a hand-rolled test fixture or a small capture looks like.
 //
@@ -95,7 +100,8 @@ func mergeRegionFixtures(dst *Fixture, src map[string]*RegionFixture) {
 
 // fakeEC2 is the fixture-backed EC2 API. It stands in for the live SDK client
 // on the offline path so ingestion exercises the same Describe calls — the
-// DescribeVolumes paginator included — with no network and no credentials.
+// DescribeVolumes paginator, DescribeAddresses, DescribeInstances paginator
+// and DescribeInstanceTypes included — with no network and no credentials.
 type fakeEC2 struct {
 	region string // the region this client is scoped to
 	f      *Fixture
@@ -151,6 +157,87 @@ func (c *fakeEC2) DescribeAddresses(_ context.Context, _ *ec2.DescribeAddressesI
 	return &ec2.DescribeAddressesOutput{Addresses: c.regionAddresses()}, nil
 }
 
+// DescribeInstances returns the region's instances paginated by MaxResults/
+// NextToken, matching the live API. Each page is a single Reservation
+// containing up to pageSize instances, so the provider's paginator loop is
+// exercised.
+func (c *fakeEC2) DescribeInstances(_ context.Context, in *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	insts := c.regionInstances()
+	pageSize := 1000
+	if in != nil && in.MaxResults != nil && *in.MaxResults > 0 {
+		pageSize = int(*in.MaxResults)
+	}
+	start := 0
+	if in != nil && in.NextToken != nil && *in.NextToken != "" {
+		n, err := strconv.Atoi(*in.NextToken)
+		if err != nil || n < 0 || n >= len(insts) {
+			return &ec2.DescribeInstancesOutput{}, nil
+		}
+		start = n
+	}
+	end := start + pageSize
+	if end > len(insts) {
+		end = len(insts)
+	}
+	page := insts[start:end]
+	out := &ec2.DescribeInstancesOutput{}
+	if len(page) > 0 {
+		out.Reservations = []ec2types.Reservation{{Instances: page}}
+	}
+	if end < len(insts) {
+		tok := strconv.Itoa(end)
+		out.NextToken = &tok
+	}
+	return out, nil
+}
+
+// DescribeInstanceTypes returns the fixture's instance types for the region,
+// optionally filtered by the InstanceTypes list in the input. This mirrors
+// the live API's targeted lookup: pass InstanceTypes to get specific shapes,
+// or omit it to get all shapes in the fixture.
+func (c *fakeEC2) DescribeInstanceTypes(_ context.Context, in *ec2.DescribeInstanceTypesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstanceTypesOutput, error) {
+	all := c.regionInstanceTypes()
+	if in == nil || len(in.InstanceTypes) == 0 {
+		return &ec2.DescribeInstanceTypesOutput{InstanceTypes: all}, nil
+	}
+	want := make(map[ec2types.InstanceType]bool, len(in.InstanceTypes))
+	for _, t := range in.InstanceTypes {
+		want[t] = true
+	}
+	var filtered []ec2types.InstanceTypeInfo
+	for _, it := range all {
+		if want[it.InstanceType] {
+			filtered = append(filtered, it)
+		}
+	}
+	// Paginate if needed (same pattern as volumes).
+	pageSize := 100
+	start := 0
+	if in.NextToken != nil && *in.NextToken != "" {
+		n, err := strconv.Atoi(*in.NextToken)
+		if err == nil && n >= 0 && n < len(filtered) {
+			start = n
+		}
+	}
+	if in.MaxResults != nil && *in.MaxResults > 0 {
+		pageSize = int(*in.MaxResults)
+	}
+	end := start + pageSize
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	out := &ec2.DescribeInstanceTypesOutput{InstanceTypes: filtered[start:end]}
+	if end < len(filtered) {
+		tok := strconv.Itoa(end)
+		out.NextToken = &tok
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 func (c *fakeEC2) regionVolumes() []ec2types.Volume {
 	if c.f == nil {
 		return nil
@@ -171,4 +258,26 @@ func (c *fakeEC2) regionAddresses() []ec2types.Address {
 		return nil
 	}
 	return rf.Addresses
+}
+
+func (c *fakeEC2) regionInstances() []ec2types.Instance {
+	if c.f == nil {
+		return nil
+	}
+	rf, ok := c.f.Regions[c.region]
+	if !ok || rf == nil {
+		return nil
+	}
+	return rf.Instances
+}
+
+func (c *fakeEC2) regionInstanceTypes() []ec2types.InstanceTypeInfo {
+	if c.f == nil {
+		return nil
+	}
+	rf, ok := c.f.Regions[c.region]
+	if !ok || rf == nil {
+		return nil
+	}
+	return rf.InstanceTypes
 }

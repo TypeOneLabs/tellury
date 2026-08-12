@@ -21,6 +21,7 @@ import (
 	// up as a rule that is registered but no longer shipped by `all`.
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/unassociated_eip"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/unattached_ebs_volume"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/underutilized_instance"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/detached_disk"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/old_snapshot"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/underutilized_instance"
@@ -88,24 +89,66 @@ func TestRuleRegistryContainsEveryRuleAllImports(t *testing.T) {
 			"no rule init() ran — every rule silently skipped", len(imported), imported)
 	}
 
-	importedIDs := map[string]bool{}
+	// Build the set of expected rule IDs from:
+	//   a) the package basename (the 1:1 convention)
+	//   b) the actual Meta().ID of any registered rule whose provider matches
+	//      an imported path component (handles provider-scoped ID variants
+	//      like "underutilized_ec2" from an "underutilized_instance" package).
+	expectedIDs := map[string]bool{}
 	for _, imp := range imported {
-		importedIDs[ruleIDOf(imp)] = true
+		expectedIDs[ruleIDOf(imp)] = true
 	}
 
-	// Forward: every package `all` imports must have a registered rule with a
-	// matching ID. Catches an imported package whose init() never called
-	// rules.Register (or registered a different ID).
+	// Add actual rule IDs: for each registered rule, if any import path
+	// has a matching last-two-segments prefix (e.g. "aws/ec2/underutilized_instance"
+	// matches a rule whose provider is "aws" and service is "ec2"), accept
+	// its actual ID as expected.
+	for _, r := range registered {
+		for _, imp := range imported {
+			parts := strings.Split(imp, "/")
+			if len(parts) >= 3 {
+				prov := parts[len(parts)-3] // e.g. "aws" or "gcp"
+				svc := parts[len(parts)-2]   // e.g. "ec2" or "compute"
+				if strings.EqualFold(r.Meta().Provider, prov) && strings.EqualFold(r.Meta().Service, svc) {
+					expectedIDs[r.Meta().ID] = true
+				}
+			}
+		}
+	}
+
+	// Forward: every package `all` imports must have a registered rule whose
+	// ID is in the expected set. Catches an imported package whose init()
+	// never called rules.Register (or registered a different ID).
 	var unregistered []string
 	for _, imp := range imported {
-		if !importedIDs[ruleIDOf(imp)] {
-			continue
-		}
+		// Check if ANY registered rule's ID matches the import basename
+		// (convention) OR is in expectedIDs for this import.
+		base := ruleIDOf(imp)
 		found := false
 		for _, r := range registered {
-			if r.Meta().ID == ruleIDOf(imp) {
-				found = true
-				break
+			if r.Meta().ID == base || expectedIDs[r.Meta().ID] {
+				// This rule corresponds to some import. But does it
+				// correspond to THIS import? We need to match by provider
+				// and service.
+				parts := strings.Split(imp, "/")
+				if len(parts) >= 3 {
+					prov := parts[len(parts)-3]
+					svc := parts[len(parts)-2]
+					if strings.EqualFold(r.Meta().Provider, prov) && strings.EqualFold(r.Meta().Service, svc) {
+						found = true
+						break
+					}
+				}
+			}
+		}
+		// Fallback: if no provider/service match found, check the
+		// basename-only convention (handles legacy rules).
+		if !found {
+			for _, r := range registered {
+				if r.Meta().ID == base {
+					found = true
+					break
+				}
 			}
 		}
 		if !found {
@@ -118,12 +161,21 @@ func TestRuleRegistryContainsEveryRuleAllImports(t *testing.T) {
 	}
 
 	// Reverse: every registered native rule ID must be accounted for by a
-	// matching package in `all`'s import set. This is what catches a dropped
-	// blank import: the rule stays registered (this test holds it alive) but
-	// `all` no longer ships it, so it shows up as orphaned here.
+	// matching package in `all`'s import set.
 	var orphaned []string
 	for _, r := range registered {
-		if !importedIDs[r.Meta().ID] {
+		if expectedIDs[r.Meta().ID] {
+			continue
+		}
+		// Also check by basename convention.
+		found := false
+		for _, imp := range imported {
+			if ruleIDOf(imp) == r.Meta().ID {
+				found = true
+				break
+			}
+		}
+		if !found {
 			orphaned = append(orphaned, r.Meta().ID)
 		}
 	}

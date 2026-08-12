@@ -57,6 +57,35 @@ func TestLoadFixture_ParsesEnvelopeShape(t *testing.T) {
 	if got := *us.Addresses[1].AssociationId; got != "eipassoc-0e1" {
 		t.Errorf("address[1].AssociationId = %q, want eipassoc-0e1", got)
 	}
+
+	// Instance data from the fixture.
+	if len(us.Instances) != 2 {
+		t.Fatalf("us-east-1 has %d instances, want 2", len(us.Instances))
+	}
+	if got := *us.Instances[0].InstanceId; got != "i-0cafe" {
+		t.Errorf("instance[0].InstanceId = %q, want i-0cafe", got)
+	}
+	if got := string(us.Instances[0].InstanceType); got != "t3.medium" {
+		t.Errorf("instance[0].InstanceType = %q, want t3.medium", got)
+	}
+	if us.Instances[0].State == nil || string(us.Instances[0].State.Name) != "running" {
+		t.Errorf("instance[0].State.Name = %v, want running", us.Instances[0].State)
+	}
+	// Second instance is spot.
+	if got := string(us.Instances[1].InstanceLifecycle); got != "spot" {
+		t.Errorf("instance[1].InstanceLifecycle = %q, want spot", got)
+	}
+
+	// Instance types from the fixture.
+	if len(us.InstanceTypes) != 2 {
+		t.Fatalf("us-east-1 has %d instance_types, want 2", len(us.InstanceTypes))
+	}
+	if got := string(us.InstanceTypes[0].InstanceType); got != "t3.medium" {
+		t.Errorf("instance_type[0].InstanceType = %q, want t3.medium", got)
+	}
+	if us.InstanceTypes[0].VCpuInfo == nil || us.InstanceTypes[0].VCpuInfo.DefaultVCpus == nil || *us.InstanceTypes[0].VCpuInfo.DefaultVCpus != 2 {
+		t.Errorf("instance_type[0].VCpuInfo.DefaultVCpus = %v, want 2", us.InstanceTypes[0].VCpuInfo)
+	}
 }
 
 // TestLoadFixture_AcceptsBareRegionMap pins the second accepted shape: a bare
@@ -68,7 +97,9 @@ func TestLoadFixture_AcceptsBareRegionMap(t *testing.T) {
 	body := `{
 		"us-east-1": {
 			"volumes": [{"volumeId": "vol-1", "size": 10, "volumeType": "gp3", "state": "available"}],
-			"addresses": []
+			"addresses": [],
+			"instances": [],
+			"instance_types": []
 		}
 	}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -150,12 +181,110 @@ func TestFakeEC2_DescribeVolumesPaginates(t *testing.T) {
 	}
 }
 
+// TestFakeEC2_DescribeInstancesPaginates proves the offline path drives the
+// SAME DescribeInstancesPaginator the live path does, and that the fixture
+// fake honours MaxResults/NextToken for instances too.
+func TestFakeEC2_DescribeInstancesPaginates(t *testing.T) {
+	insts := buildTestInstances(2500)
+	f := &Fixture{Regions: map[string]*RegionFixture{
+		"us-east-1": {Instances: insts},
+	}}
+	client := &fakeEC2{region: "us-east-1", f: f}
+
+	var got []string
+	paginator := ec2.NewDescribeInstancesPaginator(client, &ec2.DescribeInstancesInput{})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(context.Background())
+		if err != nil {
+			t.Fatalf("NextPage: %v", err)
+		}
+		for _, res := range page.Reservations {
+			for _, inst := range res.Instances {
+				got = append(got, *inst.InstanceId)
+			}
+		}
+	}
+	if len(got) != 2500 {
+		t.Fatalf("paginator returned %d instances, want 2500 (all pages)", len(got))
+	}
+	if got[0] != "i-000000" || got[2499] != "i-002499" {
+		t.Fatalf("pagination lost ordering: first=%q last=%q", got[0], got[2499])
+	}
+}
+
+// TestFakeEC2_DescribeInstanceTypes_FiltersByRequestedTypes: when the caller
+// passes InstanceTypes, only matching shapes are returned.
+func TestFakeEC2_DescribeInstanceTypes_FiltersByRequestedTypes(t *testing.T) {
+	f := &Fixture{Regions: map[string]*RegionFixture{
+		"us-east-1": {
+			InstanceTypes: []ec2types.InstanceTypeInfo{
+				{InstanceType: ec2types.InstanceTypeT3Medium},
+				{InstanceType: ec2types.InstanceTypeC6iXlarge},
+				{InstanceType: ec2types.InstanceTypeM6iLarge},
+			},
+		},
+	}}
+	client := &fakeEC2{region: "us-east-1", f: f}
+
+	out, err := client.DescribeInstanceTypes(context.Background(), &ec2.DescribeInstanceTypesInput{
+		InstanceTypes: []ec2types.InstanceType{ec2types.InstanceTypeT3Medium, ec2types.InstanceTypeM6iLarge},
+	})
+	if err != nil {
+		t.Fatalf("DescribeInstanceTypes: %v", err)
+	}
+	if len(out.InstanceTypes) != 2 {
+		t.Fatalf("got %d instance types, want 2 (filtered)", len(out.InstanceTypes))
+	}
+	if got := string(out.InstanceTypes[0].InstanceType); got != "t3.medium" {
+		t.Errorf("first = %q, want t3.medium", got)
+	}
+	if got := string(out.InstanceTypes[1].InstanceType); got != "m6i.large" {
+		t.Errorf("second = %q, want m6i.large", got)
+	}
+}
+
+// TestFakeEC2_DescribeInstanceTypes_NoFilterReturnsAll: without InstanceTypes
+// in the input, all shapes in the fixture are returned.
+func TestFakeEC2_DescribeInstanceTypes_NoFilterReturnsAll(t *testing.T) {
+	f := &Fixture{Regions: map[string]*RegionFixture{
+		"us-east-1": {
+			InstanceTypes: []ec2types.InstanceTypeInfo{
+				{InstanceType: ec2types.InstanceTypeT3Medium},
+				{InstanceType: ec2types.InstanceTypeC6iXlarge},
+			},
+		},
+	}}
+	client := &fakeEC2{region: "us-east-1", f: f}
+
+	out, err := client.DescribeInstanceTypes(context.Background(), &ec2.DescribeInstanceTypesInput{})
+	if err != nil {
+		t.Fatalf("DescribeInstanceTypes: %v", err)
+	}
+	if len(out.InstanceTypes) != 2 {
+		t.Fatalf("got %d instance types, want 2 (all)", len(out.InstanceTypes))
+	}
+}
+
 // buildTestVolumes returns n volumes with volume ids vol-000000 .. vol-00NNNN.
 func buildTestVolumes(n int) []ec2types.Volume {
 	out := make([]ec2types.Volume, 0, n)
 	for i := 0; i < n; i++ {
 		id := fmt.Sprintf("vol-%06d", i)
 		out = append(out, ec2types.Volume{VolumeId: &id})
+	}
+	return out
+}
+
+// buildTestInstances returns n instances with instance ids i-000000 .. i-00NNNN.
+func buildTestInstances(n int) []ec2types.Instance {
+	out := make([]ec2types.Instance, 0, n)
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("i-%06d", i)
+		state := ec2types.InstanceStateNameRunning
+		out = append(out, ec2types.Instance{
+			InstanceId: &id,
+			State:      &ec2types.InstanceState{Name: state},
+		})
 	}
 	return out
 }

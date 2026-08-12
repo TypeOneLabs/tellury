@@ -34,6 +34,23 @@ const (
 	AttrInstanceID       = "instance_id"       // types.Address.InstanceId
 )
 
+// Instance attributes written by pkg/cloud/aws/normalize.go
+// (NormalizeInstance), named from the EC2 SDK's own types.Instance fields
+// and types.InstanceTypeInfo. A rule reads exactly what DescribeInstances
+// and DescribeInstanceTypes documented.
+const (
+	AttrInstanceType      = "instance_type"      // types.Instance.InstanceType
+	AttrLaunchTime        = "launch_time"        // types.Instance.LaunchTime (RFC3339)
+	AttrPlatform          = "platform"           // types.Instance.Platform
+	AttrArchitecture      = "architecture"       // types.Instance.Architecture
+	AttrTenancy           = "tenancy"            // types.Instance.Placement.Tenancy
+	AttrLifecycle         = "lifecycle"          // types.Instance.InstanceLifecycle
+	AttrVCpuCount         = "vcpu_count"         // types.InstanceTypeInfo.VCpuInfo.DefaultVCpus
+	AttrMemoryGiB         = "memory_gib"         // types.InstanceTypeInfo.MemoryInfo.SizeInMiB / 1024
+	AttrMachineFamily     = "machine_family"     // derived from instance_type (prefix before ".")
+	AttrProvisioningModel = "provisioning_model" // derived from lifecycle: "SPOT" | "STANDARD"
+)
+
 // Volume states: the ec2types.VolumeState values verbatim. DescribeVolumes
 // returns exactly these strings; the unattached_ebs_volume rule compares
 // against them.
@@ -52,6 +69,18 @@ const (
 const (
 	DomainVpc      = "vpc"
 	DomainStandard = "standard"
+)
+
+// Instance lifecycle values from types.InstanceLifecycleType.
+const (
+	LifecycleSpot      = "spot"
+	LifecycleScheduled = "scheduled"
+)
+
+// Provisioning model values derived from lifecycle.
+const (
+	ProvisioningStandard = "STANDARD"
+	ProvisioningSpot     = "SPOT"
 )
 
 // Asset-type tokens the AWS rules declare in Meta.RequiredAssetTypes: the

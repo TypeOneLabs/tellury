@@ -45,6 +45,46 @@
           "associationId": "eipassoc-0e1",
           "instanceId": "i-0cafe"
         }
+      ],
+      "instances": [
+        {
+          "instanceId": "i-0cafe",
+          "instanceType": "t3.medium",
+          "state": {"name": "running"},
+          "launchTime": "2024-01-01T00:00:00Z",
+          "platform": "",
+          "architecture": "x86_64",
+          "placement": {
+            "availabilityZone": "us-east-1b",
+            "tenancy": "default"
+          },
+          "instanceLifecycle": ""
+        },
+        {
+          "instanceId": "i-0dead",
+          "instanceType": "c6i.xlarge",
+          "state": {"name": "running"},
+          "launchTime": "2024-02-01T00:00:00Z",
+          "platform": "windows",
+          "architecture": "x86_64",
+          "placement": {
+            "availabilityZone": "us-east-1a",
+            "tenancy": "default"
+          },
+          "instanceLifecycle": "spot"
+        }
+      ],
+      "instance_types": [
+        {
+          "instanceType": "t3.medium",
+          "vCpuInfo": {"defaultVCpus": 2},
+          "memoryInfo": {"sizeInMiB": 4096}
+        },
+        {
+          "instanceType": "c6i.xlarge",
+          "vCpuInfo": {"defaultVCpus": 4},
+          "memoryInfo": {"sizeInMiB": 8192}
+        }
       ]
     },
     "eu-west-1": {
@@ -67,7 +107,29 @@
           ]
         }
       ],
-      "addresses": []
+      "addresses": [],
+      "instances": [
+        {
+          "instanceId": "i-0d00d",
+          "instanceType": "m6i.large",
+          "state": {"name": "stopped"},
+          "launchTime": "2024-05-01T00:00:00Z",
+          "platform": "",
+          "architecture": "arm64",
+          "placement": {
+            "availabilityZone": "eu-west-1a",
+            "tenancy": "default"
+          },
+          "instanceLifecycle": ""
+        }
+      ],
+      "instance_types": [
+        {
+          "instanceType": "m6i.large",
+          "vCpuInfo": {"defaultVCpus": 2},
+          "memoryInfo": {"sizeInMiB": 8192}
+        }
+      ]
     }
   }
 }

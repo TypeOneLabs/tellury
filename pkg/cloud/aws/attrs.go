@@ -28,6 +28,19 @@ const (
 	AttrAllocationID     = awsrules.AttrAllocationID     // types.Address.AllocationId
 	AttrPublicIP         = awsrules.AttrPublicIP         // types.Address.PublicIp
 	AttrInstanceID       = awsrules.AttrInstanceID       // types.Address.InstanceId
+
+	// Instance attributes (EC2 DescribeInstances / types.Instance and
+	// DescribeInstanceTypes / types.InstanceTypeInfo).
+	AttrInstanceType      = awsrules.AttrInstanceType      // types.Instance.InstanceType
+	AttrLaunchTime        = awsrules.AttrLaunchTime        // types.Instance.LaunchTime (RFC3339)
+	AttrPlatform          = awsrules.AttrPlatform          // types.Instance.Platform
+	AttrArchitecture      = awsrules.AttrArchitecture      // types.Instance.Architecture
+	AttrTenancy           = awsrules.AttrTenancy           // types.Instance.Placement.Tenancy
+	AttrLifecycle         = awsrules.AttrLifecycle         // types.Instance.InstanceLifecycle
+	AttrVCpuCount         = awsrules.AttrVCpuCount         // types.InstanceTypeInfo.VCpuInfo.DefaultVCpus
+	AttrMemoryGiB         = awsrules.AttrMemoryGiB         // types.InstanceTypeInfo.MemoryInfo.SizeInMiB / 1024
+	AttrMachineFamily     = awsrules.AttrMachineFamily     // derived from instance_type (prefix before ".")
+	AttrProvisioningModel = awsrules.AttrProvisioningModel // derived from lifecycle: "SPOT" | "STANDARD"
 )
 
 // Volume states (ec2types.VolumeState values verbatim) and address domains
@@ -42,6 +55,14 @@ const (
 
 	DomainVpc      = awsrules.DomainVpc
 	DomainStandard = awsrules.DomainStandard
+)
+
+// Instance lifecycle and provisioning model values, re-exported for the rules.
+const (
+	LifecycleSpot         = awsrules.LifecycleSpot
+	LifecycleScheduled    = awsrules.LifecycleScheduled
+	ProvisioningStandard  = awsrules.ProvisioningStandard
+	ProvisioningSpot      = awsrules.ProvisioningSpot
 )
 
 // Asset-type tokens (provider's own "aws.<service>.<resource>" spelling).

@@ -39,6 +39,28 @@
 // recorded GetProducts response, so a rename by AWS fails the test before it
 // can silently degrade every lookup to the embedded table.
 //
+//
+// INSTANCE PRICING IS A SEPARATE, LAZY LOOKUP — NOT A PRELOAD. "Compute
+// Instance" is the largest product family in the AWS price list: every
+// instance type times every OS, tenancy, preinstalled software, license model
+// and capacity status, in every region, paginated at MaxResults=100. Adding
+// it to priceServiceFamilies would make every scan's catalogue load unusably
+// slow (the unfiltered AmazonEC2 fetch was measured at 1m39s and still not
+// finished). Instead, the InstancePrice method builds a targeted GetProducts
+// call with full TERM_MATCH filters, runs it once per unique (region,
+// instanceType, operatingSystem) tuple encountered during a scan, and caches
+// the result in a map[instancePriceKey]float64 on the pricer. There is no
+// productFamily filter — the eight attribute filters alone narrow the result
+// set to exactly one product.
+//
+// THE FILTER SET IS THE WHOLE JOB. A GetProducts for one instance type in one
+// region returns many products that differ only in attributes. Apply all of:
+// termType=OnDemand, capacitystatus=Used, tenancy=Shared, preInstalledSw=NA,
+// licenseModel="No License required", and operatingSystem matched to the
+// instance's platform. Omitting capacitystatus alone can index a
+// capacity-reservation rate as the On-Demand rate — a wrong number that looks
+// entirely plausible.
+//
 // The Price List API is reachable only from us-east-1 and ap-south-1, so the
 // client is pinned to us-east-1 regardless of where the scanned resources
 // live; prices are looked up by the product's own region attribute, not by
@@ -85,6 +107,14 @@ type catalogueEntry struct {
 	price  float64
 }
 
+// instancePriceKey is the lazy-instance-price cache key: one On-Demand
+// instance rate for one (region, instanceType, operatingSystem) tuple.
+type instancePriceKey struct {
+	region          string
+	instanceType    string
+	operatingSystem string
+}
+
 // CatalogPricer implements pricing.Pricer over the AWS Price List API.
 // The live API is the ONLY source. When the API is unreachable or has no
 // matching product, the pricer returns ErrNoPrice and the rule skips the
@@ -110,6 +140,18 @@ type CatalogPricer struct {
 	once      sync.Once
 	loadErr   error
 	skusByKey map[skuKey]resolvedSKU // (kind, sku, region) -> price, catalogue cache
+
+	// instancePrices is the lazy instance-price cache, keyed by (region,
+	// instanceType, operatingSystem). It is populated on first access per key,
+	// never during construction, because "Compute Instance" is the largest
+	// product family in the AWS price list and must not be preloaded.
+	instancePrices map[instancePriceKey]float64
+
+	// instancePricesLoaded is true when instancePrices has been populated from
+	// a fixture (either via TELLURY_PRICE_FIXTURE's vm_instance entries, or via
+	// direct cache population in tests). When true, InstancePrice returns
+	// ErrNoPrice on cache miss instead of calling the live API.
+	instancePricesLoaded bool
 
 	mu     sync.Mutex
 	last   map[string]pricing.Provenance // provKey(kind,sku,region) -> last answer
@@ -149,11 +191,12 @@ func NewCatalogPricer(ctx context.Context, log *slog.Logger, cfg aws.Config) (*C
 	}
 	client := awspricing.NewFromConfig(cfg, func(o *awspricing.Options) { o.Region = "us-east-1" })
 	return &CatalogPricer{
-		log:       log,
-		ctx:       ctx,
-		client:    client,
-		skusByKey: map[skuKey]resolvedSKU{},
-		last:      map[string]pricing.Provenance{},
+		log:            log,
+		ctx:            ctx,
+		client:         client,
+		skusByKey:      map[skuKey]resolvedSKU{},
+		instancePrices: map[instancePriceKey]float64{},
+		last:           map[string]pricing.Provenance{},
 	}, nil
 }
 
@@ -241,6 +284,14 @@ func priceFixturePath() string {
 	return os.Getenv("TELLURY_PRICE_FIXTURE")
 }
 
+// instancePriceFixturePath returns the value of TELLURY_INSTANCE_PRICE_FIXTURE,
+// or "" when unset. This is a separate test-only hook for instance product
+// GetProducts responses. When set, InstancePrice loads from this file instead
+// of calling the live API.
+func instancePriceFixturePath() string {
+	return os.Getenv("TELLURY_INSTANCE_PRICE_FIXTURE")
+}
+
 // liveUnitPrice resolves (kind, sku, region) against the cached catalogue,
 // loading it on first use. The load runs against c.ctx (the scan's
 // deadline-bounded context), so a hanging Price List API fails cleanly at
@@ -265,7 +316,7 @@ func (c *CatalogPricer) liveUnitPrice(kind pricing.Kind, sku, region string) (fl
 
 // loadCatalogue fetches prices exactly once and indexes every product this
 // pricer models into skusByKey. This is the only place the Price List API is
-// called — everything else reads the cache built here.
+// called for preloaded families — everything else reads the cache built here.
 //
 // When TELLURY_PRICE_FIXTURE is set, the catalogue loads from that file
 // (a generic kind->SKU->region->price table) instead of calling the API.
@@ -287,7 +338,7 @@ func (c *CatalogPricer) loadCatalogue(ctx context.Context) error {
 
 	// TELLURY_PRICE_FIXTURE: load from file, no API call.
 	if path := priceFixturePath(); path != "" {
-		n, err := loadPriceFixture(path, c.skusByKey)
+		n, err := loadPriceFixture(path, c.skusByKey, c.instancePrices)
 		if err != nil {
 			c.reportCatalogueProgress(0, 1, true)
 			c.log.Warn("aws: price fixture load failed; no prices will resolve", "path", path, "err", err)
@@ -295,6 +346,7 @@ func (c *CatalogPricer) loadCatalogue(ctx context.Context) error {
 		}
 		c.mu.Lock()
 		c.loaded = n > 0
+		c.instancePricesLoaded = true
 		c.mu.Unlock()
 		c.reportCatalogueProgress(1, 1, true)
 		c.log.Debug("aws price catalogue loaded from fixture", "entries_indexed", n, "path", path)
@@ -328,8 +380,10 @@ func (c *CatalogPricer) loadCatalogue(ctx context.Context) error {
 }
 
 // loadPriceFixture loads a generic kind->SKU->region->price table from a
-// JSON file and indexes it into skusByKey.
-func loadPriceFixture(path string, skusByKey map[skuKey]resolvedSKU) (int, error) {
+// JSON file and indexes it into skusByKey. If the table contains vm_instance
+// entries, those are also loaded into instancePrices for lazy instance-price
+// lookups.
+func loadPriceFixture(path string, skusByKey map[skuKey]resolvedSKU, instancePrices map[instancePriceKey]float64) (int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0, err
@@ -350,7 +404,35 @@ func loadPriceFixture(path string, skusByKey map[skuKey]resolvedSKU) (int, error
 			}
 		}
 	}
+
+	// Also load instance prices from the vm_instance kind in the fixture.
+	// SKU convention: "instanceType/operatingSystem" (e.g. "t3.medium/Linux").
+	if vmSkus, ok := t[pricing.KindVMInstance]; ok {
+		for sku, regions := range vmSkus {
+			// Parse instanceType and operatingSystem from the compound SKU.
+			instanceType, operatingSystem := parseInstancePriceSKU(sku)
+			for region, price := range regions {
+				instancePrices[instancePriceKey{
+					region:          region,
+					instanceType:    instanceType,
+					operatingSystem: operatingSystem,
+				}] = price
+				n++
+			}
+		}
+	}
+
 	return n, nil
+}
+
+// parseInstancePriceSKU splits a compound SKU of the form
+// "instanceType/operatingSystem" into its parts. When there is no "/",
+// operatingSystem defaults to "Linux".
+func parseInstancePriceSKU(sku string) (instanceType, operatingSystem string) {
+	if idx := strings.LastIndex(sku, "/"); idx >= 0 {
+		return sku[:idx], sku[idx+1:]
+	}
+	return sku, "Linux"
 }
 
 // priceServiceFamilies maps each AWS service code to the GetProducts
@@ -364,6 +446,11 @@ func loadPriceFixture(path string, skusByKey map[skuKey]resolvedSKU) (int, error
 //
 // All were read from a real GetProducts response, not guessed — the recorded
 // fixture in testdata/getproducts-recorded.json contains all four.
+//
+// "Compute Instance" is deliberately absent from this map. It is the largest
+// product family in the AWS price list and adding it here would make every
+// scan's catalogue load unusably slow. Instance pricing is handled by the
+// separate, lazy InstancePrice method instead.
 var priceServiceFamilies = map[string][]string{
 	"AmazonEC2": {"Storage", "System Operation", "Provisioned Throughput"},
 	"AmazonVPC": nil,
@@ -431,6 +518,198 @@ func (c *CatalogPricer) loadOne(ctx context.Context, serviceCode, family string)
 		}
 	}
 	return n, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Instance pricing — lazy, targeted GetProducts, NOT a family preload
+// ─────────────────────────────────────────────────────────────────────────────
+
+// OSForPlatform maps an EC2 instance's Platform attribute (from
+// DescribeInstances) to the operatingSystem value the AWS Price List API's
+// GetProducts filter expects.
+//
+//	"" or "linux/unix"  → "Linux"
+//	"windows"           → "Windows"
+//	"rhel"              → "RHEL"
+//	"suse"              → "SUSE"
+//
+// An unrecognised platform is returned as-is (the API filter will match
+// exactly that string, or miss if it does not exist in the price list).
+func OSForPlatform(platform string) string {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "", "linux/unix":
+		return "Linux"
+	case "windows":
+		return "Windows"
+	case "rhel":
+		return "RHEL"
+	case "suse":
+		return "SUSE"
+	default:
+		return platform
+	}
+}
+
+// InstancePrice returns the On-Demand hourly rate for an EC2 instance type in
+// a region with the given operating system. Calling it with operatingSystem
+// "Linux" for a t3.medium in us-east-1 returns $0.0416 (the published
+// On-Demand Linux price).
+//
+// It makes a targeted GetProducts call with the full TERM_MATCH filter set:
+//
+//	ServiceCode:   "AmazonEC2"
+//	FormatVersion: "aws_v1"
+//	Filters:
+//	  1. Type: TERM_MATCH, Field: "instanceType",     Value: <instanceType>
+//	  2. Type: TERM_MATCH, Field: "regionCode",       Value: <region>
+//	  3. Type: TERM_MATCH, Field: "operatingSystem",  Value: <operatingSystem>
+//	  4. Type: TERM_MATCH, Field: "tenancy",          Value: "Shared"
+//	  5. Type: TERM_MATCH, Field: "capacitystatus",   Value: "Used"
+//	  6. Type: TERM_MATCH, Field: "preInstalledSw",   Value: "NA"
+//	  7. Type: TERM_MATCH, Field: "licenseModel",     Value: "No License required"
+//	  8. Type: TERM_MATCH, Field: "termType",         Value: "OnDemand"
+//
+// The price is extracted from the OnDemand price dimension whose unit is
+// "Hrs". The result is cached in the pricer's instancePrices map for the
+// scan's duration; subsequent calls for the same key return the cached value
+// without an API call.
+//
+// When the TELLURY_INSTANCE_PRICE_FIXTURE environment variable is set, the
+// method loads raw GetProducts responses from that file instead of calling
+// the live API — a test-only hook, never a user-facing flag.
+//
+// When the pricer's instance-price cache was pre-populated from a fixture
+// (via TELLURY_PRICE_FIXTURE's vm_instance entries, or direct population in
+// tests), cache misses return ErrNoPrice rather than calling the live API.
+//
+// An unresolvable price returns pricing.ErrNoPrice. The rule skips the
+// instance with SkipNoPrice — there is no fallback table and none is added.
+func (c *CatalogPricer) InstancePrice(ctx context.Context, region, instanceType, operatingSystem string) (float64, error) {
+	key := instancePriceKey{
+		region:          region,
+		instanceType:    instanceType,
+		operatingSystem: operatingSystem,
+	}
+
+	c.mu.Lock()
+	if price, ok := c.instancePrices[key]; ok {
+		c.mu.Unlock()
+		return price, nil
+	}
+	fixturePopulated := c.instancePricesLoaded
+	c.mu.Unlock()
+
+	// When the instance price cache was loaded from a fixture, a cache miss
+	// is definitive: the fixture does not contain this key, and we must not
+	// fall through to the live API (there may be no credentials).
+	if fixturePopulated {
+		return 0, pricing.ErrNoPrice
+	}
+
+	price, err := c.fetchInstancePrice(ctx, region, instanceType, operatingSystem)
+	if err != nil {
+		return 0, err
+	}
+
+	c.mu.Lock()
+	c.instancePrices[key] = price
+	c.mu.Unlock()
+
+	return price, nil
+}
+
+// fetchInstancePrice runs the targeted GetProducts call for one (region,
+// instanceType, operatingSystem) tuple. It is the live-API path of
+// InstancePrice; the caller handles caching.
+func (c *CatalogPricer) fetchInstancePrice(ctx context.Context, region, instanceType, operatingSystem string) (float64, error) {
+	// TELLURY_INSTANCE_PRICE_FIXTURE: load from recorded fixture file.
+	if path := instancePriceFixturePath(); path != "" {
+		return c.fetchInstancePriceFromFixture(path, region, instanceType, operatingSystem)
+	}
+
+	// ── Live API path ──
+	// Build the full filter set. Every filter is TERM_MATCH — the only filter
+	// type GetProducts accepts. Omitting any one of the constant filters
+	// (tenancy, capacitystatus, preInstalledSw, licenseModel, termType) can
+	// silently return a capacity-reservation, dedicated-host, or
+	// preinstalled-software variant whose price looks plausible but is wrong.
+	in := &awspricing.GetProductsInput{
+		ServiceCode:   aws.String("AmazonEC2"),
+		FormatVersion: aws.String("aws_v1"),
+		MaxResults:    aws.Int32(100),
+		Filters: []pricingtypes.Filter{
+			{Type: pricingtypes.FilterTypeTermMatch, Field: aws.String("instanceType"), Value: aws.String(instanceType)},
+			{Type: pricingtypes.FilterTypeTermMatch, Field: aws.String("regionCode"), Value: aws.String(region)},
+			{Type: pricingtypes.FilterTypeTermMatch, Field: aws.String("operatingSystem"), Value: aws.String(operatingSystem)},
+			{Type: pricingtypes.FilterTypeTermMatch, Field: aws.String("tenancy"), Value: aws.String("Shared")},
+			{Type: pricingtypes.FilterTypeTermMatch, Field: aws.String("capacitystatus"), Value: aws.String("Used")},
+			{Type: pricingtypes.FilterTypeTermMatch, Field: aws.String("preInstalledSw"), Value: aws.String("NA")},
+			{Type: pricingtypes.FilterTypeTermMatch, Field: aws.String("licenseModel"), Value: aws.String("No License required")},
+			{Type: pricingtypes.FilterTypeTermMatch, Field: aws.String("termType"), Value: aws.String("OnDemand")},
+		},
+	}
+
+	paginator := awspricing.NewGetProductsPaginator(c.client, in)
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return 0, err
+		}
+		for _, raw := range page.PriceList {
+			doc, err := parsePriceListDoc(raw)
+			if err != nil {
+				continue
+			}
+			// Extract the OnDemand hourly rate. A Compute Instance product
+			// has exactly one OnDemand price dimension with unit "Hrs".
+			for _, dim := range priceDimensions(doc) {
+				if dim.unit == "Hrs" {
+					return dim.price, nil
+				}
+			}
+		}
+	}
+
+	return 0, pricing.ErrNoPrice
+}
+
+// fetchInstancePriceFromFixture loads raw GetProducts responses from a JSON
+// file and resolves the hourly rate for one (region, instanceType,
+// operatingSystem) tuple. The file format is the same as
+// getproducts-recorded.json: a JSON array of raw aws_v1 product documents.
+func (c *CatalogPricer) fetchInstancePriceFromFixture(path, region, instanceType, operatingSystem string) (float64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	var stored []json.RawMessage
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return 0, err
+	}
+	for _, raw := range stored {
+		doc, err := parsePriceListDoc(string(raw))
+		if err != nil {
+			continue
+		}
+		// Match by instance type, region, and operating system attributes.
+		attrs := doc.Product.Attributes
+		if attrs["instanceType"] != instanceType {
+			continue
+		}
+		if attrs["regionCode"] != region {
+			continue
+		}
+		if attrs["operatingSystem"] != operatingSystem {
+			continue
+		}
+		// Extract the OnDemand hourly rate.
+		for _, dim := range priceDimensions(doc) {
+			if dim.unit == "Hrs" {
+				return dim.price, nil
+			}
+		}
+	}
+	return 0, pricing.ErrNoPrice
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 package aws
 
 import (
+	"strings"
 	"time"
 
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
@@ -12,7 +13,8 @@ import (
 // Normalizers: pure functions that convert one EC2 Describe result into a
 // graph node. They are unit-testable without any client or credentials, and
 // their Attrs keys are the EC2 SDK's own field names (see attrs.go), so a rule
-// reads exactly what DescribeVolumes / DescribeAddresses documented.
+// reads exactly what DescribeVolumes / DescribeAddresses / DescribeInstances
+// documented.
 
 // Service and asset-type tokens. AWS has no Cloud Asset Inventory, so the
 // asset-type token is the provider's own stable "aws.<service>.<resource>"
@@ -23,6 +25,14 @@ const (
 	assetTypeAddress  = "aws.ec2.address"
 	assetTypeInstance = "aws.ec2.instance"
 )
+
+// InstanceTypeInfo is the resolved shape of one EC2 instance type, from
+// ec2:DescribeInstanceTypes. It carries only the fields a rule reads; the
+// full SDK type is retained in the call path but not stored.
+type InstanceTypeInfo struct {
+	VCPU      float64 // VCpuInfo.DefaultVCpus
+	MemoryGiB float64 // MemoryInfo.SizeInMiB / 1024
+}
 
 // locationRegion is the location node's answer to "what place is this" — a
 // thin wrapper over the single pricing.CanonicalRegion canonicaliser, exactly
@@ -72,10 +82,11 @@ func regionNode(accountToken, account, canonicalRegion string) *graph.Node {
 
 // instanceNode is the minimal instance node an EBS attachment references. It
 // exists so the graph's topology says "attached" exactly when the volume's
-// Attachments list says so — a future detached-volume rule can check either
-// the node's attachment_count or the graph's attached_to edges. A later
-// DescribeInstances step can enrich these nodes; today they carry no rule
-// attributes.
+// Attachments list says so — a detached-volume rule can check either the
+// node's attachment_count or the graph's attached_to edges. The DescribeInstances
+// step enriches these nodes with full instance attributes (see NormalizeInstance);
+// the ingestion loop processes instances after volumes so the enriched node
+// is always the final write for the ID.
 func instanceNode(instanceID, account, region string) *graph.Node {
 	return &graph.Node{
 		ID:        graph.Ref("accounts/" + account + "/regions/" + region + "/instances/" + instanceID),
@@ -218,4 +229,114 @@ func NormalizeAddress(a *ec2types.Address, account, region string) *graph.Node {
 		n.SetAttr(AttrInstanceID, *a.InstanceId)
 	}
 	return n
+}
+
+// NormalizeInstance converts one DescribeInstances result into a graph node.
+// An instance without an InstanceId (which the real API never returns) is
+// dropped. The resolved InstanceTypeInfo may be nil when DescribeInstanceTypes
+// could not resolve the shape; in that case vcpu_count and memory_gib are
+// absent and a rule that requires them skips the instance — never zero and
+// never a guess.
+//
+// Attrs, named from the EC2 SDK's own types.Instance fields (see attrs.go):
+//
+//	instance_type    — types.Instance.InstanceType
+//	state            — types.Instance.State.Name
+//	launch_time      — types.Instance.LaunchTime (RFC3339)
+//	platform         — types.Instance.Platform (empty string for Linux)
+//	architecture     — types.Instance.Architecture
+//	tenancy          — types.Instance.Placement.Tenancy
+//	lifecycle        — types.Instance.InstanceLifecycle (always written;
+//	                   empty string means on-demand / standard)
+//	provisioning_model — derived from lifecycle: "SPOT" | "STANDARD"
+//	machine_family   — derived from instance_type (prefix before ".")
+//	availability_zone — types.Instance.Placement.AvailabilityZone
+//	instance_id      — types.Instance.InstanceId
+//	vcpu_count       — InstanceTypeInfo.VCPU (absent when shape unresolved)
+//	memory_gib       — InstanceTypeInfo.MemoryGiB (absent when shape unresolved)
+func NormalizeInstance(inst *ec2types.Instance, shape *InstanceTypeInfo, account, region string) *graph.Node {
+	if inst == nil || inst.InstanceId == nil || *inst.InstanceId == "" {
+		return nil
+	}
+	id := *inst.InstanceId
+	n := &graph.Node{
+		ID:        graph.Ref("accounts/" + account + "/regions/" + region + "/instances/" + id),
+		Kind:      graph.KindInstance,
+		Name:      id,
+		Provider:  "aws",
+		Service:   serviceEC2,
+		AssetType: assetTypeInstance,
+		Project:   account,
+		Location:  region,
+		Attrs:     map[string]any{},
+	}
+
+	// instance_id is written unconditionally so a rule can read it without
+	// falling back to Name.
+	n.SetAttr(AttrInstanceID, id)
+
+	// state — always written from the SDK's InstanceState.Name.
+	if inst.State != nil {
+		n.SetAttr(AttrState, string(inst.State.Name))
+	} else {
+		n.SetAttr(AttrState, "")
+	}
+
+	// instance_type — always written.
+	n.SetAttr(AttrInstanceType, string(inst.InstanceType))
+
+	// launch_time — always written when present (RFC3339).
+	if inst.LaunchTime != nil {
+		n.SetAttr(AttrLaunchTime, inst.LaunchTime.UTC().Format(time.RFC3339))
+	}
+
+	// platform — always written. Empty string means Linux/Unix.
+	n.SetAttr(AttrPlatform, string(inst.Platform))
+
+	// architecture — always written.
+	n.SetAttr(AttrArchitecture, string(inst.Architecture))
+
+	// tenancy — always written from Placement.Tenancy.
+	// Default is "default" which means shared.
+	if inst.Placement != nil {
+		n.SetAttr(AttrTenancy, string(inst.Placement.Tenancy))
+		if inst.Placement.AvailabilityZone != nil && *inst.Placement.AvailabilityZone != "" {
+			n.SetAttr(AttrAvailabilityZone, *inst.Placement.AvailabilityZone)
+			n.Location = locationRegion(*inst.Placement.AvailabilityZone)
+		}
+	} else {
+		n.SetAttr(AttrTenancy, "")
+	}
+
+	// lifecycle — ALWAYS written, even when empty, so a rule's not-spot guard
+	// can read a present value. Empty means on-demand (standard).
+	n.SetAttr(AttrLifecycle, string(inst.InstanceLifecycle))
+
+	// provisioning_model — derived from lifecycle.
+	pm := ProvisioningStandard
+	if string(inst.InstanceLifecycle) == LifecycleSpot {
+		pm = ProvisioningSpot
+	}
+	n.SetAttr(AttrProvisioningModel, pm)
+
+	// machine_family — derived from instance_type (prefix before ".").
+	n.SetAttr(AttrMachineFamily, machineFamily(string(inst.InstanceType)))
+
+	// vcpu_count and memory_gib — only written when the shape is resolved.
+	if shape != nil {
+		n.SetAttr(AttrVCpuCount, shape.VCPU)
+		n.SetAttr(AttrMemoryGiB, shape.MemoryGiB)
+	}
+
+	return n
+}
+
+// machineFamily extracts the family prefix from an EC2 instance type.
+// "t3.medium" → "t3", "m6i.xlarge" → "m6i", "c7g.large" → "c7g".
+// If the instance type has no dot, the whole string is returned.
+func machineFamily(instanceType string) string {
+	if idx := strings.IndexByte(instanceType, '.'); idx >= 0 {
+		return instanceType[:idx]
+	}
+	return instanceType
 }

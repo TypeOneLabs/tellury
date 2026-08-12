@@ -47,11 +47,12 @@ func TestNew_OfflineConstructsZeroSDKClients(t *testing.T) {
 }
 
 // TestIngest_FixtureRegionsAndNodes ingests the shipped fixture end to end and
-// pins the graph shape: account container -> region containers -> volumes and
-// addresses, with instance placeholder nodes for attachments. This is the
-// "something works end to end first" acceptance test — no credentials, no
-// network, just the Describe calls driven through the fixture fake and the
-// normalizers.
+// pins the graph shape: account container -> region containers -> volumes,
+// addresses, and instances. Instance nodes come from DescribeInstances (not
+// just attachment stubs), enriched with InstanceTypeInfo from
+// DescribeInstanceTypes. This is the "something works end to end first"
+// acceptance test — no credentials, no network, just the Describe calls
+// driven through the fixture fake and the normalizers.
 func TestIngest_FixtureRegionsAndNodes(t *testing.T) {
 	p, err := New(context.Background(),
 		WithOffline(),
@@ -96,17 +97,22 @@ func TestIngest_FixtureRegionsAndNodes(t *testing.T) {
 	if got := gr.CountByKind(graph.KindAddress); got != 2 {
 		t.Errorf("address nodes = %d, want 2", got)
 	}
-	if got := gr.CountByKind(graph.KindInstance); got != 2 {
-		t.Errorf("instance nodes = %d, want 2 (one per attached volume)", got)
+	// Three instances from the fixture: i-0cafe, i-0dead, i-0d00d.
+	if got := gr.CountByKind(graph.KindInstance); got != 3 {
+		t.Errorf("instance nodes = %d, want 3 (fixture has i-0cafe, i-0dead, i-0d00d)", got)
 	}
-	if got := gr.ResourceNodeCount(); got != 7 {
-		t.Errorf("ResourceNodeCount = %d, want 7 (3 disks + 2 addresses + 2 instances)", got)
+	if got := gr.ResourceNodeCount(); got != 8 {
+		t.Errorf("ResourceNodeCount = %d, want 8 (3 disks + 2 addresses + 3 instances)", got)
 	}
 
-	// Edge topology: 5 resource->region contains, 2 region->account contains,
-	// 2 instance->volume attached_to.
-	if got := gr.EdgeCount(); got != 9 {
-		t.Errorf("EdgeCount = %d, want 9", got)
+	// Edge topology:
+	//   3 disks     -> region  (contains)
+	//   2 addresses -> region  (contains)
+	//   3 instances -> region  (contains)
+	//   2 region    -> account (contains)
+	//   2 instance  -> volume  (attached_to)
+	if got := gr.EdgeCount(); got != 12 {
+		t.Errorf("EdgeCount = %d, want 12", got)
 	}
 
 	// The named nodes exist with the right containment path.
@@ -123,6 +129,55 @@ func TestIngest_FixtureRegionsAndNodes(t *testing.T) {
 		t.Errorf("volume node %s missing or wrong kind", volID)
 	} else if got, _ := n.Str(AttrState); got != "available" {
 		t.Errorf("vol-0aaa state = %q, want available", got)
+	}
+
+	// Instance i-0cafe: enriched from DescribeInstances, shape resolved from
+	// DescribeInstanceTypes, and the stub from the EBS attachment was
+	// overwritten (instances processed last).
+	instID := graph.Ref("accounts/123456789012/regions/us-east-1/instances/i-0cafe")
+	n, ok := gr.Node(instID)
+	if !ok {
+		t.Fatalf("instance node %s missing", instID)
+	}
+	if n.Kind != graph.KindInstance {
+		t.Errorf("i-0cafe Kind = %s, want instance", n.Kind)
+	}
+	if got, _ := n.Str(AttrInstanceType); got != "t3.medium" {
+		t.Errorf("i-0cafe instance_type = %q, want t3.medium", got)
+	}
+	if got, _ := n.Str(AttrState); got != "running" {
+		t.Errorf("i-0cafe state = %q, want running", got)
+	}
+	if got, _ := n.Num(AttrVCpuCount); got != 2 {
+		t.Errorf("i-0cafe vcpu_count = %v, want 2", got)
+	}
+	if got, _ := n.Num(AttrMemoryGiB); got != 4 {
+		t.Errorf("i-0cafe memory_gib = %v, want 4", got)
+	}
+	if got, _ := n.Str(AttrLifecycle); got != "" {
+		t.Errorf("i-0cafe lifecycle = %q, want empty (on-demand)", got)
+	}
+
+	// Instance i-0dead: spot instance with no EBS attachment.
+	instDeadID := graph.Ref("accounts/123456789012/regions/us-east-1/instances/i-0dead")
+	nd, ok := gr.Node(instDeadID)
+	if !ok {
+		t.Fatalf("instance node %s missing", instDeadID)
+	}
+	if got, _ := nd.Str(AttrLifecycle); got != "spot" {
+		t.Errorf("i-0dead lifecycle = %q, want spot", got)
+	}
+	if got, _ := nd.Str(AttrProvisioningModel); got != "SPOT" {
+		t.Errorf("i-0dead provisioning_model = %q, want SPOT", got)
+	}
+	if got, _ := nd.Str(AttrInstanceType); got != "c6i.xlarge" {
+		t.Errorf("i-0dead instance_type = %q, want c6i.xlarge", got)
+	}
+	if got, _ := nd.Num(AttrVCpuCount); got != 4 {
+		t.Errorf("i-0dead vcpu_count = %v, want 4", got)
+	}
+	if got, _ := nd.Num(AttrMemoryGiB); got != 8 {
+		t.Errorf("i-0dead memory_gib = %v, want 8 (8192 MiB / 1024)", got)
 	}
 }
 
@@ -160,6 +215,9 @@ func TestIngest_ExplicitRegionsOverrideFixture(t *testing.T) {
 	}
 	if got := gr.CountByKind(graph.KindAddress); got != 2 {
 		t.Errorf("address nodes = %d, want 2 (us-east-1 only)", got)
+	}
+	if got := gr.CountByKind(graph.KindInstance); got != 2 {
+		t.Errorf("instance nodes = %d, want 2 (i-0cafe, i-0dead in us-east-1)", got)
 	}
 }
 

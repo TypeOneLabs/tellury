@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -19,8 +20,13 @@ import (
 	"github.com/TypeOneLabs/tellury/pkg/cloud"
 	"github.com/TypeOneLabs/tellury/pkg/graph"
 	"github.com/TypeOneLabs/tellury/pkg/metrics"
+	metricsaws "github.com/TypeOneLabs/tellury/pkg/metrics/aws"
 	"github.com/TypeOneLabs/tellury/pkg/pricing"
 	pricingaws "github.com/TypeOneLabs/tellury/pkg/pricing/aws"
+
+	// Ensure the compute metric specs are registered so that Supports()
+	// returns true for cpu_utilization_p95.
+	_ "github.com/TypeOneLabs/tellury/pkg/metrics/aws/compute"
 )
 
 // DefaultRoleName is the conventional cross-account role name AWS
@@ -32,12 +38,15 @@ const DefaultRoleName = "OrganizationAccountAccessRole"
 // ec2API is the subset of the EC2 API this provider calls. It is what lets a
 // fixture (offline replay) stand in for the live SDK client without touching
 // the network: the provider drives DescribeRegions, the DescribeVolumes
-// paginator and DescribeAddresses through this interface, never through the
-// concrete client.
+// paginator, DescribeAddresses, the DescribeInstances paginator, and
+// DescribeInstanceTypes through this interface, never through the concrete
+// client.
 type ec2API interface {
 	DescribeRegions(ctx context.Context, params *ec2.DescribeRegionsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeRegionsOutput, error)
 	DescribeVolumes(ctx context.Context, params *ec2.DescribeVolumesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error)
 	DescribeAddresses(ctx context.Context, params *ec2.DescribeAddressesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeAddressesOutput, error)
+	DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+	DescribeInstanceTypes(ctx context.Context, params *ec2.DescribeInstanceTypesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstanceTypesOutput, error)
 }
 
 // stsAPI is the subset of STS this provider calls. It is an interface so
@@ -346,7 +355,7 @@ func (p *Provider) ingestAccountWithClient(
 
 	for _, region := range regions {
 		client := ec2Factory(region)
-		volumes, addrs, err := p.hydrateRegion(ctx, client)
+		volumes, addrs, instances, shapes, err := p.hydrateRegion(ctx, client)
 		if err != nil {
 			return nil, fmt.Errorf("aws: %s: %s: %w", account, region, err)
 		}
@@ -357,6 +366,7 @@ func (p *Provider) ingestAccountWithClient(
 		}
 		emit(graph.Edge{From: rn.ID, To: graph.Ref(accountToken), Kind: graph.EdgeContains})
 
+		// Phase 1: Volumes and Addresses (as before).
 		for i := range volumes {
 			v := &volumes[i]
 			n := NormalizeVolume(v, account, region)
@@ -383,6 +393,32 @@ func (p *Provider) ingestAccountWithClient(
 		for i := range addrs {
 			a := &addrs[i]
 			n := NormalizeAddress(a, account, region)
+			if n == nil {
+				continue
+			}
+			if err := addNode(n); err != nil {
+				return nil, err
+			}
+			emit(graph.Edge{From: n.ID, To: rn.ID, Kind: graph.EdgeContains})
+		}
+
+		// Phase 2: Instances — processed AFTER volumes so that any stub
+		// created by an EBS attachment is overwritten by the enriched node.
+		// graph.AddNode is "last write wins", so an enriched instance always
+		// replaces a stub with the same ID regardless of which was created
+		// first. Processing instances last guarantees the enriched node is
+		// the final write.
+		for i := range instances {
+			inst := &instances[i]
+			if inst.InstanceId == nil || *inst.InstanceId == "" {
+				continue
+			}
+			itype := string(inst.InstanceType)
+			var shape *InstanceTypeInfo
+			if info, ok := shapes[itype]; ok {
+				shape = &info
+			}
+			n := NormalizeInstance(inst, shape, account, region)
 			if n == nil {
 				continue
 			}
@@ -431,7 +467,7 @@ func (p *Provider) ingestOrganization(ctx context.Context, scope cloud.AWSScope,
 	// Phase 2: assume role into each account and ingest. This is where the
 	// cost lives — each account pays roughly the same number of API calls
 	// (DescribeRegions or Resource Explorer discovery, then per-region
-	// DescribeVolumes + DescribeAddresses).
+	// DescribeVolumes + DescribeAddresses + DescribeInstances + DescribeInstanceTypes).
 	g := graph.New()
 	edges := make(map[graph.Edge]struct{}, 1024)
 
@@ -664,10 +700,112 @@ func (p *Provider) assumeRole(ctx context.Context, accountID string) (aws.Creden
 	}, nil
 }
 
-// EnrichMetrics implements cloud.Provider. AWS CloudWatch enrichment arrives
-// with metric-dependent rules; this is a no-op today.
+// EnrichMetrics implements cloud.Provider. It walks the graph for EC2
+// instance nodes, groups them by (account, region), constructs a CloudWatch
+// client per pair (reusing the existing credential strategy — the caller's
+// own account is reached directly, member accounts are assumed into), and
+// delegates to the AWS metrics Client for fan-out across the bounded worker
+// pool.
+//
+// Enrichment failure is non-fatal: the caller (scan.go/buildGraph) logs and
+// continues because a rule that cannot get a metric skips rather than guesses
+// (invariant I5). Per-job failures within Fill are also isolated — one
+// failing (key, account, region) job does not cancel its siblings.
+//
+// Progress is reported through req.Progress (the "metric enrichment" phase
+// denominator) if the caller sets it.
 func (p *Provider) EnrichMetrics(ctx context.Context, g *graph.Graph, sc cloud.Scope, req metrics.Request) error {
-	return nil
+	if len(req.Keys) == 0 {
+		return nil
+	}
+
+	// Walk instance nodes to build the per-(account, region) instance list.
+	// Only "aws" provider instances with an instance_id attribute are
+	// included; instances without one (stubs that were never enriched) are
+	// skipped.
+	instances := make(map[metricsaws.AccountRegion][]metricsaws.InstanceRef)
+	g.Nodes(func(n *graph.Node) bool {
+		if n.Kind != graph.KindInstance || n.Provider != "aws" {
+			return true
+		}
+		instanceID, ok := n.Str(AttrInstanceID)
+		if !ok || instanceID == "" {
+			return true
+		}
+		ar := metricsaws.AccountRegion{Account: n.Project, Region: n.Location}
+		instances[ar] = append(instances[ar], metricsaws.InstanceRef{
+			Ref:        n.ID,
+			InstanceID: instanceID,
+		})
+		return true
+	})
+
+	if len(instances) == 0 {
+		return nil
+	}
+
+	// Build a lookup that resolves (resourceType, instanceID) → graph.Ref.
+	lookup := func(resourceType, instanceID string) (graph.Ref, bool) {
+		for _, irs := range instances {
+			for _, ir := range irs {
+				if ir.InstanceID == instanceID {
+					return ir.Ref, true
+				}
+			}
+		}
+		return "", false
+	}
+
+	// Build CloudWatch clients per (account, region).
+	clients := make(map[metricsaws.AccountRegion]metricsaws.CloudWatchAPI)
+
+	// Offline path: CloudWatch is unavailable. Return nil so the caller logs
+	// and continues; metric-dependent rules will skip.
+	if p.offline {
+		p.log.Debug("aws: offline provider cannot enrich metrics; metric-dependent rules will skip",
+			"instances", len(instances))
+		return nil
+	}
+
+	callerAccount := p.callerAccountID(ctx)
+
+	for ar := range instances {
+		var cwCfg aws.Config
+		if ar.Account == callerAccount || callerAccount == "" {
+			// The caller's own account: use the provider's config directly.
+			// No role assumption needed — the credentials in hand already
+			// address this account.
+			cwCfg = p.awsCfg
+		} else {
+			// Member account: assume the cross-account role to get temporary
+			// credentials for CloudWatch.
+			creds, err := p.assumeRole(ctx, ar.Account)
+			if err != nil {
+				p.log.Warn("aws: cannot assume role for metric enrichment, skipping account",
+					"account", ar.Account, "region", ar.Region, "err", err)
+				continue
+			}
+			cwCfg = p.awsCfg.Copy()
+			cwCfg.Credentials = credentials.NewStaticCredentialsProvider(
+				creds.AccessKeyID,
+				creds.SecretAccessKey,
+				creds.SessionToken,
+			)
+		}
+
+		clients[ar] = cloudwatch.NewFromConfig(cwCfg, func(o *cloudwatch.Options) {
+			o.Region = ar.Region
+		})
+	}
+
+	if len(clients) == 0 {
+		return fmt.Errorf("aws: no CloudWatch clients could be constructed for metric enrichment")
+	}
+
+	mc := metricsaws.NewClient(p.log, lookup, instances, clients)
+	return mc.Fill(ctx, req, func(ref graph.Ref, key string, v graph.MetricValue) {
+		g.SetMetric(ref, key, v)
+	})
 }
 
 // resolveRegions returns the sorted, de-duplicated list of regions to scan and
@@ -755,23 +893,89 @@ func assetTypesToCloudFormation(hints []string) []string {
 	return out
 }
 
-// hydrateRegion lists every EBS volume and Elastic IP in one region.
-func (p *Provider) hydrateRegion(ctx context.Context, client ec2API) ([]ec2types.Volume, []ec2types.Address, error) {
+// hydrateRegion lists every EBS volume, Elastic IP, instance, and instance
+// type in one region. It calls DescribeVolumes (paginated), DescribeAddresses,
+// DescribeInstances (paginated), and DescribeInstanceTypes (targeted, batched
+// into groups of 100). The returned shape map is keyed by instance type string
+// (e.g. "t3.medium") and is guaranteed to be non-nil (empty when
+// DescribeInstanceTypes fails or returns no results).
+func (p *Provider) hydrateRegion(ctx context.Context, client ec2API) ([]ec2types.Volume, []ec2types.Address, []ec2types.Instance, map[string]InstanceTypeInfo, error) {
+	// Volumes.
 	var volumes []ec2types.Volume
 	paginator := ec2.NewDescribeVolumesPaginator(client, &ec2.DescribeVolumesInput{})
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			return nil, nil, fmt.Errorf("DescribeVolumes: %w", err)
+			return nil, nil, nil, nil, fmt.Errorf("DescribeVolumes: %w", err)
 		}
 		volumes = append(volumes, page.Volumes...)
 	}
 
+	// Addresses.
 	addrOut, err := client.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{})
 	if err != nil {
-		return nil, nil, fmt.Errorf("DescribeAddresses: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("DescribeAddresses: %w", err)
 	}
-	return volumes, addrOut.Addresses, nil
+
+	// Instances (paginated).
+	var instances []ec2types.Instance
+	instPaginator := ec2.NewDescribeInstancesPaginator(client, &ec2.DescribeInstancesInput{})
+	for instPaginator.HasMorePages() {
+		page, err := instPaginator.NextPage(ctx)
+		if err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("DescribeInstances: %w", err)
+		}
+		for _, res := range page.Reservations {
+			instances = append(instances, res.Instances...)
+		}
+	}
+
+	// Instance types: collect the distinct set of instance types and resolve
+	// them via DescribeInstanceTypes. The API accepts up to 100 types per
+	// call; batch larger sets.
+	shapes := make(map[string]InstanceTypeInfo, len(instances)/2+1)
+	if len(instances) > 0 {
+		seen := make(map[string]bool, len(instances))
+		var typeNames []ec2types.InstanceType
+		for _, inst := range instances {
+			t := string(inst.InstanceType)
+			if t == "" || seen[t] {
+				continue
+			}
+			seen[t] = true
+			typeNames = append(typeNames, ec2types.InstanceType(t))
+		}
+
+		// Batch into groups of 100.
+		batchSize := 100
+		for start := 0; start < len(typeNames); start += batchSize {
+			end := start + batchSize
+			if end > len(typeNames) {
+				end = len(typeNames)
+			}
+			batch := typeNames[start:end]
+			out, err := client.DescribeInstanceTypes(ctx, &ec2.DescribeInstanceTypesInput{
+				InstanceTypes: batch,
+			})
+			if err != nil {
+				p.log.Warn("aws: DescribeInstanceTypes failed; instance shapes will be absent",
+					"err", err)
+				break
+			}
+			for _, it := range out.InstanceTypes {
+				info := InstanceTypeInfo{}
+				if it.VCpuInfo != nil && it.VCpuInfo.DefaultVCpus != nil {
+					info.VCPU = float64(*it.VCpuInfo.DefaultVCpus)
+				}
+				if it.MemoryInfo != nil && it.MemoryInfo.SizeInMiB != nil {
+					info.MemoryGiB = float64(*it.MemoryInfo.SizeInMiB) / 1024.0
+				}
+				shapes[string(it.InstanceType)] = info
+			}
+		}
+	}
+
+	return volumes, addrOut.Addresses, instances, shapes, nil
 }
 
 // ec2Client returns a region-scoped EC2 API. Offline providers return a

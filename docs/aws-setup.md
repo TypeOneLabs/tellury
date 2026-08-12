@@ -16,6 +16,9 @@ organization-level scans.
 | `ec2:DescribeRegions` | Discover which regions the account has enabled. |
 | `ec2:DescribeVolumes` | List every EBS volume in a region (paginated). |
 | `ec2:DescribeAddresses` | List every Elastic IP in a region. |
+| `ec2:DescribeInstances` | List every EC2 instance in a region. Needed by any instance rule. |
+| `ec2:DescribeInstanceTypes` | Read each instance type's vCPU and memory. Used to judge whether a smaller size would fit; tellury reads these live rather than shipping a table that goes stale. |
+| `cloudwatch:GetMetricData` | Read instance CPU utilization. Without it, metric-dependent rules skip and say so. Note this call sits outside the CloudWatch free tier at $0.01 per 1,000 metrics requested — a scan needs tens of thousands of instances before that rounds to a cent. |
 | `pricing:GetProducts` | Load the live Price List catalogue. Without it every resource that needs a price is skipped as unpriced — there is no fallback table. |
 | `resource-explorer-2:Search` | Query the aggregator index to find which regions hold resources of the types the selected rules need, so the scan sweeps only those regions instead of every enabled region. Optional — when missing, the scan falls back to `DescribeRegions`. |
 
@@ -123,6 +126,9 @@ never produce a stale attribute or a wrong price.
         "ec2:DescribeRegions",
         "ec2:DescribeVolumes",
         "ec2:DescribeAddresses",
+        "ec2:DescribeInstances",
+        "ec2:DescribeInstanceTypes",
+        "cloudwatch:GetMetricData",
         "pricing:GetProducts",
         "resource-explorer-2:Search"
       ],
