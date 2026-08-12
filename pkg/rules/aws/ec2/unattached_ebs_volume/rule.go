@@ -298,7 +298,6 @@ func diskPricedComponents(sku, region, capRegion string, iopsPrice float64, iops
 	return comps
 }
 
-
 // includedIOPS and includedThroughputMBps are the provisioning each volume type
 // includes at no charge. AWS bills only what is provisioned ABOVE these, and a
 // volume reports its TOTAL provisioning, so charging the reported figure bills

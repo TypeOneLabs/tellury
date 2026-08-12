@@ -81,8 +81,26 @@ something real.
    test suite; one had a test asserting the wrong arithmetic.
 7. **Tag with an annotated message** saying what changed and who should upgrade, then push
    the branch and the tag.
-8. **Verify the tag from a clean clone**: build it, run its tests, and run the binary once.
-   That catches anything that only works because of untracked files in your working tree.
+8. **Watch the release workflow.** Pushing a `v*` tag runs `.github/workflows/release.yml`,
+   which re-runs the tests, extracts the matching `CHANGELOG.md` section via
+   `scripts/release-notes.sh`, and publishes cross-compiled archives plus `checksums.txt`
+   through goreleaser. The release notes are the changelog section, not a generated commit
+   list — if the section is missing the job fails rather than publishing empty notes.
+
+   Tagging stays manual on purpose. Steps 5 and 6 need real credentials and a real invoice,
+   so CI cannot run them, and a fully push-button release would quietly skip the two checks
+   that have caught every pricing defect in this project.
+9. **Verify the published artifact, not your working tree**: download the archive the release
+   actually serves and run it.
+
+   ```bash
+   curl -sSL https://github.com/TypeOneLabs/tellury/releases/latest/download/tellury_linux_amd64.tar.gz \
+     | tar xz tellury
+   ./tellury version   # must report the tag, not "dev"
+   ```
+
+   Archive names carry no version so the documented URL never goes stale; the binary
+   identifies itself instead. A binary reporting `dev` means the ldflags stamping broke.
 
 ## Licence
 

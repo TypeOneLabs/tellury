@@ -251,7 +251,7 @@ func TestRegionTier_Basic(t *testing.T) {
 	wantLeafEdges := map[graph.Ref][]graph.Ref{
 		"//compute.googleapis.com/projects/alpha/zones/us-central1-a/instances/web-0": {"projects/alpha/regions/us-central1"},
 		"//compute.googleapis.com/projects/alpha/zones/us-central1-a/disks/pd-0":      {"projects/alpha/regions/us-central1"},
-		"//storage.googleapis.com/alpha-data":                                          {"projects/alpha/regions/eu"},
+		"//storage.googleapis.com/alpha-data":                                         {"projects/alpha/regions/eu"},
 	}
 	for leaf, want := range wantLeafEdges {
 		if got := containsTargets(gr, leaf); !reflect.DeepEqual(got, want) {
@@ -497,7 +497,7 @@ func TestRegionTier_MultiProjectIsolation(t *testing.T) {
 				Version:  "v1",
 				Parent:   "//cloudresourcemanager.googleapis.com/projects/34968801978",
 				Location: "us-central1-a",
-				Data: json.RawMessage(`{"name":"` + disk + `","sizeGb":100,"status":"READY"}`),
+				Data:     json.RawMessage(`{"name":"` + disk + `","sizeGb":100,"status":"READY"}`),
 			},
 		}
 	}

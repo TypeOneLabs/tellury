@@ -1,9 +1,9 @@
 package cli
 
 import (
-	"github.com/TypeOneLabs/tellury/pkg/cloud"
 	"bytes"
 	"context"
+	"github.com/TypeOneLabs/tellury/pkg/cloud"
 	"path/filepath"
 	"strings"
 	"testing"

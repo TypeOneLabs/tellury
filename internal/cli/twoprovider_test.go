@@ -1,10 +1,10 @@
 package cli
 
 import (
-	"path/filepath"
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 

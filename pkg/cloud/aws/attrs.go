@@ -59,10 +59,10 @@ const (
 
 // Instance lifecycle and provisioning model values, re-exported for the rules.
 const (
-	LifecycleSpot         = awsrules.LifecycleSpot
-	LifecycleScheduled    = awsrules.LifecycleScheduled
-	ProvisioningStandard  = awsrules.ProvisioningStandard
-	ProvisioningSpot      = awsrules.ProvisioningSpot
+	LifecycleSpot        = awsrules.LifecycleSpot
+	LifecycleScheduled   = awsrules.LifecycleScheduled
+	ProvisioningStandard = awsrules.ProvisioningStandard
+	ProvisioningSpot     = awsrules.ProvisioningSpot
 )
 
 // Asset-type tokens (provider's own "aws.<service>.<resource>" spelling).

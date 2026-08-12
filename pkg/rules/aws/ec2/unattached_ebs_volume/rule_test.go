@@ -12,8 +12,8 @@
 package unattached_ebs_volume
 
 import (
-	"math"
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -453,7 +453,7 @@ func TestCost_GP3BaselineIsNotBilled(t *testing.T) {
 			sizeGB: 100, iops: 4000, mbps: 200, want: 8 + 5 + 3,
 		},
 		{
-			name: "below the allowance is never negative",
+			name:   "below the allowance is never negative",
 			sizeGB: 10, iops: 1000, mbps: 50, want: 0.8,
 		},
 	}

@@ -1,0 +1,45 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history AND tags. goreleaser needs the tag to derive the
+          # version, and internal/buildinfo reads the toolchain's vcs.revision
+          # and vcs.time stamps, which a shallow clone does not carry.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      # The tag is cut by a human who has already run the checks CI cannot —
+      # the live pricing token pin needs real AWS credentials, and reconciling
+      # a figure needs a real invoice (see CONTRIBUTING.md). This job still
+      # re-runs the ordinary suite, because publishing binaries built from code
+      # whose tests were never run here would defeat the point.
+      - name: test
+        run: go test ./...
+
+      - name: release notes from CHANGELOG.md
+        run: |
+          ./scripts/release-notes.sh "${GITHUB_REF_NAME}" > /tmp/release-notes.md
+          echo "--- notes for ${GITHUB_REF_NAME} ---"
+          cat /tmp/release-notes.md
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean --release-notes=/tmp/release-notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

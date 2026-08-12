@@ -11,6 +11,18 @@ the arithmetic that produced its figure, and which price source answered.
 
 ## Quick start
 
+Download a binary from the [latest release](https://github.com/TypeOneLabs/tellury/releases/latest)
+— Linux, macOS and Windows, amd64 and arm64:
+
+```bash
+# Linux amd64; swap linux/amd64 for darwin/arm64 etc.
+curl -sSL https://github.com/TypeOneLabs/tellury/releases/latest/download/tellury_linux_amd64.tar.gz \
+  | tar xz tellury
+./tellury version
+```
+
+Each release also carries a `checksums.txt`. Or build from source, which needs Go 1.22+:
+
 ```bash
 git clone https://github.com/TypeOneLabs/tellury.git && cd tellury
 go build -o tellury ./cmd/tellury
@@ -171,13 +183,15 @@ go build -o tellury ./cmd/tellury
 go test ./...
 ```
 
-Version information comes from the Go toolchain's VCS stamps, so `tellury version` reports
-the commit a binary was built from.
+Version information comes from the Go toolchain's VCS stamps, so `tellury version` reports the
+commit a binary was built from. A locally built binary reports its version as `dev`; released
+binaries are stamped with their tag by the release workflow.
 
 ## Layout
 
 ```
 cmd/tellury/       CLI entry point
+scripts/          release helpers
 internal/cli/     command wiring, flags, output selection
 pkg/graph/        in-memory resource graph
 pkg/cloud/gcp/    Cloud Asset Inventory ingestion and normalization

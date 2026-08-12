@@ -1,0 +1,69 @@
+version: 2
+
+project_name: tellury
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: tellury
+    main: ./cmd/tellury
+    binary: tellury
+    # Pure Go, no cgo, so cross-compilation needs no toolchain or container.
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      # Only Version needs stamping. Commit and build time come from the Go
+      # toolchain's own VCS stamps (see internal/buildinfo), which is why the
+      # workflow checks out with fetch-depth: 0 — a shallow clone loses them.
+      #
+      # .Tag rather than .Version, because .Version strips the leading "v" and
+      # `tellury version` should report the tag an operator can actually look up.
+      - -s -w -X github.com/TypeOneLabs/tellury/internal/buildinfo.Version={{ .Tag }}
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: tellury
+    ids: [tellury]
+    # Deliberately NO version in the archive name, so that
+    #   releases/latest/download/tellury_linux_amd64.tar.gz
+    # always resolves to the newest build and the README command never goes
+    # stale. This repository has already shipped a quick start that was wrong
+    # for two releases; a URL that pins a version is the same trap. The binary
+    # still self-identifies: `tellury version` reports the tag it was built from.
+    name_template: >-
+      {{ .ProjectName }}_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+      - CHANGELOG.md
+
+checksum:
+  name_template: checksums.txt
+
+# The changelog is written by hand, and that is deliberate: a generated list of
+# commit subjects says what moved, not what an operator has to do about it. The
+# workflow extracts the matching CHANGELOG.md section and passes it as the
+# release notes, so the release page and the changelog cannot drift.
+changelog:
+  disable: true
+
+release:
+  draft: false
+  prerelease: auto
+  # Existing releases are not clobbered: the tag is cut by a human who has run
+  # the checks in CONTRIBUTING.md that CI cannot run (the live pricing token
+  # pin needs real credentials; reconciling a figure needs a real invoice).
+  mode: keep-existing
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"

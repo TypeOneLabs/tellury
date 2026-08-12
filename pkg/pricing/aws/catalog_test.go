@@ -783,13 +783,13 @@ func TestCatalogPricer_InstancePrice_FixtureFileEnvVar(t *testing.T) {
 // fixture-table SKU entries.
 func TestParseInstancePriceSKU(t *testing.T) {
 	cases := []struct {
-		sku               string
-		wantType, wantOS  string
+		sku              string
+		wantType, wantOS string
 	}{
 		{"t3.medium/Linux", "t3.medium", "Linux"},
 		{"t3.medium/Windows", "t3.medium", "Windows"},
 		{"m6i.xlarge/Linux", "m6i.xlarge", "Linux"},
-		{"t3.medium", "t3.medium", "Linux"},                     // no slash → default OS
+		{"t3.medium", "t3.medium", "Linux"}, // no slash → default OS
 		{"c7g.large/RHEL", "c7g.large", "RHEL"},
 		{"t3.medium/RHEL with spaces/SUSE", "t3.medium/RHEL with spaces", "SUSE"}, // last slash splits
 	}

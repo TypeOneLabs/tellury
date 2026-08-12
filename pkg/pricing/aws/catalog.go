@@ -39,7 +39,6 @@
 // recorded GetProducts response, so a rename by AWS fails the test before it
 // can silently degrade every lookup to the embedded table.
 //
-//
 // INSTANCE PRICING IS A SEPARATE, LAZY LOOKUP — NOT A PRELOAD. "Compute
 // Instance" is the largest product family in the AWS price list: every
 // instance type times every OS, tenancy, preinstalled software, license model

@@ -31,10 +31,10 @@ type Fixture struct {
 
 // RegionFixture holds one region's captured EC2 resources.
 type RegionFixture struct {
-	Volumes        []ec2types.Volume           `json:"volumes"`
-	Addresses      []ec2types.Address          `json:"addresses"`
-	Instances      []ec2types.Instance         `json:"instances"`
-	InstanceTypes  []ec2types.InstanceTypeInfo `json:"instance_types"`
+	Volumes       []ec2types.Volume           `json:"volumes"`
+	Addresses     []ec2types.Address          `json:"addresses"`
+	Instances     []ec2types.Instance         `json:"instances"`
+	InstanceTypes []ec2types.InstanceTypeInfo `json:"instance_types"`
 }
 
 // RegionNames returns the fixture's region keys, canonicalised through

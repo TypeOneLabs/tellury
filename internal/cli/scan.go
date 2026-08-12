@@ -291,14 +291,14 @@ func runScan(
 	// findings), and Duration is the wall clock elapsed since start — both
 	// measured by this scan, not by the renderer.
 	meta := output.Meta{
-		Scope:             scope.String(),
-		Provider:          cfg.Provider,
-		GeneratedAt:       now,
-		WindowDays:        cfg.WindowDays,
-		ResourcesScanned:  gr.ResourceNodeCount(),
-		RulesEvaluated:    len(selected),
-		ProjectsAnalyzed:  gr.ProjectContainerCount(),
-		Duration:          time.Since(start),
+		Scope:            scope.String(),
+		Provider:         cfg.Provider,
+		GeneratedAt:      now,
+		WindowDays:       cfg.WindowDays,
+		ResourcesScanned: gr.ResourceNodeCount(),
+		RulesEvaluated:   len(selected),
+		ProjectsAnalyzed: gr.ProjectContainerCount(),
+		Duration:         time.Since(start),
 		// Show the owner column whenever the SCOPE can hold more than one owner,
 		// not only when the resources found happen to span several.
 		//

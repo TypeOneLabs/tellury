@@ -108,7 +108,7 @@ func TestRuleRegistryContainsEveryRuleAllImports(t *testing.T) {
 			parts := strings.Split(imp, "/")
 			if len(parts) >= 3 {
 				prov := parts[len(parts)-3] // e.g. "aws" or "gcp"
-				svc := parts[len(parts)-2]   // e.g. "ec2" or "compute"
+				svc := parts[len(parts)-2]  // e.g. "ec2" or "compute"
 				if strings.EqualFold(r.Meta().Provider, prov) && strings.EqualFold(r.Meta().Service, svc) {
 					expectedIDs[r.Meta().ID] = true
 				}

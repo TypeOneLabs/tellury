@@ -1,8 +1,8 @@
 package output
 
 import (
-	"fmt"
 	"bytes"
+	"fmt"
 	"math"
 	"strings"
 	"testing"

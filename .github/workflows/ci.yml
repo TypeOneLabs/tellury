@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+
+      - name: build
+        run: go build ./...
+
+      - name: vet
+        run: go vet ./...
+
+      # No credentials, and none needed: every test that touches a live cloud
+      # API is opt-in behind an environment variable (TELLURY_AWS_LIVE_PRICE_TEST)
+      # and skips by default. Those are run by a human cutting a release — see
+      # CONTRIBUTING.md — precisely because CI cannot run them.
+      - name: test
+        run: go test -race ./...

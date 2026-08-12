@@ -197,7 +197,7 @@ func TestEval_RightsizeBranch_Fires(t *testing.T) {
 		t.Fatalf("finding for wrong resource: %s", f.ResourceID)
 	}
 
-	currentMonthly := 0.17 * pricing.HoursPerMonth  // $124.10
+	currentMonthly := 0.17 * pricing.HoursPerMonth    // $124.10
 	candidateMonthly := 0.085 * pricing.HoursPerMonth // $62.05
 	wantWaste := pricing.Round2(currentMonthly - candidateMonthly)
 	if f.MonthlyWasteUSD != wantWaste {

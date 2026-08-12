@@ -8,8 +8,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
 	orgtypes "github.com/aws/aws-sdk-go-v2/service/organizations/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/TypeOneLabs/tellury/pkg/cloud"
 )
@@ -70,7 +70,6 @@ func TestBuildOrgTree_RejectsMismatchedOrganization(t *testing.T) {
 		t.Errorf("an OU scan names no organization and must be accepted: %v", err)
 	}
 }
-
 
 // fakeSTS is an STS stand-in whose AssumeRole always fails, so a test can
 // prove the caller's own account is scanned WITHOUT one.
