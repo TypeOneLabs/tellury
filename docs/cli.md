@@ -32,13 +32,35 @@ Exactly one scope is required. Flags take precedence over environment variables.
 | `--gcp-project` | `TELLURY_GCP_PROJECT` | One project |
 | `--gcp-folder` | `TELLURY_GCP_FOLDER` | A folder and everything under it |
 | `--gcp-organization` | `TELLURY_GCP_ORGANIZATION` | An organization and everything under it |
+| `--aws-account` | `TELLURY_AWS_ACCOUNT` | One account |
+| `--aws-organizational-unit` | `TELLURY_AWS_ORGANIZATIONAL_UNIT` | An OU and every account under it |
+| `--aws-organization` | `TELLURY_AWS_ORGANIZATION` | An organization and every account in it |
 
-The scope is passed to Cloud Asset Inventory's `SearchAllResources` as its parent. Scanning
-a folder or organization builds the whole hierarchy from that one result — no separate
-Resource Manager calls.
+Mixing the two providers' scope flags is a usage error: `--gcp-project` with `--aws-account`
+exits `2` asking for one provider at a time.
 
-`--provider` selects the cloud provider and defaults to `gcp`, which is the only one
-implemented. It exists because the scope flags are provider-specific.
+`--provider` is inferred from the scope flags and rarely needs setting; with no scope flags
+at all it defaults to `gcp`.
+
+**GCP.** The scope is passed to Cloud Asset Inventory's `SearchAllResources` as its parent.
+Scanning a folder or organization builds the whole hierarchy from that one result — no
+separate Resource Manager calls.
+
+**AWS.** An organization or OU scope is expanded through the Organizations API into the
+accounts beneath it, and each is scanned in turn. The caller's own account is scanned
+directly; every other account is reached by assuming a role in it (see `--aws-role-name`).
+An account that cannot be reached is reported in the account outcomes rather than failing
+the scan.
+
+### AWS-specific flags
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--aws-regions` | every region enabled for the account | Regions to sweep. An availability-zone form like `us-east-1a` is accepted and flattened to its region. |
+| `--aws-role-name` | `OrganizationAccountAccessRole` | IAM role to assume in member accounts during an organization or OU scan. |
+
+Narrowing `--aws-regions` is the single biggest lever on scan time: without it every enabled
+region is swept for every account in scope.
 
 ### Selecting rules
 
@@ -101,6 +123,10 @@ scan.
 `table` shows the ten largest findings and links to the HTML report for the rest. `json`
 and `csv` always contain every finding — they are consumed by other tools.
 
+The table carries an owner column — `ACCOUNT` on AWS, `PROJECT` on GCP — whenever the scope
+can hold more than one owner. A single `--aws-account` or `--gcp-project` scan omits it,
+since every finding belongs to the scope named on the command line.
+
 ### Offline input
 
 | Flag | Meaning |
@@ -157,6 +183,9 @@ enabled. It is a status channel independent of `--log-level`.
 | `TELLURY_GCP_PROJECT` | `--gcp-project` |
 | `TELLURY_GCP_FOLDER` | `--gcp-folder` |
 | `TELLURY_GCP_ORGANIZATION` | `--gcp-organization` |
+| `TELLURY_AWS_ACCOUNT` | `--aws-account` |
+| `TELLURY_AWS_ORGANIZATIONAL_UNIT` | `--aws-organizational-unit` |
+| `TELLURY_AWS_ORGANIZATION` | `--aws-organization` |
 | `TELLURY_CURRENCY` | `--currency` |
 | `TELLURY_PROGRESS` | `--progress` |
 
