@@ -310,7 +310,7 @@ func (t tableRenderer) renderSummary(w io.Writer, r Report, rule string, width i
 		field{"Evaluated", countPhrase(r.RulesEvaluated, "rule", "rules")},
 		field{"Total Waste", r.money(r.TotalMonthlyWasteUSD) + " / month"},
 		field{"Duration", formatDuration(r.Duration)},
-		field{"Artifacts", artifactsValue(r)},
+		field{"Artifacts", t.artifactsValue(r)},
 	)
 
 	for _, f := range fields {
@@ -520,13 +520,31 @@ func regionsValue(r Report) string {
 // Both are shown because they answer different questions — where everything
 // was written, and what to open. Neither was mentioned anywhere before unless
 // a scan produced more than ten findings.
-func artifactsValue(r Report) string {
+func (t tableRenderer) artifactsValue(r Report) string {
 	if r.ReportPath == "" {
 		return "-"
 	}
 	// Separated by a space, not a glyph: the wrapper breaks between tokens, so
 	// a "·" joiner became a line containing nothing but the joiner.
-	return shortenDir(filepath.Dir(r.ReportPath)) + " " + reportURL(r.ReportPath)
+	return shortenDir(filepath.Dir(r.ReportPath)) + " " + t.link(reportURL(r.ReportPath))
+}
+
+// link wraps a URL in an OSC 8 hyperlink so a terminal makes it clickable.
+//
+// Many terminals linkify http(s) but not file://, which is why the report URL
+// was printed correctly and still could not be opened. OSC 8 states the target
+// explicitly instead of hoping the terminal guesses, and is supported by VTE
+// (GNOME, Tilix), iTerm2, WezTerm, Windows Terminal and the VS Code terminal.
+//
+// It is an escape sequence, so it is gated on exactly the same condition as
+// colour: never emitted off a terminal, never into a pipe, never into JSON or
+// CSV. A terminal that does not understand OSC 8 ignores it and shows the URL
+// unchanged, which is the behaviour we already had.
+func (t tableRenderer) link(url string) string {
+	if !t.color {
+		return url
+	}
+	return "\033]8;;" + url + "\033\\" + url + "\033]8;;\033\\"
 }
 
 // shortenDir renders a path relative to the working directory when it lives

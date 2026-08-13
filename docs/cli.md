@@ -212,10 +212,16 @@ have the same meaning as on `scan`.
 enrichment, pricing catalogue, rule evaluation — on **stderr**:
 
 ```
-tellury: asset discovery: done (689ms, 17 resources)
-tellury: metric enrichment: done 6/6 fetches (1.263s, 3 projects)
-tellury: pricing catalogue: 1/2 services (7.977s)
+  ✔ asset discovery: done (689ms, 17 resources)
+  ✔ metric enrichment: done 6/6 fetches (1.263s, 3 projects)
+    pricing catalogue: 1/2 services (7.977s)
 ```
+
+On an interactive terminal each phase rewrites a single line from `started` to
+`done`, so three phases occupy three lines rather than scrolling. Off a terminal the
+same phases print as plain appended lines with `OK` in place of the tick — a
+carriage return in a redirected log or a CI console is noise, and a multi-byte
+glyph in a non-UTF-8 locale is mojibake.
 
 - `auto` (default) reports only when stderr is an interactive terminal.
 - `on` always reports; off a terminal it degrades to plain periodic lines and never emits

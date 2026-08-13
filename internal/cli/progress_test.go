@@ -54,7 +54,7 @@ func TestProgress_JSONPipeStillParses(t *testing.T) {
 	// stderr must carry the phase lines — that is the progress stream.
 	progress := errOut.String()
 	for _, phase := range []string{"asset discovery", "rule evaluation"} {
-		if !strings.Contains(progress, "tellury: "+phase+":") {
+		if !strings.Contains(progress, "    "+phase+":") {
 			t.Errorf("stderr must carry a %q progress phase line:\n%s", phase, progress)
 		}
 	}
@@ -141,9 +141,9 @@ func TestProgressPhase_ReportsDenominatorAndThrottles(t *testing.T) {
 
 	got := buf.String()
 	for _, want := range []string{
-		"tellury: metric enrichment: started\n",
-		"tellury: metric enrichment: 0/100 fetches (",
-		"tellury: metric enrichment: done 50/100 fetches (",
+		"    metric enrichment: started\n",
+		"    metric enrichment: 0/100 fetches (",
+		"metric enrichment: done 50/100 fetches (",
 		"2 projects)",
 	} {
 		if !strings.Contains(got, want) {

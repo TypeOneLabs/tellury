@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,6 +50,19 @@ type Progress struct {
 	enabled  bool
 	interval time.Duration
 	mu       sync.Mutex // guards the writer; taken only when a line prints
+
+	// live is true when the writer is an interactive terminal, in which case a
+	// phase rewrites ONE line in place with a carriage return instead of
+	// printing a line per update. Off a terminal the same phase prints plain
+	// appended lines: a redirected log or a CI console renders "\r" as
+	// garbage, and the operator who passed --progress=on to a file wants a
+	// readable record, not an animation.
+	live bool
+
+	// wrote records whether any line has been emitted, so the reporter can
+	// close with a blank line and leave the report visually separated from
+	// its own chatter.
+	wrote bool
 }
 
 // Enabled reports whether the reporter will emit lines.
@@ -65,7 +79,7 @@ func (p *Progress) Enabled() bool { return p != nil && p.enabled }
 //	              ANSI.
 //	off            : never report.
 func newProgress(w io.Writer, mode string) *Progress {
-	p := &Progress{w: w, interval: time.Second}
+	p := &Progress{w: w, interval: time.Second, live: isTerminal(w)}
 	switch mode {
 	case "on":
 		p.enabled = true
@@ -78,6 +92,28 @@ func newProgress(w io.Writer, mode string) *Progress {
 		p.enabled = isTerminal(w)
 	}
 	return p
+}
+
+// tick is the completion marker: a check mark where the locale can render one,
+// "OK" where it cannot. Mojibake in place of a tick is worse than two letters.
+func (p *Progress) tick() string {
+	if p != nil && p.live && utf8Locale() {
+		return "\u2714"
+	}
+	return "OK"
+}
+
+// utf8Locale reports whether the environment claims a UTF-8 locale. A Windows
+// console in a legacy code page, or a POSIX locale, renders multi-byte glyphs
+// as mojibake.
+func utf8Locale() bool {
+	for _, k := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+		if v := os.Getenv(k); v != "" {
+			return strings.Contains(strings.ToUpper(v), "UTF-8") ||
+				strings.Contains(strings.ToUpper(v), "UTF8")
+		}
+	}
+	return false
 }
 
 // isTerminal reports whether w is a character device — an interactive
@@ -157,7 +193,7 @@ func (ph *Phase) End(detail string) {
 	defer ph.prog.mu.Unlock()
 
 	total, done := ph.total.Load(), ph.done.Load()
-	line := fmt.Sprintf("tellury: %s: done", ph.label)
+	line := fmt.Sprintf("  %s %s: done", ph.prog.tick(), ph.label)
 	if total > 0 {
 		line += fmt.Sprintf(" %d/%d", done, total)
 		if ph.unit != "" {
@@ -168,8 +204,42 @@ func (ph *Phase) End(detail string) {
 	if detail != "" {
 		line += ", " + detail
 	}
-	line += ")\n"
-	fmt.Fprint(ph.prog.w, line)
+	line += ")"
+	ph.prog.writeLine(line, true)
+}
+
+// writeLine emits one status line. On an interactive terminal it rewrites the
+// current line in place, so a phase occupies one line from "started" to
+// "done" instead of scrolling several. Off a terminal it appends, because a
+// carriage return in a redirected log or a CI console is noise.
+//
+// The caller holds prog.mu.
+func (p *Progress) writeLine(line string, final bool) {
+	p.wrote = true
+	if !p.live {
+		fmt.Fprintln(p.w, line)
+		return
+	}
+	// \r returns to column 0; \033[K clears to end of line so a shorter line
+	// cannot leave the tail of a longer one behind.
+	fmt.Fprintf(p.w, "\r\033[K%s", line)
+	if final {
+		fmt.Fprintln(p.w)
+	}
+}
+
+// Close ends the progress sequence, leaving exactly one blank line between the
+// reporter's own output and the report that follows on stdout. Without it the
+// FINDINGS header butts directly against the last progress line.
+func (p *Progress) Close() {
+	if !p.Enabled() {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.wrote {
+		fmt.Fprintln(p.w)
+	}
 }
 
 // printStart emits the phase's opening line. It runs on the scan's own
@@ -177,7 +247,7 @@ func (ph *Phase) End(detail string) {
 func (ph *Phase) printStart() {
 	ph.prog.mu.Lock()
 	defer ph.prog.mu.Unlock()
-	fmt.Fprintf(ph.prog.w, "tellury: %s: started\n", ph.label)
+	ph.prog.writeLine(fmt.Sprintf("    %s: started", ph.label), false)
 }
 
 // print emits a throttled count line. Called only from Set's CAS winner; it
@@ -190,14 +260,14 @@ func (ph *Phase) print() {
 	elapsed := progressDuration(time.Since(ph.start))
 	if total > 0 {
 		if ph.unit != "" {
-			fmt.Fprintf(ph.prog.w, "tellury: %s: %d/%d %s (%s)\n",
-				ph.label, done, total, ph.unit, elapsed)
+			ph.prog.writeLine(fmt.Sprintf("    %s: %d/%d %s (%s)",
+				ph.label, done, total, ph.unit, elapsed), false)
 			return
 		}
-		fmt.Fprintf(ph.prog.w, "tellury: %s: %d/%d (%s)\n", ph.label, done, total, elapsed)
+		ph.prog.writeLine(fmt.Sprintf("    %s: %d/%d (%s)", ph.label, done, total, elapsed), false)
 		return
 	}
-	fmt.Fprintf(ph.prog.w, "tellury: %s: %d (%s)\n", ph.label, done, elapsed)
+	ph.prog.writeLine(fmt.Sprintf("    %s: %d (%s)", ph.label, done, elapsed), false)
 }
 
 // progressDuration renders a duration compactly for status lines: rounded to

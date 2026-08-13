@@ -57,9 +57,9 @@ func TestReadmeOutDirAndHTMLReport(t *testing.T) {
 
 	// The three artifacts a scan leaves behind.
 	for name := range map[string]bool{
-		"graph-projects-my-project.json":    true,
-		"findings-projects-my-project.json": true,
-		"report-projects-my-project.html":   true,
+		"graph.json":    true,
+		"findings.json": true,
+		"report.html":   true,
 	} {
 		st, err := os.Stat(filepath.Join(dir, name))
 		if err != nil || st.Size() == 0 {
@@ -68,7 +68,7 @@ func TestReadmeOutDirAndHTMLReport(t *testing.T) {
 	}
 
 	// The HTML must be self-contained: no src= or href= pointing anywhere.
-	html, err := os.ReadFile(filepath.Join(dir, "report-projects-my-project.html"))
+	html, err := os.ReadFile(filepath.Join(dir, "report.html"))
 	if err != nil {
 		t.Fatalf("read HTML report: %v", err)
 	}
