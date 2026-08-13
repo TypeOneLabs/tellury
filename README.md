@@ -40,11 +40,11 @@ export AWS_PROFILE=my-profile
 ```
 
 ```
-RESOURCE              RULE               MONTHLY WASTE
-volume/vol-0a1b2c3d   unattached_ebs_volume     $17.60
-address/203.0.113.42  unassociated_eip           $3.65
-------------------------------------------------------
-TOTAL                 2 findings                $21.25
+RESOURCE             RULE                  SEVERITY MONTHLY WASTE
+volume/vol-0a1b2c3d  unattached_ebs_volume MEDIUM        $17.60
+address/203.0.113.42 unassociated_eip      MEDIUM         $3.65
+---------------------------------------------------------------
+TOTAL                2 findings                          $21.25
 Summary: accounts/123456789012 — 1 account analyzed, 1 region analyzed (explicit), 5 resources scanned, 3 rules evaluated, 2 findings, 3 resources skipped, 8.1s
 ```
 
@@ -60,11 +60,11 @@ az login
 ```
 
 ```
-RESOURCE                 RULE                    MONTHLY WASTE
-address/orphan-ip        unassociated_public_ip          $3.65
-disk/orphan-disk         unattached_managed_disk         $1.54
--------------------------------------------------------------
-TOTAL                    2 findings                      $5.19
+RESOURCE          RULE                    SEVERITY MONTHLY WASTE
+address/orphan-ip unassociated_public_ip  MEDIUM          $3.65
+disk/orphan-disk  unattached_managed_disk MEDIUM          $1.54
+---------------------------------------------------------------
+TOTAL             2 findings                              $5.19
 Summary: subscriptions/0000... — 1 subscription analyzed, 3 resources scanned, 2 rules evaluated, 2 findings, 1 resource skipped, 2.1s
 ```
 
@@ -80,11 +80,11 @@ gcloud auth application-default login
 ```
 
 ```
-RESOURCE               RULE              MONTHLY WASTE
-disk/pd-standard-01    detached_disk             $8.00
-address/reserved-ip-01 unused_reserved_ip        $7.30
-------------------------------------------------------
-TOTAL                  2 findings               $15.30
+RESOURCE               RULE               SEVERITY MONTHLY WASTE
+disk/pd-standard-01    detached_disk      MEDIUM           $8.00
+address/reserved-ip-01 unused_reserved_ip MEDIUM           $7.30
+---------------------------------------------------------------
+TOTAL                  2 findings                         $15.30
 Summary: projects/my-project — 1 project analyzed, 2 resources scanned, 5 rules evaluated, 2 findings, 0 resources skipped, 2ms
 ```
 
@@ -102,13 +102,13 @@ across everything beneath it:
 ```
 
 ```
-RESOURCE               PROJECT       RULE              MONTHLY WASTE
-disk/old-cache         ml-training   detached_disk            $20.00
-disk/pd-standard-01    data-platform detached_disk             $8.00
-disk/scratch-disk      web-frontend  detached_disk             $8.00
-address/reserved-ip-01 data-platform unused_reserved_ip        $7.30
---------------------------------------------------------------------
-TOTAL                  4 findings                             $43.30
+RESOURCE               PROJECT       RULE               SEVERITY MONTHLY WASTE
+disk/old-cache         ml-training   detached_disk      MEDIUM          $20.00
+disk/pd-standard-01    data-platform detached_disk      MEDIUM           $8.00
+disk/scratch-disk      web-frontend  detached_disk      MEDIUM           $8.00
+address/reserved-ip-01 data-platform unused_reserved_ip MEDIUM           $7.30
+------------------------------------------------------------------------------
+TOTAL                  4 findings                                       $43.30
 Summary: organizations/123456789012 — 3 projects analyzed, 4 resources scanned, 5 rules evaluated, 4 findings, 0 resources skipped, 2ms
 ```
 

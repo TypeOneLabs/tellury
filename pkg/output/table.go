@@ -25,21 +25,34 @@ const maxTableFindings = 10
 
 // colMoney is the width of the right-aligned money column — exactly the width
 // of its header, "MONTHLY WASTE", so the header and the money share a right
-// edge. Unlike the variable columns (resource, project, rule), which are sized
-// to their widest displayed value for each scan, the money column is fixed so
-// the table's right edge never shifts with the amounts.
+// edge. Unlike the variable columns (resource, project, rule, severity), which
+// are sized to their widest displayed value for each scan, the money column is
+// fixed so the table's right edge never shifts with the amounts.
 const colMoney = 13
 
+// ANSI SGR sequences used by the table renderer. They are the 8 basic
+// foreground colours only, deliberately not bright, 256-colour or truecolour:
+// basic colours are remapped by terminal themes and stay legible on light and
+// dark backgrounds.
+const (
+	ansiReset  = "\x1b[0m"
+	ansiRed    = "\x1b[31m"
+	ansiGreen  = "\x1b[32m"
+	ansiYellow = "\x1b[33m"
+)
+
 // tableLayout is the per-scan column layout. The variable columns (resource,
-// project, rule) are sized to their widest displayed value, so a 30-character
-// GCP project ID or a long resource name is rendered in full — never
-// truncated — and can be copied straight into a gcloud command. A literal
-// space separates every variable column, so a value that fills its cell
-// (padded exactly at the boundary) can never run into the column to its right.
+// project, rule, severity) are sized to their widest displayed value, so a
+// 30-character GCP project ID or a long resource name is rendered in full —
+// never truncated — and can be copied straight into a gcloud command. A
+// literal space separates every variable column, so a value that fills its
+// cell (padded exactly at the boundary) can never run into the column to its
+// right.
 type tableLayout struct {
 	resource int
 	project  int // 0 for a single-project table (no PROJECT column)
 	rule     int
+	severity int
 	money    int
 }
 
@@ -51,6 +64,7 @@ func layoutTable(r Report, display []rules.Finding) tableLayout {
 	l := tableLayout{
 		resource: runeLen("RESOURCE"),
 		rule:     runeLen("RULE"),
+		severity: runeLen("SEVERITY"),
 		money:    colMoney,
 	}
 	if r.MultiProject {
@@ -68,6 +82,9 @@ func layoutTable(r Report, display []rules.Finding) tableLayout {
 		if n := runeLen(f.RuleID); n > l.rule {
 			l.rule = n
 		}
+		if n := runeLen(severityLabel(f.Severity)); n > l.severity {
+			l.severity = n
+		}
 	}
 	return l
 }
@@ -75,7 +92,7 @@ func layoutTable(r Report, display []rules.Finding) tableLayout {
 // separatorWidth is the width of the dashed separator row — one full data
 // row: the variable columns, their separator spaces, and the money column.
 func (l tableLayout) separatorWidth() int {
-	w := l.resource + 1 + l.rule + l.money
+	w := l.resource + 1 + l.rule + 1 + l.severity + 1 + l.money
 	if l.project > 0 {
 		w += 1 + l.project
 	}
@@ -87,13 +104,19 @@ func (l tableLayout) separatorWidth() int {
 // separator spaces included. The summary is not a project, so it must never
 // be squeezed into the PROJECT column's width.
 func (l tableLayout) totalSummaryWidth() int {
+	w := l.rule + 1 + l.severity + 1
 	if l.project > 0 {
-		return 1 + l.project + l.rule
+		w += 1 + l.project
 	}
-	return l.rule
+	return w
 }
 
-type tableRenderer struct{}
+// tableRenderer is the human table renderer. color is the only place colour
+// capability lives; jsonRenderer and csvRenderer have no colour field and no
+// colour code path.
+type tableRenderer struct {
+	color bool
+}
 
 func (tableRenderer) Format() string { return "table" }
 
@@ -101,7 +124,8 @@ func (t tableRenderer) Render(w io.Writer, r Report) error {
 	// Currency disclosure, before anything else: an operator reading non-USD
 	// figures must see which currency they are in and how it was decided
 	// before they read a single number. The default USD scan emits nothing,
-	// keeping its output byte-identical to the pre-currency build.
+	// keeping its output byte-identical to the pre-currency build. These
+	// lines stay plain in every mode.
 	if lines := currencyDisclosure(r); len(lines) > 0 {
 		for _, line := range lines {
 			if _, err := fmt.Fprintln(w, line); err != nil {
@@ -125,11 +149,20 @@ func (t tableRenderer) Render(w io.Writer, r Report) error {
 		// account produce identical data. Printing "No waste found" over
 		// zero scanned resources states a conclusion the scan did not reach.
 		msg := "No waste found."
+		code := ""
 		if r.ResourcesScanned == 0 {
 			msg = "No resources scanned — nothing was found to evaluate. " +
 				"Check the scope and the identity's permissions."
+			code = ansiYellow
+		} else if r.ScanStatus == StatusOK && len(r.MetricsBlocked) == 0 {
+			code = ansiGreen
+		} else {
+			code = ansiYellow
 		}
-		if _, err := fmt.Fprintln(w, msg); err != nil {
+		if !t.color {
+			code = ""
+		}
+		if _, err := fmt.Fprintln(w, paint(code, msg)); err != nil {
 			return err
 		}
 	} else {
@@ -138,21 +171,23 @@ func (t tableRenderer) Render(w io.Writer, r Report) error {
 		display := tableFindings(r)
 		layout := layoutTable(r, display)
 
+		severityHeader := fmt.Sprintf("%-*s", layout.severity, "SEVERITY")
+
 		if r.MultiProject {
-			if err := writeRowProject(w, layout, "RESOURCE", r.ownerLabel(), "RULE", "MONTHLY WASTE"); err != nil {
+			if err := writeRowProject(w, layout, "RESOURCE", r.ownerLabel(), "RULE", severityHeader, "MONTHLY WASTE"); err != nil {
 				return err
 			}
 			for _, f := range display {
-				if err := writeRowProject(w, layout, f.Resource, f.Project, f.RuleID, r.money(f.MonthlyWasteUSD)); err != nil {
+				if err := writeRowProject(w, layout, f.Resource, f.Project, f.RuleID, t.paintSeverity(layout, f.Severity), r.money(f.MonthlyWasteUSD)); err != nil {
 					return err
 				}
 			}
 		} else {
-			if err := writeRow(w, layout, "RESOURCE", "RULE", "MONTHLY WASTE"); err != nil {
+			if err := writeRow(w, layout, "RESOURCE", "RULE", severityHeader, "MONTHLY WASTE"); err != nil {
 				return err
 			}
 			for _, f := range display {
-				if err := writeRow(w, layout, f.Resource, f.RuleID, r.money(f.MonthlyWasteUSD)); err != nil {
+				if err := writeRow(w, layout, f.Resource, f.RuleID, t.paintSeverity(layout, f.Severity), r.money(f.MonthlyWasteUSD)); err != nil {
 					return err
 				}
 			}
@@ -231,6 +266,57 @@ func (t tableRenderer) Render(w io.Writer, r Report) error {
 		}
 	}
 	return nil
+}
+
+// severityLabel renders a finding severity as the uppercase text the SEVERITY
+// column displays in both colour and monochrome modes. Colour is redundant
+// with this text, never a replacement for it.
+func severityLabel(s rules.Severity) string {
+	switch s {
+	case rules.SeverityHigh:
+		return "HIGH"
+	case rules.SeverityMedium:
+		return "MEDIUM"
+	case rules.SeverityLow:
+		return "LOW"
+	default:
+		return strings.ToUpper(string(s))
+	}
+}
+
+// severityCode maps severity to its basic ANSI foreground colour. LOW and any
+// unknown severity are deliberately plain: the absence of colour is part of
+// the severity signal.
+func severityCode(s rules.Severity) string {
+	switch s {
+	case rules.SeverityHigh:
+		return ansiRed
+	case rules.SeverityMedium:
+		return ansiYellow
+	default:
+		return ""
+	}
+}
+
+// paint wraps text in an SGR colour when code is non-empty, resetting
+// afterwards. A plain string passes through byte-for-byte.
+func paint(code, s string) string {
+	if code == "" {
+		return s
+	}
+	return code + s + ansiReset
+}
+
+// paintSeverity renders one severity cell. The plain text is padded FIRST, and
+// only the already-padded cell is wrapped in SGR: SGR sequences are zero-width
+// on a terminal but not zero-rune to fmt's width calculations, so an escape
+// sequence must never be placed inside a %-*s width argument.
+func (t tableRenderer) paintSeverity(l tableLayout, s rules.Severity) string {
+	cell := fmt.Sprintf("%-*s", l.severity, severityLabel(s))
+	if !t.color {
+		return cell
+	}
+	return paint(severityCode(s), cell)
 }
 
 // summaryLine renders the one-line scan summary: how much ground the scan
@@ -398,25 +484,27 @@ func countPhrase(n int, singular, plural string) string {
 	return fmt.Sprintf("%d %s", n, plural)
 }
 
-// writeRow emits one single-project row. A literal space separates the two
+// writeRow emits one single-project row. A literal space separates the three
 // variable columns so a value that fills its cell (padded exactly at the
 // boundary) can never touch its neighbour; the money column is right-aligned
 // at its fixed width.
-func writeRow(w io.Writer, l tableLayout, resource, rule, amount string) error {
-	_, err := fmt.Fprintf(w, "%-*s %-*s%*s\n",
+func writeRow(w io.Writer, l tableLayout, resource, rule, severity, amount string) error {
+	_, err := fmt.Fprintf(w, "%-*s %-*s %s %*s\n",
 		l.resource, resource,
 		l.rule, rule,
+		severity,
 		l.money, amount)
 	return err
 }
 
 // writeRowProject emits one multi-project row, with a literal space between
 // every variable column so no cell can touch its right-hand neighbour.
-func writeRowProject(w io.Writer, l tableLayout, resource, project, rule, amount string) error {
-	_, err := fmt.Fprintf(w, "%-*s %-*s %-*s%*s\n",
+func writeRowProject(w io.Writer, l tableLayout, resource, project, rule, severity, amount string) error {
+	_, err := fmt.Fprintf(w, "%-*s %-*s %-*s %s %*s\n",
 		l.resource, resource,
 		l.project, project,
 		l.rule, rule,
+		severity,
 		l.money, amount)
 	return err
 }
@@ -424,9 +512,9 @@ func writeRowProject(w io.Writer, l tableLayout, resource, project, rule, amount
 // writeTotalRow emits the TOTAL row: the "TOTAL" label in the resource cell,
 // the finding summary left-aligned in the full width of the columns left of
 // the money cell, and the total right-aligned in the money column. The summary
-// width (totalSummaryWidth) spans the project and rule columns, so "N
-// findings" is never truncated the way it was when squeezed into the PROJECT
-// column.
+// width (totalSummaryWidth) spans the project, rule and severity columns, so
+// "N findings" is never truncated the way it was when squeezed into the
+// PROJECT column.
 func writeTotalRow(w io.Writer, l tableLayout, label, summary, amount string) error {
 	_, err := fmt.Fprintf(w, "%-*s %-*s%*s\n",
 		l.resource, label,

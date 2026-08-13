@@ -49,8 +49,8 @@ TELLURY_PRICE_FIXTURE=pkg/pricing/gcp/testdata/price-fixture.json \
 ```
 
 ```
-RESOURCE            RULE         MONTHLY WASTE
-disk/pd-standard-01 detached_disk        $8.00
+RESOURCE            RULE          SEVERITY MONTHLY WASTE
+disk/pd-standard-01 detached_disk MEDIUM           $8.00
 ----------------------------------------------
 TOTAL               1 findings           $8.00
 Summary: projects/my-project — 1 project analyzed, 1 resource scanned, 5 rules evaluated, 1 finding, 0 resources skipped, 2ms

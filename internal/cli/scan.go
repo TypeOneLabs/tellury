@@ -97,6 +97,17 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 	return cmd
 }
 
+// isTableFormat reports whether a --format value resolves to the human table
+// renderer. The empty value is the default table format, matching output.For.
+func isTableFormat(format string) bool {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "", "table":
+		return true
+	default:
+		return false
+	}
+}
+
 // runScan is the whole pipeline, in order, with no hidden magic.
 // scopeSpansManyOwners reports whether the scan's scope can contain more than
 // one project, account, or subscription, and therefore whether a finding's
@@ -390,10 +401,18 @@ func runScan(
 
 	// 12. Render. Terminal output is byte-for-byte unchanged by the artifact
 	// writing above: artifact names are only logged to stderr, stdout gets the
-	// same table/JSON/CSV it always did.
-	renderer, err := output.For(cfg.Format)
-	if err != nil {
-		return newUsageError(err)
+	// same table/JSON/CSV it always did. Colour is resolved once, here, and
+	// only the human table renderer can carry it: jsonRenderer and csvRenderer
+	// have no colour field and no colour code path, so a --format json or
+	// --format csv stream can never be wrapped in ANSI escapes.
+	var renderer output.Renderer
+	if isTableFormat(cfg.Format) {
+		renderer = output.TableRenderer(colorEnabled(out, g.NoColor))
+	} else {
+		renderer, err = output.For(cfg.Format)
+		if err != nil {
+			return newUsageError(err)
+		}
 	}
 	if err := renderer.Render(out, report); err != nil {
 		return err

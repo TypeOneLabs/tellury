@@ -18,7 +18,7 @@ Every command, flag and exit code. For a short introduction see the
 | Flag | Default | Meaning |
 |---|---|---|
 | `--log-level` | `warn` | `error`, `warn`, `info`, `debug`. Diagnostics on stderr. |
-| `--no-color` | off | Accepted and ignored. `tellury` emits no ANSI colour on any stream, so there is nothing to disable; the flag is kept so scripts that pass it keep working. |
+| `--no-color` | off | Disable colour. Colour is off already unless stdout is a terminal, so this is for the case where it is one and you do not want it. `NO_COLOR` (any value) and `TERM=dumb` do the same. |
 | `--timeout` | `5m` | Overall deadline for the run, including every API call. |
 
 ## `tellury scan`
@@ -137,6 +137,17 @@ scan.
 
 `table` shows the ten largest findings and links to the HTML report for the rest. `json`
 and `csv` always contain every finding — they are consumed by other tools.
+
+**Colour.** On an interactive terminal the table colours the `SEVERITY` column only: red for
+high, yellow for medium, plain for low. Nothing else is coloured — money stays monochrome
+because a colour scale on a continuous value implies a threshold `tellury` does not have.
+Colour is always redundant: the severity words are printed either way, so a monochrome or
+colour-blind reader loses nothing.
+
+Colour switches itself off when stdout is not a terminal, so piped output, CI captures and
+anything an agent reads are byte-identical with or without it. `--no-color`, `NO_COLOR` and
+`TERM=dumb` disable it explicitly. `json` and `csv` are never coloured under any
+circumstances.
 
 The table carries an owner column — `ACCOUNT` on AWS, `PROJECT` on GCP — whenever the scope
 can hold more than one owner. A single `--aws-account` or `--gcp-project` scan omits it,

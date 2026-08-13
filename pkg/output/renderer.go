@@ -362,7 +362,10 @@ type Renderer interface {
 // Formats lists the supported --format values.
 var Formats = []string{"table", "json", "csv"}
 
-// For returns the renderer for a --format value.
+// For returns the renderer for a --format value. The table renderer returned
+// here is always plain: colour is a capability only the CLI enables via
+// TableRenderer after resolving the user's --no-color, NO_COLOR, TERM and TTY
+// preferences. The JSON and CSV renderers have no colour field at all.
 func For(format string) (Renderer, error) {
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case "", "table":
@@ -374,6 +377,13 @@ func For(format string) (Renderer, error) {
 	default:
 		return nil, fmt.Errorf("invalid --format %q (want %s)", format, strings.Join(Formats, "|"))
 	}
+}
+
+// TableRenderer returns the human table renderer with colour enabled or
+// disabled. Only this renderer can carry colour; jsonRenderer and csvRenderer
+// are separate types with no colour field and no colour code path.
+func TableRenderer(color bool) Renderer {
+	return tableRenderer{color: color}
 }
 
 // money formats an amount in the report's currency with the fixed 2-dp
