@@ -15,6 +15,7 @@ import (
 const (
 	argTypeDisk     = "microsoft.compute/disks"
 	argTypePublicIP = "microsoft.network/publicipaddresses"
+	argTypeVM       = "microsoft.compute/virtualmachines"
 
 	serviceCompute = "microsoft.compute"
 	serviceNetwork = "microsoft.network"
@@ -29,6 +30,8 @@ func NormalizeResource(row map[string]any) *graph.Node {
 		return NormalizeDisk(row)
 	case argTypePublicIP:
 		return NormalizePublicIP(row)
+	case argTypeVM:
+		return NormalizeVM(row)
 	default:
 		return nil
 	}
@@ -166,6 +169,91 @@ func NormalizePublicIP(row map[string]any) *graph.Node {
 		n.SetAttr(AttrIPConfigurationCount, 1.0)
 		n.SetAttr(AttrIPConfiguration, cfg)
 	}
+
+	return n
+}
+
+// NormalizeVM converts one Microsoft.Compute/virtualMachines Resource Graph
+// row into an instance node. A row without an ARM resource `id` is dropped.
+// No VM hydration call is needed: the ARG `properties` object already carries
+// the hardware profile, power state, priority, OS type, creation time and
+// VMSS membership fields this normalizer reads.
+//
+// Attrs, named from the ARG row fields they came from:
+//
+//	resource_id                  — row.id (the ARM resource ID; also the node ID)
+//	resource_group               — row.resourceGroup
+//	subscription_id              — row.subscriptionId
+//	vm_size                      — row.properties.hardwareProfile.vmSize
+//	power_state_code             — row.properties.extended.instanceView.powerState.code
+//	priority                     — row.properties.priority; ALWAYS written,
+//	                               "" means regular/on-demand, "Spot" means spot
+//	os_type                      — row.properties.storageProfile.osDisk.osType
+//	time_created                 — row.properties.timeCreated
+//	virtual_machine_scale_set_id — row.properties.virtualMachineScaleSet.id;
+//	                               ALWAYS written, "" means standalone
+//
+// priority and virtual_machine_scale_set_id are load-bearing unconditional
+// writes: a regular standalone VM omits both ARM fields, and a missing attr
+// would be indistinguishable from "payload not parsed". Writing "" preserves
+// the distinction the existing normalizers apply to countable fields.
+func NormalizeVM(row map[string]any) *graph.Node {
+	id := stringOf(row["id"])
+	if id == "" {
+		return nil
+	}
+
+	subscriptionID := stringOf(row["subscriptionId"])
+	if subscriptionID == "" {
+		subscriptionID = subscriptionFromID(id)
+	}
+	location := locationRegion(stringOf(row["location"]))
+
+	n := &graph.Node{
+		ID:        graph.Ref(id),
+		Kind:      graph.KindInstance,
+		Name:      resourceName(row, id),
+		Provider:  "azure",
+		Service:   serviceCompute,
+		AssetType: TypeVM,
+		Project:   subscriptionID,
+		Location:  location,
+		Labels:    labelsOf(row["tags"]),
+		Attrs:     map[string]any{},
+	}
+
+	n.SetAttr(AttrResourceID, id)
+	n.SetAttr(AttrResourceGroup, stringOf(row["resourceGroup"]))
+	n.SetAttr(AttrSubscriptionID, subscriptionID)
+
+	properties := mapOf(row["properties"])
+
+	hardwareProfile := mapOf(properties["hardwareProfile"])
+	n.SetAttr(AttrVMSize, stringOf(hardwareProfile["vmSize"]))
+
+	extended := mapOf(properties["extended"])
+	instanceView := mapOf(extended["instanceView"])
+	powerState := mapOf(instanceView["powerState"])
+	n.SetAttr(AttrPowerState, stringOf(powerState["code"]))
+
+	// properties.priority is absent for a regular VM and "Spot" for a spot
+	// VM. Write it unconditionally so a not-spot guard reads a present value
+	// rather than inferring regular from a missing attribute.
+	n.SetAttr(AttrPriority, stringOf(properties["priority"]))
+
+	storageProfile := mapOf(properties["storageProfile"])
+	osDisk := mapOf(storageProfile["osDisk"])
+	n.SetAttr(AttrOSType, stringOf(osDisk["osType"]))
+
+	if created := stringOf(properties["timeCreated"]); created != "" {
+		n.SetAttr(AttrTimeCreated, created)
+	}
+
+	// A standalone VM has no properties.virtualMachineScaleSet object. Write
+	// the empty string for the same reason as priority: absence means
+	// "payload not parsed", while "" means "known standalone".
+	vmss := mapOf(properties["virtualMachineScaleSet"])
+	n.SetAttr(AttrVMSSID, stringOf(vmss["id"]))
 
 	return n
 }

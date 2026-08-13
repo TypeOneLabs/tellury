@@ -18,14 +18,19 @@ type resourceGraphAPI interface {
 
 // resourceGraphBaseQuery is the single Azure Resource Graph query used for
 // every Azure inventory scan. Resource Graph returns rule-ready fields for
-// both modelled resource types in the same row; no follow-up hydration call is
-// needed for Microsoft.Compute/disks or Microsoft.Network/publicIPAddresses.
+// all modelled resource types in the same row; no follow-up hydration call is
+// needed for Microsoft.Compute/disks, Microsoft.Network/publicIPAddresses or
+// Microsoft.Compute/virtualMachines.
 //
 // The query is deliberately a projection, not `project *`: it asks for the
 // exact columns the normalizers read, so a missing column fails a test instead
 // of silently producing an always-skipped rule.
 const resourceGraphBaseQuery = `resources
-| where type in~ ('microsoft.compute/disks', 'microsoft.network/publicipaddresses')
+| where type in~ (
+    'microsoft.compute/disks',
+    'microsoft.network/publicipaddresses',
+    'microsoft.compute/virtualmachines'
+  )
 | project id, name, type, location, resourceGroup, subscriptionId, sku, managedBy, tags, properties`
 
 // resourceGraphQuery builds the per-subscription ARG request. The query is

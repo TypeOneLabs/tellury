@@ -140,3 +140,97 @@ func TestNormalizePublicIP_UnassociatedWritesZeroCount(t *testing.T) {
 		t.Error("ip_configuration should be absent when unassociated")
 	}
 }
+
+func TestNormalizeVM_MapsARGFieldsAndWritesAbsentPriorityAndVMSS(t *testing.T) {
+	row := map[string]any{
+		"id":             "/subscriptions/sub-1/resourceGroups/rg-vm/providers/Microsoft.Compute/virtualMachines/vm-a",
+		"name":           "vm-a",
+		"type":           "microsoft.compute/virtualmachines",
+		"location":       "West Europe",
+		"resourceGroup":  "rg-vm",
+		"subscriptionId": "sub-1",
+		"tags":           map[string]any{"env": "test"},
+		"properties": map[string]any{
+			"hardwareProfile": map[string]any{
+				"vmSize": "Standard_D2as_v5",
+			},
+			"extended": map[string]any{
+				"instanceView": map[string]any{
+					"powerState": map[string]any{
+						"code": "PowerState/running",
+					},
+				},
+			},
+			"storageProfile": map[string]any{
+				"osDisk": map[string]any{
+					"osType": "Linux",
+				},
+			},
+			"timeCreated": "2024-01-02T03:04:05Z",
+		},
+	}
+
+	n := NormalizeVM(row)
+	if n == nil {
+		t.Fatal("NormalizeVM returned nil")
+	}
+	if n.Kind != graph.KindInstance {
+		t.Errorf("Kind = %s, want instance", n.Kind)
+	}
+	if n.AssetType != TypeVM {
+		t.Errorf("AssetType = %q, want %q", n.AssetType, TypeVM)
+	}
+	if n.Location != "westeurope" {
+		t.Errorf("Location = %q, want westeurope", n.Location)
+	}
+	if n.Project != "sub-1" {
+		t.Errorf("Project = %q, want sub-1", n.Project)
+	}
+	if got, ok := n.Str(AttrVMSize); !ok || got != "Standard_D2as_v5" {
+		t.Errorf("vm_size = %q, %v; want Standard_D2as_v5, true", got, ok)
+	}
+	if got, ok := n.Str(AttrPowerState); !ok || got != "PowerState/running" {
+		t.Errorf("power_state_code = %q, %v; want PowerState/running, true", got, ok)
+	}
+	if got, ok := n.Str(AttrPriority); !ok || got != "" {
+		t.Errorf("priority = %q, %v; want empty-but-present for a regular VM", got, ok)
+	}
+	if got, ok := n.Str(AttrOSType); !ok || got != "Linux" {
+		t.Errorf("os_type = %q, %v; want Linux, true", got, ok)
+	}
+	if got, ok := n.Str(AttrTimeCreated); !ok || got != "2024-01-02T03:04:05Z" {
+		t.Errorf("time_created = %q, %v; want 2024-01-02T03:04:05Z, true", got, ok)
+	}
+	if got, ok := n.Str(AttrVMSSID); !ok || got != "" {
+		t.Errorf("virtual_machine_scale_set_id = %q, %v; want empty-but-present for a standalone VM", got, ok)
+	}
+}
+
+func TestNormalizeVM_SpotVMSSWritesBothValues(t *testing.T) {
+	row := map[string]any{
+		"id":             "/subscriptions/sub-1/resourceGroups/rg-vm/providers/Microsoft.Compute/virtualMachines/vm-spot",
+		"name":           "vm-spot",
+		"type":           "microsoft.compute/virtualmachines",
+		"location":       "westeurope",
+		"resourceGroup":  "rg-vm",
+		"subscriptionId": "sub-1",
+		"properties": map[string]any{
+			"hardwareProfile": map[string]any{"vmSize": "Standard_D2as_v5"},
+			"priority":        "Spot",
+			"virtualMachineScaleSet": map[string]any{
+				"id": "/subscriptions/sub-1/resourceGroups/rg-vm/providers/Microsoft.Compute/virtualMachineScaleSets/vmss-a",
+			},
+		},
+	}
+
+	n := NormalizeVM(row)
+	if n == nil {
+		t.Fatal("NormalizeVM returned nil")
+	}
+	if got, ok := n.Str(AttrPriority); !ok || got != "Spot" {
+		t.Errorf("priority = %q, %v; want Spot, true", got, ok)
+	}
+	if got, ok := n.Str(AttrVMSSID); !ok || got != "/subscriptions/sub-1/resourceGroups/rg-vm/providers/Microsoft.Compute/virtualMachineScaleSets/vmss-a" {
+		t.Errorf("virtual_machine_scale_set_id = %q, %v; want the VMSS ARM id, true", got, ok)
+	}
+}

@@ -1,6 +1,7 @@
 package azure
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -41,11 +42,15 @@ func loadFixtureEntries(path string) ([]retailFixtureEntry, error) {
 type StaticPricer struct {
 	entries []retailFixtureEntry
 
-	mu    sync.Mutex
-	cache map[skuKey]resolvedSKU
+	mu      sync.Mutex
+	cache   map[skuKey]resolvedSKU
+	vmCache map[vmPriceKey]resolvedSKU
 }
 
-var _ pricing.Pricer = (*StaticPricer)(nil)
+var (
+	_ pricing.Pricer = (*StaticPricer)(nil)
+	_ VMPricer       = (*StaticPricer)(nil)
+)
 
 // NewStaticPricerFromFile loads recorded Retail Prices API responses from the
 // given JSON file. The file format is the recorded-response fixture format
@@ -59,6 +64,7 @@ func NewStaticPricerFromFile(path string) (*StaticPricer, error) {
 	return &StaticPricer{
 		entries: entries,
 		cache:   map[skuKey]resolvedSKU{},
+		vmCache: map[vmPriceKey]resolvedSKU{},
 	}, nil
 }
 
@@ -100,6 +106,45 @@ func (p *StaticPricer) UnitPrice(kind pricing.Kind, provider, sku, region string
 	p.cache[key] = res
 	p.mu.Unlock()
 	return res.unitPrice, res.region, nil
+}
+
+// VMPrice resolves one recorded VM size/region/OS row with the same filter
+// table and unit normalization as the live CatalogPricer.
+func (p *StaticPricer) VMPrice(_ context.Context, region, size, osType string) (float64, error) {
+	region = LocationRegion(region)
+	osType = normalizeVMOSType(osType)
+	key := vmPriceKey{size: size, region: region, osType: osType}
+
+	filters, err := vmPriceFilters(region, size, osType)
+	if err != nil {
+		return 0, err
+	}
+
+	p.mu.Lock()
+	if res, ok := p.vmCache[key]; ok {
+		p.mu.Unlock()
+		return res.unitPrice, nil
+	}
+	p.mu.Unlock()
+
+	var rows []retailItem
+	for _, entry := range p.entries {
+		page, err := parseRetailPage(entry.Body)
+		if err != nil {
+			continue
+		}
+		rows = append(rows, page.Items...)
+	}
+
+	res, ok := selectPrice(rows, filters, pricing.KindVMInstance)
+	if !ok {
+		return 0, pricing.ErrNoPrice
+	}
+
+	p.mu.Lock()
+	p.vmCache[key] = res
+	p.mu.Unlock()
+	return res.unitPrice, nil
 }
 
 // MonthlyCost is a convenience wrapper: price * quantity, using UnitPrice.
