@@ -2,7 +2,7 @@
 
 Contributions are welcome. There's no CLA and nothing to sign — open a pull request.
 
-Rules are the most useful thing you can add. `tellury` ships three, and the interesting ones
+Rules are the most useful thing you can add. `tellury` ships eleven, and the interesting ones
 are the thousands nobody has written yet: every team knows a way their cloud bill leaks that
 no vendor dashboard catches. The rule interface exists to make those easy to write.
 

@@ -1,0 +1,111 @@
+{
+  "subscriptions": {
+    "sub-vm": {
+      "resources": [
+        {
+          "id": "/subscriptions/sub-vm/resourceGroups/rg-vm/providers/Microsoft.Compute/virtualMachines/vm-a",
+          "name": "vm-a",
+          "type": "microsoft.compute/virtualmachines",
+          "location": "West Europe",
+          "resourceGroup": "rg-vm",
+          "subscriptionId": "sub-vm",
+          "tags": {
+            "env": "test"
+          },
+          "properties": {
+            "hardwareProfile": {
+              "vmSize": "Standard_D2as_v5"
+            },
+            "extended": {
+              "instanceView": {
+                "powerState": {
+                  "code": "PowerState/running"
+                }
+              }
+            },
+            "priority": "",
+            "storageProfile": {
+              "osDisk": {
+                "osType": "Linux"
+              }
+            },
+            "timeCreated": "2024-01-02T03:04:05Z"
+          }
+        }
+      ]
+    }
+  },
+  "resource_skus": {
+    "sub-vm": [
+      {
+        "resourceType": "virtualMachines",
+        "name": "Standard_D2as_v5",
+        "family": "standardDasv5Family",
+        "locations": [
+          "westeurope",
+          "eastus"
+        ],
+        "capabilities": [
+          {
+            "name": "vCPUs",
+            "value": "2"
+          },
+          {
+            "name": "MemoryGB",
+            "value": "8"
+          }
+        ]
+      },
+      {
+        "resourceType": "virtualMachines",
+        "name": "Standard_D4as_v5",
+        "family": "standardDasv5Family",
+        "locations": [
+          "westeurope"
+        ],
+        "capabilities": [
+          {
+            "name": "vCPUs",
+            "value": "4"
+          },
+          {
+            "name": "MemoryGB",
+            "value": "16"
+          }
+        ]
+      },
+      {
+        "resourceType": "virtualMachines",
+        "name": "Standard_D8as_v5",
+        "family": "standardDasv5Family",
+        "locations": [
+          "eastus"
+        ],
+        "capabilities": [
+          {
+            "name": "vCPUs",
+            "value": "8"
+          },
+          {
+            "name": "MemoryGB",
+            "value": "32"
+          }
+        ]
+      },
+      {
+        "resourceType": "virtualMachines",
+        "name": "Standard_D2as_v5_broken",
+        "family": "standardDasv5Family",
+        "locations": [
+          "westeurope"
+        ],
+        "capabilities": [
+          {
+            "name": "vCPUs",
+            "value": "2"
+          }
+        ]
+      }
+    ]
+  }
+}

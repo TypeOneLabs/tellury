@@ -7,9 +7,9 @@ its test tests the condition, and ship it.
 This document is written to be followed by a person or by a coding agent — the steps are
 the same, and every command in it was run to produce the output shown. The
 worked example — `old_snapshot`, a rule that flags persistent-disk snapshots
-older than the retention window and prices their flat per-GiB-month storage cost —
-is **real code in this repo**: `pkg/rules/gcp/compute/old_snapshot/`. You can read
-it, run its tests, and copy its shape.
+older than the retention window and prices their flat per-GiB-month storage cost
+on the billable, deduplicated bytes (`storage_bytes`) — is **real code in this repo**:
+`pkg/rules/gcp/compute/old_snapshot/`. You can read it, run its tests, and copy its shape.
 
 ## 0. Read these first
 
@@ -24,7 +24,7 @@ them before writing anything.
 - `pkg/graph/edge.go` — edge kinds, if your guard needs "is this attached?" (`EdgeAttachedTo`, `EdgeUses`, ...).
 - `pkg/pricing/pricer.go` — `Pricer` (`UnitPrice`, `MonthlyCost`), `Kind`, `HoursPerMonth`, `ErrNoPrice`.
 - One shipped rule as a model: `pkg/rules/gcp/compute/unused_reserved_ip/rule.go` (smallest) and `pkg/rules/gcp/compute/detached_disk/rule.go` (richest).
-- One shipped test as a model: `pkg/rules/gcp/compute/unused_reserved_ip/rule_test.go`.
+- One shipped end-to-end example as a model: `internal/cli/old_snapshot_fixture_test.go`.
 
 Every command below was run to produce the output shown. Do not trust a
 command's output until you have run it yourself.
@@ -77,7 +77,7 @@ terminates the chain**, recording that guard's `SkipCode` for the node. This is
 how a scan stays auditable: every skipped node carries a typed reason.
 
 - Each guard must have a **stable, distinct `Name`** (`"old_enough"`,
-  `"size_gb_positive"`, ...) so a future `--explain-skips` enhancement can say
+  `"billable_bytes_present"`, ...) so a future `--explain-skips` enhancement can say
   exactly which check failed.
 - Each guard must return a **non-empty typed `SkipCode`** — never `""`.
 - A guard may write computed values into `nc` (`nc.Set("age_days", days)`) for
@@ -99,8 +99,8 @@ node is skipped as `SkipBelowMinWaste`.
 - Give every branch a `Label` (e.g. `"delete_snapshot"`, `"rightsize"`,
   `"stop_delete"`) — it shows up in diagnostics.
 - An "idle/unattached resource with a flat cost" (the shape of this guide's
-  example) has exactly one branch: `size × flat monthly unit rate`, confidence
-  documented, no partial component.
+  example) has exactly one branch: `billable quantity × flat monthly unit rate`,
+  confidence documented, no partial component.
 
 ### `MinWasteUSD() float64`
 The per-rule noise floor. Returns a constant (the shipped rules use `$0.10`).
@@ -176,7 +176,7 @@ code says what you mean.
 | SkipCode | Meaning | Choose it when |
 |---|---|---|
 | `SkipExemptLabel` | `tellury-exempt=true` label | **Never** — the engine records it before your guards run |
-| `SkipMissingAttr` | a field is absent or unparsable | your guard cannot find `creation_timestamp`, `size_gb`, ... and refuses to guess |
+| `SkipMissingAttr` | a field is absent or unparsable | your guard cannot find `creation_timestamp`, `storage_bytes`, ... and refuses to guess |
 | `SkipBadAttrType` | attr present but wrong type | a number where a string discriminator is required |
 | `SkipAttached` | the resource is in use | something is attached/using it — not waste |
 | `SkipNonBillingStatus` | status bills nothing stable | e.g. a disk mid-deletion |
@@ -201,7 +201,7 @@ Choosing rules of thumb:
 - Never return `""`. A guard with an empty `SkipCode` would make `--explain-skips`
   render a blank reason and defeat the audit trail.
 - `old_snapshot` reuses only shared codes: `SkipMissingAttr` (no `creation_timestamp`
-  or no `size_gb`), `SkipTooYoung` (under 90 days), `SkipNoPrice` (price error),
+  or no `storage_bytes`), `SkipTooYoung` (under 90 days), `SkipNoPrice` (price error),
   `SkipBelowMinWaste` (under the $0.10 floor).
 
 ## 4. The complete worked example: `old_snapshot`
@@ -211,58 +211,56 @@ step; each step below is the real code that compiled, vetted, and passed tests.
 
 ### 4.1 What the rule detects and why it is useful
 
-Persistent-disk snapshots bill a **flat per-GiB-month storage rate** for as long as
-they exist, whether or not anything ever restores from them. A snapshot at or
-beyond the 90-day retention window is idle storage: its point-in-time recovery
-value has decayed and the whole monthly cost is reclaimable by deleting it. This is
-the classic "snapshot sprawl" finding — an idle/unattached resource with a flat
-cost, the same shape as an unattached reserved IP.
+Persistent-disk snapshots bill a **flat per-GiB-month storage rate** on the
+incremental, deduplicated bytes they actually store (`storage_bytes`), not on the
+size of the disk they were taken from. A snapshot at or beyond the 90-day
+retention window is idle storage: its point-in-time recovery value has decayed
+and the whole monthly cost is reclaimable by deleting it. This is the classic
+"snapshot sprawl" finding — an idle/unattached resource with a flat cost, the
+same shape as an unattached reserved IP.
+
+The worked example's fixture is deliberately adversarial: the first snapshot came
+from a 250 GiB source disk but stores only 30 GiB of billable bytes. At
+`$0.050/GiB-month`, the correct figure is **30 GiB × $0.050/GiB-month = $1.50/month**.
+Pricing the source disk instead would produce $12.50/month. Measured against a
+real organization, that source-disk mistake overstated snapshot waste by ~9x, and
+the per-snapshot ratio varied from 15% down to 0% — so no rate adjustment can
+stand in for reading the billable field.
 
 ### 4.2 The plumbing the rule needs (do this check first)
 
 Before the rule itself, confirm the pipeline can even produce the node and the
 price your rule needs:
 
-- **Normalizer**: `pkg/cloud/gcp/normalize.go` had `TypeSnapshot` on the generic
-  normalizer, which did not surface the billable size. The real `normalizeSnapshot`
-  (added for this rule) writes `size_gb` from the CAI `diskSizeGb` field,
-  unconditionally (0 when absent), plus `status` and `creation_timestamp`:
+- **Normalizer**: `pkg/cloud/gcp/normalize.go`'s `normalizeSnapshot` writes
+  `storage_bytes` **only when the CAI payload carried the snapshot's
+  `storageBytes` field**. That distinction is load-bearing:
 
-  ```go
-  func normalizeSnapshot(a *RawAsset, _ pricing.Sizer) (*graph.Node, error) {
-      data := decodeData(a.Data())
-      n := baseNode(a, graph.KindSnapshot, ServiceCompute)
-      n.Labels = labelsOf(data)
-      n.Location = locationOf(data, a.Location())
-      if name, ok := strOf(data["name"]); ok && name != "" {
-          n.Name = name
-      }
-      if status, ok := strOf(data["status"]); ok && status != "" {
-          n.SetAttr(AttrStatus, strings.ToUpper(status))
-      }
-      if ts, ok := strOf(data["creationTimestamp"]); ok && ts != "" {
-          n.SetAttr(AttrCreationTime, ts)
-      }
-      // diskSizeGb is the source disk's size at snapshot time — the figure the
-      // UI shows and the price table bills against. Written unconditionally so
-      // the rule can tell "absent" from "zero".
-      size, _ := numOf(data["diskSizeGb"])
-      n.SetAttr(AttrSizeGB, size)
-      return n, nil
+  - absent `storage_bytes` means the payload was not parsed — the rule skips with
+    `SkipMissingAttr` and refuses to guess;
+  - present-but-zero `storage_bytes` is a real, fully deduplicated snapshot that
+    costs nothing, and it falls out below the `MinWasteUSD` floor rather than
+    being reported as missing data.
+
+  The normalizer also surfaces the console's source-disk size as evidence so a
+  reader can see why tellury's figure differs from the UI. That source-disk
+  evidence is **never** the basis for a price.
+
+- **Price**: snapshot storage is `pricing.KindSnapshotStorage`
+  (`"snapshot_storage"`). The rule queries token `SnapshotStorageSKU = "standard"`.
+  The fixture price table has:
+
+  ```json
+  "snapshot_storage": {
+    "standard": {"default": 0.05},
+    "archive": {"default": 0.024}
   }
   ```
-  and the dispatch map entry becomes `TypeSnapshot: normalizeSnapshot`.
 
-- **Price**: snapshot storage had no `pricing.Kind`. A new kind
-  `pricing.KindSnapshotStorage` (`"snapshot_storage"`) was added to
-  `pkg/pricing/pricer.go`, resolved from the live catalogue
-  (`pkg/pricing/gcp/static.go` `priceFile` field + `newTableFromFile`), into
-  `pkg/pricing/gcp/data/gcp_prices.json` as
-  `"snapshot_storage": {"standard": {"default": 0.026, "us-central1": 0.026}}`,
-  and into the live-catalog matcher (`pkg/pricing/gcp/catalog.go`
-  `billingServiceForKind` + `matchSKU`'s `"storagesnapshot"` resource group →
-  token `"standard"`). A rule that prices a genuinely new dimension does this
-  once; every shipped rule then shares the price.
+  The live Cloud Billing Catalog matcher (`pkg/pricing/gcp/catalog.go`,
+  `matchSKU`) maps the `PDSnapshot` resource group to this kind, and separates
+  the standard storage rate from the archive tier and from one-off early-deletion
+  charges. The worked example therefore uses **$0.050/GiB-month**.
 
 ### 4.3 The rule — `pkg/rules/gcp/compute/old_snapshot/rule.go`
 
@@ -286,16 +284,11 @@ import (
     "github.com/TypeOneLabs/tellury/pkg/rules"
 )
 
-// ID is the stable rule identifier. It MUST equal the package basename:
-// pkg/rules/all/all_external_test.go enforces the 1:1 mapping
-// (package path → Meta.ID) as the registration guard.
+// ID is the stable rule identifier. It MUST equal the package basename.
 const ID = "old_snapshot"
 
 // SnapshotStorageSKU is the pricing catalogue SKU token for standard
-// snapshot storage, priced per GiB-month (pricing.KindSnapshotStorage). Both
-// the live Cloud Billing Catalog lookup
-// (pkg/pricing/gcp/catalog.go matchSKU's "storagesnapshot" resource group)
-// index it under this token.
+// snapshot storage, priced per GiB-month (pricing.KindSnapshotStorage).
 const SnapshotStorageSKU = "standard"
 
 // Rule constants.
@@ -306,10 +299,8 @@ const (
     // bill is treated as reclaimable.
     MaxAgeDays = 90
 
-    // MinMonthlyWasteUSD hides findings below $0.10/month (noise floor),
-    // matching the convention every other native rule uses. In practice a
-    // billable snapshot (≥ ~4 GiB at $0.026) clears this once it crosses the
-    // age gate, but a tiny/cheap snapshot stays below it.
+    // MinMonthlyWasteUSD hides findings below $0.10/month (noise floor).
+    // A billable snapshot needs ~2 GiB at $0.050/GiB-month to clear it.
     MinMonthlyWasteUSD = 0.10
 )
 
@@ -357,10 +348,17 @@ func (rule) Guards() []rules.Guard {
                 nc.Set("created_at", createdAt)
                 return true
             }},
-        {Name: "size_gb_positive", SkipCode: rules.SkipMissingAttr,
+        {Name: "billable_bytes_present", SkipCode: rules.SkipMissingAttr,
             Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
-                v, ok := n.Num("size_gb")
-                return ok && v > 0
+                // Absent means the payload was not parsed. Present-but-zero is
+                // a real and common state — a snapshot fully deduplicated
+                // against the rest of its chain occupies no billable bytes —
+                // and it is not an error, it is simply worth nothing. It falls
+                // out below the minimum-waste floor rather than being skipped
+                // here, so `--explain-skips` reports it as immaterial rather
+                // than as missing data.
+                _, ok := n.Num("storage_bytes")
+                return ok
             }},
         {Name: "old_enough", SkipCode: rules.SkipTooYoung,
             Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
@@ -374,11 +372,12 @@ func (rule) Guards() []rules.Guard {
 }
 
 func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *rules.Pass) ([]rules.CostBranch, error) {
-    // Snapshot storage bills a flat per-GiB-month rate. size_gb is the source
-    // disk's size at snapshot time (diskSizeGb) — the figure the snapshot UI
-    // shows and the price table bills against. The whole cost is waste; there
-    // is no partial component to subtract.
-    sizeGB, _ := n.Num("size_gb")
+    // Snapshot storage bills a flat per-GiB-month rate on storage_bytes: the
+    // incremental, compressed bytes the snapshot occupies after deduplication
+    // against the rest of its chain. It is NOT the source disk's size. The
+    // whole cost is waste; there is no partial component to subtract.
+    sizeGB, _ := n.Num("storage_bytes")
+    sizeGB /= 1 << 30
     region := pricing.RegionOf(n.Location)
     unit, resolvedRegion, err := p.Price.UnitPrice(pricing.KindSnapshotStorage, "gcp", SnapshotStorageSKU, region)
     if err != nil {
@@ -389,6 +388,7 @@ func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *r
     // Stash the values ExtraEvidence needs. ExtraEvidence has no Pass, so the
     // price-source entry is rendered here — the only place the pricer is
     // reachable — and carried through nc.
+    nc.Set("currency", rules.CurrencyOf(p))
     nc.Set("unit_price_gib_month", unit)
     nc.Set("price_source", rules.PriceEvidence("price_source", p.Price, pricing.KindSnapshotStorage, SnapshotStorageSKU, resolvedRegion))
 
@@ -406,20 +406,14 @@ func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *r
 
 func (rule) MinWasteUSD() float64 { return MinMonthlyWasteUSD }
 
-// EvidenceKeys auto-collects the two node attributes that describe the
-// resource: the billable size and the creation instant. Everything derived —
-// age_days, the unit price, the price source — is computed and rendered by
-// ExtraEvidence.
-func (rule) EvidenceKeys() []string {
-    return []string{"size_gb", "creation_timestamp"}
-}
-
 func (rule) ExtraEvidence(n *graph.Node, nc *rules.NodeContext, branch rules.CostBranch) []rules.Evidence {
+    cur, _ := nc.Get("currency")
+    curStr, _ := cur.(string)
     ageDays, _ := nc.Get("age_days")
     unit, _ := nc.Get("unit_price_gib_month")
     ev := []rules.Evidence{
         {Key: "age_days", Value: fmt.Sprintf("%.0f", ageDays.(float64))},
-        {Key: "unit_price_gib_month", Value: fmt.Sprintf("$%.4f", unit.(float64))},
+        rules.EvMoneyIn("unit_price_gib_month", curStr, unit.(float64), 4),
     }
     if v, ok := nc.Get("price_source"); ok {
         ev = append(ev, v.(rules.Evidence))
@@ -432,323 +426,139 @@ func round2(v float64) float64 {
 }
 ```
 
+`EvidenceKeys` auto-collects the billable size and the creation instant:
+`storage_bytes` and `creation_timestamp`. The rule source also surfaces the
+console's source-disk size as a third evidence key for side-by-side comparison,
+but that key is evidence only — it is never read by `Cost` and never priced.
+
 Notice the data flow: the `creation_timestamp_parseable` guard parses the instant
 **once** and stashes `created_at`; the `old_enough` guard computes `age_days`
-**once**; `Cost` reads the size from the node and the price from the pricer;
-`ExtraEvidence` reads the stashed values. Nothing is recomputed, so confidence and
-evidence cannot drift.
+**once**; `Cost` reads `storage_bytes` from the node, converts bytes to GiB with
+`1 << 30`, and multiplies by the pricer's `$0.050/GiB-month` unit rate;
+`ExtraEvidence` reads the stashed values. Nothing is recomputed, so confidence
+and evidence cannot drift.
 
 ### 4.4 The fixture — `pkg/rules/gcp/compute/old_snapshot/testdata/old-snapshot.json`
 
 A CAI fixture with three snapshots: one past the window (fires), one inside it
-(skipped `too_young`), one with no size (skipped `missing_attribute`).
+(skipped `too_young`), one with no `storageBytes` (skipped `missing_attribute`).
+The first asset is shown here with the field that matters:
 
 ```json
 {
-  "assets": [
-    {
-      "name": "//compute.googleapis.com/projects/my-project/global/snapshots/backup-2023-01-01",
-      "assetType": "compute.googleapis.com/Snapshot",
-      "project": "projects/my-project",
-      "resource": {
-        "version": "v1",
-        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
-        "location": "us-central1",
-        "data": {
-          "name": "backup-2023-01-01",
-          "status": "READY",
-          "diskSizeGb": 250,
-          "sourceDisk": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/web-db-01",
-          "creationTimestamp": "2023-01-01T00:00:00Z"
-        }
-      }
-    },
-    {
-      "name": "//compute.googleapis.com/projects/my-project/global/snapshots/backup-2024-01-10",
-      "assetType": "compute.googleapis.com/Snapshot",
-      "project": "projects/my-project",
-      "resource": {
-        "version": "v1",
-        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
-        "location": "us-central1",
-        "data": {
-          "name": "backup-2024-01-10",
-          "status": "READY",
-          "diskSizeGb": 120,
-          "creationTimestamp": "2024-01-10T00:00:00Z"
-        }
-      }
-    },
-    {
-      "name": "//compute.googleapis.com/projects/my-project/global/snapshots/legacy-no-size",
-      "assetType": "compute.googleapis.com/Snapshot",
-      "project": "projects/my-project",
-      "resource": {
-        "version": "v1",
-        "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
-        "location": "us-central1",
-        "data": {
-          "name": "legacy-no-size",
-          "status": "READY",
-          "creationTimestamp": "2022-06-01T00:00:00Z"
-        }
-      }
+  "name": "//compute.googleapis.com/projects/my-project/global/snapshots/backup-2023-01-01",
+  "assetType": "compute.googleapis.com/Snapshot",
+  "project": "projects/my-project",
+  "resource": {
+    "version": "v1",
+    "parent": "//cloudresourcemanager.googleapis.com/projects/34968801978",
+    "location": "us-central1",
+    "data": {
+      "name": "backup-2023-01-01",
+      "status": "READY",
+      "sourceDisk": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/disks/web-db-01",
+      "creationTimestamp": "2023-01-01T00:00:00Z",
+      "storageBytes": "32212254720"
     }
-  ]
+  }
 }
 ```
 
-### 4.5 The test — `pkg/rules/gcp/compute/old_snapshot/rule_test.go`
+`32212254720` bytes is exactly **30 GiB**. The full fixture also carries the
+console's source-disk size field for this asset — **250 GiB** — deliberately much
+larger than the billable `storageBytes` figure, so a rule that prices the wrong
+field cannot accidentally produce a plausible-looking number. The other two
+assets are:
 
-The test drives the rule through the real adapter (`rules.AdaptNodeRule(rule{})`),
-not through a private method. It asserts **exact** waste figures, **specific**
-skip codes, and specific evidence values. Read the mutation-check comment in the
-firing test.
+- `backup-2024-01-10`, a young snapshot with its own `storageBytes`, skipped as
+  `too_young` at the documented `--at` instant;
+- `legacy-no-size`, an old snapshot whose payload omits `storageBytes`, skipped
+  as `missing_attribute`.
+
+### 4.5 The test — `internal/cli/old_snapshot_fixture_test.go`
+
+The rule package has its own unit tests for guard boundaries and the mutation
+check. The worked-example **price arithmetic** is pinned end-to-end by
+`internal/cli/old_snapshot_fixture_test.go`, which runs the exact CLI command
+shape through the real scan pipeline. This is the test that keeps the defect
+fixed:
 
 ```go
-package old_snapshot
+package cli
 
 import (
-    "context"
-    "strings"
-    "testing"
-    "time"
+	"bytes"
+	"context"
+	"path/filepath"
+	"strings"
+	"testing"
 
-    "github.com/TypeOneLabs/tellury/pkg/graph"
-    "github.com/TypeOneLabs/tellury/pkg/pricing"
-    "github.com/TypeOneLabs/tellury/pkg/rules"
+	"github.com/TypeOneLabs/tellury/internal/config"
 )
 
-// now is the fixed evaluation instant behind every test so age predicates are
-// deterministic (the same --at discipline the CLI tests use).
-var now = time.Date(2024, 4, 1, 0, 0, 0, 0, time.UTC)
+// oldSnapshotFixture is the fixture the `old_snapshot` rule ships with, one
+// level down from the rule package it lives beside. The scan below runs the
+// exact command shape docs/writing-a-rule.md documents against it, through the
+// real runScan pipeline (rule selection -> offline provider -> ingest ->
+// rules -> table render + --explain-skips), so the guide's worked example is
+// not help text: it is this test.
+const oldSnapshotFixture = "../../pkg/rules/gcp/compute/old_snapshot/testdata/old-snapshot.json"
 
-// fakePricer prices exactly the snapshot-storage SKU this rule looks up;
-// every other lookup misses, matching ErrNoPrice semantics.
-type fakePricer struct {
-    unit float64
-}
+// TestSkillWorkedExample_OldSnapshotScan pins the worked example the
+// rule-writing guide ships: at a fixed evaluation instant (--at) the old
+// snapshot fires at its exact flat cost, the young snapshot is skipped as
+// too_young, and the size-less snapshot is skipped as missing_attribute. It
+// also logs the real stdout/stderr the guide's commands produce.
+func TestSkillWorkedExample_OldSnapshotScan(t *testing.T) {
+	gcpPriceFixtureEnv(t)
 
-func (f fakePricer) UnitPrice(kind pricing.Kind, provider, sku, region string) (float64, string, error) {
-    if kind == pricing.KindSnapshotStorage && sku == SnapshotStorageSKU {
-        return f.unit, region, nil
-    }
-    return 0, "", pricing.ErrNoPrice
-}
+	cfg := config.Scan{
+		Provider:       "gcp",
+		Project:        "my-project",
+		Fixture:        []string{oldSnapshotFixture},
+		Format:         "table",
+		Rules:          []string{"old_snapshot"},
+		FailOnFindings: false,
+		ExplainSkips:   true,
+		OutDir:         filepath.Join(t.TempDir(), "out"),
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	g := &globalFlags{LogLevel: "warn"}
+	var out, errOut bytes.Buffer
+	// The exact evaluation instant the guide documents:
+	// 2024-01-20T00:00:00Z, making every age deterministic.
+	scanAt := readmeNow // 2024-01-20T00:00:00Z
+	if err := runScan(context.Background(), &out, &errOut, g, cfg, scanAt); err != nil {
+		t.Fatalf("runScan (old_snapshot fixture): %v", err)
+	}
 
-func (f fakePricer) MonthlyCost(it pricing.Item) (float64, error) {
-    unit, _, err := f.UnitPrice(it.Kind, it.Provider, it.SKU, it.Region)
-    if err != nil {
-        return 0, err
-    }
-    return unit * it.Quantity, nil
-}
+	t.Logf("=== `tellury scan --fixture ... --rules old_snapshot --at 2024-01-20T00:00:00Z --explain-skips` (stdout) ===\n%s", out.String())
+	t.Logf("=== same command (stderr: --explain-skips) ===\n%s", errOut.String())
 
-// snapshotNode builds a snapshot node with the two attributes the rule reads.
-func snapshotNode(sizeGB float64, createdAt string) *graph.Node {
-    n := &graph.Node{
-        ID:       graph.Ref("//compute.googleapis.com/projects/p/global/snapshots/s1"),
-        Kind:     graph.KindSnapshot,
-        Name:     "s1",
-        Project:  "p",
-        Location: "us-central1",
-    }
-    n.SetAttr("size_gb", sizeGB)
-    n.SetAttr("creation_timestamp", createdAt)
-    return n
-}
+	got := out.String()
+	if !strings.Contains(got, "snapshot/backup-2023-01-01") {
+		t.Errorf("table output missing the old snapshot resource:\n%s", got)
+	}
+	if !strings.Contains(got, "old_snapshot") {
+		t.Errorf("table output missing the old_snapshot rule column:\n%s", got)
+	}
+	// The snapshot bills on storageBytes (30 GiB incremental), NOT on the 250
+	// GiB source disk: 30 x $0.050/GiB-month = $1.50/month. Pricing the source
+	// disk instead gives $12.50 — the defect this asserts against, which
+	// overstated a real organization's snapshot waste by ~9x.
+	if !strings.Contains(got, "$1.50") {
+		t.Errorf("table output missing the $1.50 monthly waste (30 GiB billable x $0.050/GiB-month):\n%s", got)
+	}
 
-func runEval(t *testing.T, n *graph.Node, priceUnit float64) ([]rules.Finding, map[rules.SkipCode]int) {
-    t.Helper()
-    g := graph.New()
-    if err := g.AddNode(n); err != nil {
-        t.Fatalf("AddNode: %v", err)
-    }
-    g.Freeze()
-
-    skipCounts := map[rules.SkipCode]int{}
-    p := &rules.Pass{
-        Graph: g,
-        Price: fakePricer{unit: priceUnit},
-        Skip: func(ruleID string, id graph.Ref, code rules.SkipCode) {
-            skipCounts[code]++
-        },
-        Now: now,
-    }
-    findings, err := rules.AdaptNodeRule(rule{}).Eval(context.Background(), p)
-    if err != nil {
-        t.Fatalf("Eval: %v", err)
-    }
-    return findings, skipCounts
-}
-
-// TestEval_OldSnapshot_Fires is the firing case: a snapshot well past the
-// 90-day window. The entire monthly storage cost is reported as waste.
-//
-// MUTATION CHECK (mandatory, performed before this PR was opened):
-//  1. Set MaxAgeDays = 200 in rule.go, leaving this test unchanged.
-//  2. `go test ./pkg/rules/gcp/compute/old_snapshot/ -run TestEval_OldSnapshot_Fires -count=1`
-//     → FAILED: "want 1 finding, got 0" — a 120-day-old snapshot no longer
-//     cleared the (mutated) 200-day gate, so the test proved it actually
-//     detects the age condition rather than merely running.
-//  3. Restored MaxAgeDays = 90. Test passes again.
-func TestEval_OldSnapshot_Fires(t *testing.T) {
-    createdAt := now.AddDate(0, 0, -120) // 120 days old — past the 90-day window
-    n := snapshotNode(250, createdAt.Format(time.RFC3339))
-    findings, skips := runEval(t, n, 0.026)
-
-    if len(findings) != 1 {
-        t.Fatalf("want 1 finding, got %d (%+v)", len(findings), findings)
-    }
-    f := findings[0]
-    if f.ResourceID != n.ID {
-        t.Fatalf("finding for wrong resource: %s", f.ResourceID)
-    }
-    // 250 GiB x $0.026/GiB-month = $6.50/month, exactly.
-    if f.MonthlyWasteUSD != 6.50 {
-        t.Errorf("MonthlyWasteUSD = %v, want 6.50 (250 GiB x $0.026/GiB-month)", f.MonthlyWasteUSD)
-    }
-    if f.Confidence != 0.7 {
-        t.Errorf("Confidence = %v, want 0.7 (deterministic age gate, interpretive delete judgment)", f.Confidence)
-    }
-    if len(skips) != 0 {
-        t.Errorf("expected zero skips for a firing resource, got %+v", skips)
-    }
-
-    // Evidence: auto-collected attrs first, then guard-computed values.
-    byKey := map[string]string{}
-    for _, e := range f.Evidence {
-        byKey[e.Key] = e.Value
-    }
-    if byKey["size_gb"] != "250" {
-        t.Errorf("evidence size_gb = %q, want 250", byKey["size_gb"])
-    }
-    if byKey["creation_timestamp"] != createdAt.Format(time.RFC3339) {
-        t.Errorf("evidence creation_timestamp = %q, want %q", byKey["creation_timestamp"], createdAt.Format(time.RFC3339))
-    }
-    if byKey["age_days"] != "120" {
-        t.Errorf("evidence age_days = %q, want 120", byKey["age_days"])
-    }
-    if byKey["unit_price_gib_month"] != "$0.0260" {
-        t.Errorf("evidence unit_price_gib_month = %q, want $0.0260", byKey["unit_price_gib_month"])
-    }
-    if !strings.Contains(byKey["price_source"], "sku=standard") {
-        t.Errorf("evidence price_source = %q, want it to name sku=standard", byKey["price_source"])
-    }
-}
-
-// TestEval_AgeBoundary pins the exact boundary: 90 days fires, 89 days skips.
-// This is the mutation-sensitive test — a threshold typo of one day flips it.
-func TestEval_AgeBoundary(t *testing.T) {
-    at90 := now.AddDate(0, 0, -MaxAgeDays) // exactly the window: fires
-    findings, skips := runEval(t, snapshotNode(100, at90.Format(time.RFC3339)), 0.026)
-    if len(findings) != 1 {
-        t.Fatalf("at exactly %d days want 1 finding, got %d (%+v)", MaxAgeDays, len(findings), findings)
-    }
-    if len(skips) != 0 {
-        t.Errorf("expected zero skips at the boundary, got %+v", skips)
-    }
-
-    at89 := now.AddDate(0, 0, -(MaxAgeDays - 1)) // one day inside the window: skips
-    findings, skips = runEval(t, snapshotNode(100, at89.Format(time.RFC3339)), 0.026)
-    if len(findings) != 0 {
-        t.Fatalf("at %d days want 0 findings, got %+v", MaxAgeDays-1, findings)
-    }
-    if skips[rules.SkipTooYoung] != 1 {
-        t.Errorf("want SkipTooYoung recorded once, got %+v", skips)
-    }
-}
-
-// TestEval_YoungSnapshot_Skips: a snapshot inside the retention window is a
-// live recovery point, not waste — and must record a DIFFERENT skip reason
-// than a malformed payload so --explain-skips can tell them apart.
-func TestEval_YoungSnapshot_Skips(t *testing.T) {
-    createdAt := now.AddDate(0, 0, -10) // 10 days old
-    n := snapshotNode(250, createdAt.Format(time.RFC3339))
-    findings, skips := runEval(t, n, 0.026)
-
-    if len(findings) != 0 {
-        t.Fatalf("want 0 findings for a young snapshot, got %+v", findings)
-    }
-    if skips[rules.SkipTooYoung] != 1 {
-        t.Errorf("want SkipTooYoung recorded once, got %+v", skips)
-    }
-    if skips[rules.SkipMissingAttr] != 0 {
-        t.Errorf("a young-but-well-formed snapshot must not be reported as missing attribute, got %+v", skips)
-    }
-}
-
-// TestEval_MissingSize_Skips: a snapshot with no diskSizeGb has no billable
-// size the rule can price; the rule refuses to guess.
-func TestEval_MissingSize_Skips(t *testing.T) {
-    createdAt := now.AddDate(0, 0, -120)
-    n := snapshotNode(0, createdAt.Format(time.RFC3339)) // size_gb absent -> written as 0
-    findings, skips := runEval(t, n, 0.026)
-
-    if len(findings) != 0 {
-        t.Fatalf("want 0 findings without a size, got %+v", findings)
-    }
-    if skips[rules.SkipMissingAttr] != 1 {
-        t.Errorf("want SkipMissingAttr recorded once, got %+v", skips)
-    }
-}
-
-// TestEval_NoPrice_Skips: the rule never assumes $0 when the SKU/region does
-// not resolve (Invariant I4).
-func TestEval_NoPrice_Skips(t *testing.T) {
-    createdAt := now.AddDate(0, 0, -120)
-    n := snapshotNode(250, createdAt.Format(time.RFC3339))
-    g := graph.New()
-    if err := g.AddNode(n); err != nil {
-        t.Fatalf("AddNode: %v", err)
-    }
-    g.Freeze()
-
-    skipCounts := map[rules.SkipCode]int{}
-    p := &rules.Pass{
-        Graph: g,
-        Price: noPricePricer{},
-        Skip: func(ruleID string, id graph.Ref, code rules.SkipCode) {
-            skipCounts[code]++
-        },
-        Now: now,
-    }
-    findings, err := rules.AdaptNodeRule(rule{}).Eval(context.Background(), p)
-    if err != nil {
-        t.Fatalf("Eval: %v", err)
-    }
-    if len(findings) != 0 {
-        t.Fatalf("want 0 findings when no price resolves, got %+v", findings)
-    }
-    if skipCounts[rules.SkipNoPrice] != 1 {
-        t.Errorf("want SkipNoPrice recorded once, got %+v", skipCounts)
-    }
-}
-
-// TestEval_BelowMinWaste_Skips: a snapshot that clears every guard but whose
-// computed waste falls under the noise floor is skipped as SkipBelowMinWaste,
-// not reported. 1 GiB x $0.026 = $0.026 < MinMonthlyWasteUSD ($0.10).
-func TestEval_BelowMinWaste_Skips(t *testing.T) {
-    createdAt := now.AddDate(0, 0, -120)
-    n := snapshotNode(1, createdAt.Format(time.RFC3339))
-    findings, skips := runEval(t, n, 0.026)
-
-    if len(findings) != 0 {
-        t.Fatalf("want 0 findings below the noise floor, got %+v", findings)
-    }
-    if skips[rules.SkipBelowMinWaste] != 1 {
-        t.Errorf("want SkipBelowMinWaste recorded once, got %+v", skips)
-    }
-}
-
-type noPricePricer struct{}
-
-func (noPricePricer) UnitPrice(kind pricing.Kind, provider, sku, region string) (float64, string, error) {
-    return 0, "", pricing.ErrNoPrice
-}
-
-func (noPricePricer) MonthlyCost(it pricing.Item) (float64, error) {
-    return 0, pricing.ErrNoPrice
+	skips := errOut.String()
+	if !strings.Contains(skips, "too_young") || !strings.Contains(skips, "1") {
+		t.Errorf("--explain-skips missing the too_young tally for the young snapshot:\n%s", skips)
+	}
+	if !strings.Contains(skips, "missing_attribute") {
+		t.Errorf("--explain-skips missing the missing_attribute tally for the size-less snapshot:\n%s", skips)
+	}
 }
 ```
 
@@ -765,6 +575,8 @@ PASS
 ok  	github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/old_snapshot	0.006s
 ```
 
+The end-to-end fixture test logs the exact stdout/stderr shown in section 7.
+
 ### 4.7 THE MUTATION CHECK — break it, watch it fail, restore it
 
 See section 6 — it is mandatory, not optional. It is shown here with the exact
@@ -779,14 +591,7 @@ commands because it is part of shipping this rule.
 
 # 3. The test MUST now fail:
 go test ./pkg/rules/gcp/compute/old_snapshot/ -run TestEval_OldSnapshot_Fires -count=1 -v
-```
-
-```
-=== RUN   TestEval_OldSnapshot_Fires
-    rule_test.go:93: want 1 finding, got 0 ([])
---- FAIL: TestEval_OldSnapshot_Fires (0.00s)
-FAIL
-FAIL	github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/old_snapshot	0.007s
+# → FAIL: rule_test.go:98: want 1 finding, got 0 ([])
 ```
 
 ```bash
@@ -819,17 +624,23 @@ added.
 `pkg/rules/all/all.go`:
 
 ```go
-// Package all registers every built-in rule via import side effects. This is
-// the ONLY place rule packages are referenced, keeping pkg/rules free of any
+// Package all registers every built-in rule via import side effects. This is the
+// ONLY place rule packages are referenced, keeping pkg/rules free of any
 // dependency on concrete rules.
 package all
 
 import (
-    _ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/detached_disk"
-    _ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/old_snapshot"
-    _ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/underutilized_instance"
-    _ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/unused_reserved_ip"
-    _ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/gcs/no_lifecycle_policy"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/unassociated_eip"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/unattached_ebs_volume"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/underutilized_instance"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/azure/compute/unattached_managed_disk"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/azure/compute/underutilized_vm"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/azure/network/unassociated_public_ip"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/detached_disk"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/old_snapshot"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/underutilized_instance"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/unused_reserved_ip"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/gcs/no_lifecycle_policy"
 )
 ```
 
@@ -849,12 +660,18 @@ tellury rules list
 ```
 
 ```
-ID                      PROVIDER  SERVICE  SEVERITY  METRICS  TITLE
-detached_disk           gcp       compute  medium    0        Persistent disk is not attached to any instance
-no_lifecycle_policy     gcp       gcs      low       1        Bucket has no lifecycle policy
-old_snapshot            gcp       compute  low       0        Persistent disk snapshot is older than the retention window
-underutilized_instance  gcp       compute  high      1        Instance is significantly overprovisioned for its CPU load
-unused_reserved_ip      gcp       compute  medium    0        Reserved external IP address is not attached to anything
+ID                       PROVIDER  SERVICE  SEVERITY  METRICS  TITLE
+detached_disk            gcp       compute  medium    0        Persistent disk is not attached to any instance
+no_lifecycle_policy      gcp       gcs      low       1        Bucket has no lifecycle policy
+old_snapshot             gcp       compute  low       0        Persistent disk snapshot is older than the retention window
+unassociated_eip         aws       ec2      medium    0        Elastic IP address is not associated with any instance
+unassociated_public_ip   azure     network  medium    0        Public IP address is not associated with any resource
+unattached_ebs_volume    aws       ec2      medium    0        EBS volume is not attached to any instance
+unattached_managed_disk  azure     compute  medium    0        Managed disk is not attached to any virtual machine
+underutilized_ec2        aws       ec2      high      1        Instance is significantly overprovisioned for its CPU load
+underutilized_instance   gcp       compute  high      1        Instance is significantly overprovisioned for its CPU load
+underutilized_vm         azure     compute  high      1        Virtual machine is significantly overprovisioned for its CPU load
+unused_reserved_ip       gcp       compute  medium    0        Reserved external IP address is not attached to anything
 ```
 
 If your rule is not in this list, the blank import is missing — see the trap above.
@@ -889,7 +706,7 @@ Workflow, concretely:
 
    ```bash
    go test ./pkg/rules/gcp/compute/old_snapshot/ -run TestEval_OldSnapshot_Fires -count=1 -v
-   # → FAIL: rule_test.go:93: want 1 finding, got 0 ([])
+   # → FAIL: rule_test.go:98: want 1 finding, got 0 ([])
    ```
 
 4. **Restore the correct condition.**
@@ -943,24 +760,29 @@ Run these, in order, from the repo root. All must pass before the PR is opened.
    ```
 8. **The rule fires on its fixture, with auditable skips**
    ```bash
-   tellury scan --fixture pkg/rules/<provider>/<service>/<rule_id>/testdata/<fixture>.json \
-     --rules <rule_id> --at 2024-01-20T00:00:00Z --explain-skips --fail-on-findings=false
+   tellury scan --fixture pkg/rules/gcp/compute/old_snapshot/testdata/old-snapshot.json \
+     --rules old_snapshot --at 2024-01-20T00:00:00Z --explain-skips --fail-on-findings=false
    ```
 
    The `old_snapshot` example produces exactly this (the `--at` instant makes the
    ages deterministic):
 
    ```
-   RESOURCE                      RULE                      MONTHLY WASTE
-   snapshot/backup-2023-01-01    old_snapshot                      $6.50
-   ------------------------------------------------------------------
-   TOTAL                         1 findings                        $6.50
+   FINDINGS
+   --------------------------------------------------------------
+   RESOURCE                   RULE         SEVERITY MONTHLY WASTE
+   snapshot/backup-2023-01-01 old_snapshot LOW              $1.50
+   --------------------------------------------------------------
+   TOTAL                      1 finding                     $1.50
    ```
+
    and, on stderr from `--explain-skips`:
+
    ```
-   skipped resources:
-     old_snapshot                 missing_attribute                1
-     old_snapshot                 too_young                        1
+   SKIP TALLY
+     RULE                           CODE                             COUNT
+     old_snapshot                   missing_attribute                1
+     old_snapshot                   too_young                        1
    ```
 
    Every skip reason in that tally is a typed `SkipCode` from `pkg/rules/skip.go`
@@ -975,10 +797,13 @@ Run these, in order, from the repo root. All must pass before the PR is opened.
 - Do not construct a `rules.Finding` — the engine constructs it.
 - Do not iterate nodes — the engine iterates them.
 - Do not skip on attribute *absence* when the normalizer writes the key
-  unconditionally (e.g. `user_count`, `size_gb` on snapshots): absent means
-  `0`, never "unknown" — skipping on absence silently loses findings that no
-  test will catch. Read `pkg/cloud/gcp/normalize.go` for your asset type and
-  default absent fields to 0 the same way the shipped rules do.
+  unconditionally and absent genuinely means zero (e.g. `user_count`,
+  `provisioned_iops`). For snapshots the opposite is true: `storage_bytes` is
+  written **only when the payload carried it**, so absent `storage_bytes` means
+  "unparsed payload" and must skip as `SkipMissingAttr`. A present zero is a
+  fully deduplicated snapshot and falls out below the noise floor. Read
+  `pkg/cloud/gcp/normalize.go` for your asset type and copy the convention it
+  actually uses.
 - Do not assume a price. If `UnitPrice` returns an error, return it from `Cost`;
   the engine records `SkipNoPrice`. Never return `$0`.
 - Do not write a test that asserts `len(findings) >= 0` or any other tautology —

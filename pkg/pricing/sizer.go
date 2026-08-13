@@ -13,8 +13,19 @@ type Sizer interface {
 	Spec(machineType string) (MachineSpec, bool)
 	Family(machineType string) string
 	// Ladder returns every catalog member of a family, sorted ascending by
-	// (VCPU, MemoryGiB, Name). Deterministic; excludes the input itself.
+	// (VCPU, MemoryGiB, Name). Deterministic.
 	Ladder(family string) []MachineSpec
+}
+
+// RegionalSizer is the optional, additive capability a provider implements
+// when machine shape availability is regional (Azure Resource SKUs are). A
+// rule can ask for a candidate ladder in the VM's own region without breaking
+// the provider-neutral Sizer or the existing AWS/GCP implementers, which do
+// not implement this interface.
+type RegionalSizer interface {
+	Sizer
+	SpecInRegion(machineType, region string) (MachineSpec, bool)
+	LadderInRegion(family, region string) []MachineSpec
 }
 
 // MachineSpec is the vCPU/RAM shape of a machine type.

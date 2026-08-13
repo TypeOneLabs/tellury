@@ -78,9 +78,20 @@ things follow:
   organization is worse than an error.
 
 ```
-Summary: organizations/o-xxxxxxxxxx — 1 account analyzed, ...
-Account outcomes: 1 scanned
+SUMMARY
+--------------------------------------------------------------------------
+Scope          o-xxxxxxxxxx
+Scope ID       organizations/o-xxxxxxxxxx
+Status         ok
+Scanned        5 resources (4 skipped) across 2 accounts
+...
+
+COVERAGE
+Account outcomes: 1 scanned, 1 unreachable (AccessDenied assuming OrganizationAccountAccessRole)
 ```
+
+`Status` is `degraded` whenever an account could not be reached, so a partial scan is
+visible at a glance and in the JSON as `scan_status`, not only in the outcomes list.
 
 ## Resource Explorer and region narrowing
 
@@ -99,11 +110,16 @@ sweep.
 The scan summary tells you which path each account took:
 
 ```
-Summary: organizations/o-xxxxxxxxxx — 3 accounts analyzed, 4 regions analyzed (resource_explorer), ...
+SUMMARY
+--------------------------------------------------------------------------
+Scope          o-xxxxxxxxxx
+Scanned        41 resources across 3 accounts
+Regions        4 regions (resource_explorer)
+...
 ```
 
 The `(resource_explorer)` / `(describe_regions)` / `(explicit)` annotation
-appears after the region count in both the table summary line and the JSON
+appears after the region count in both the summary block and the JSON
 output (`region_source` field).
 
 ### Staleness

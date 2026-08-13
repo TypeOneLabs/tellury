@@ -68,5 +68,75 @@
       "NextPageLink": null,
       "Count": 1
     }
+  },
+  {
+    "name": "vm_standard_d2as_v5_swedencentral_linux",
+    "url": "https://prices.azure.com/api/retail/prices?$filter=armRegionName+eq+%27swedencentral%27+and+armSkuName+eq+%27Standard_D2as_v5%27+and+type+eq+%27Consumption%27+and+tierMinimumUnits+eq+0+and+startswith%28productName%2C%27Virtual+Machines%27%29+and+contains%28skuName%2C%27Spot%27%29+eq+false+and+contains%28skuName%2C%27Low+Priority%27%29+eq+false+and+contains%28meterName%2C%27Spot%27%29+eq+false+and+contains%28meterName%2C%27Low+Priority%27%29+eq+false+and+contains%28productName%2C%27Spot%27%29+eq+false+and+contains%28productName%2C%27Low+Priority%27%29+eq+false+and+contains%28productName%2C%27Windows%27%29+eq+false+and+contains%28skuName%2C%27Windows%27%29+eq+false+and+contains%28meterName%2C%27Windows%27%29+eq+false",
+    "body": {
+      "BillingCurrency": "USD",
+      "CustomerEntityId": "Default",
+      "CustomerEntityType": "Retail",
+      "Items": [
+        {
+          "currencyCode": "USD",
+          "tierMinimumUnits": 0.0,
+          "retailPrice": 0.092,
+          "unitPrice": 0.092,
+          "armRegionName": "swedencentral",
+          "location": "SE Central",
+          "effectiveStartDate": "2022-01-01T00:00:00Z",
+          "meterId": "0ef9fe9f-7a45-596d-905c-dc15a89559ad",
+          "meterName": "D2as v5",
+          "productId": "DZH318Z08W0T",
+          "skuId": "DZH318Z08W0T/008T",
+          "productName": "Virtual Machines Dasv5 Series",
+          "skuName": "Standard_D2as_v5",
+          "serviceName": "Virtual Machines",
+          "serviceId": "DZH313Z7MMC8",
+          "serviceFamily": "Compute",
+          "unitOfMeasure": "1 Hour",
+          "type": "Consumption",
+          "isPrimaryMeterRegion": true,
+          "armSkuName": "Standard_D2as_v5"
+        }
+      ],
+      "NextPageLink": null,
+      "Count": 1
+    }
+  },
+  {
+    "name": "vm_standard_d2as_v5_swedencentral_windows",
+    "url": "https://prices.azure.com/api/retail/prices?$filter=armRegionName+eq+%27swedencentral%27+and+armSkuName+eq+%27Standard_D2as_v5%27+and+type+eq+%27Consumption%27+and+tierMinimumUnits+eq+0+and+startswith%28productName%2C%27Virtual+Machines%27%29+and+contains%28productName%2C%27Windows%27%29+and+contains%28skuName%2C%27Spot%27%29+eq+false+and+contains%28skuName%2C%27Low+Priority%27%29+eq+false+and+contains%28meterName%2C%27Spot%27%29+eq+false+and+contains%28meterName%2C%27Low+Priority%27%29+eq+false+and+contains%28productName%2C%27Spot%27%29+eq+false+and+contains%28productName%2C%27Low+Priority%27%29+eq+false",
+    "body": {
+      "BillingCurrency": "USD",
+      "CustomerEntityId": "Default",
+      "CustomerEntityType": "Retail",
+      "Items": [
+        {
+          "currencyCode": "USD",
+          "tierMinimumUnits": 0.0,
+          "retailPrice": 0.184,
+          "unitPrice": 0.184,
+          "armRegionName": "swedencentral",
+          "location": "SE Central",
+          "effectiveStartDate": "2022-01-01T00:00:00Z",
+          "meterId": "5293d6e9-fc70-516d-97c0-4a9e2b87df9c",
+          "meterName": "D2as v5",
+          "productId": "DZH318Z08W0Q",
+          "skuId": "DZH318Z08W0Q/0095",
+          "productName": "Virtual Machines Dasv5 Series Windows",
+          "skuName": "Standard_D2as_v5",
+          "serviceName": "Virtual Machines",
+          "serviceId": "DZH313Z7MMC8",
+          "serviceFamily": "Compute",
+          "unitOfMeasure": "1 Hour",
+          "type": "Consumption",
+          "isPrimaryMeterRegion": true,
+          "armSkuName": "Standard_D2as_v5"
+        }
+      ],
+      "NextPageLink": null,
+      "Count": 1
+    }
   }
 ]

@@ -17,7 +17,7 @@ compiler; it is not required for a normal change.
 ## What this is
 
 A CLI that reads cloud inventory, builds an in-memory resource graph, and evaluates
-deterministic rules against it to find and price waste. GCP only so far. See the
+deterministic rules against it to find and price waste. GCP, AWS and Azure. See the
 [README](README.md) for the shape of it and [docs/](docs/) for reference material.
 
 ## Adding a rule

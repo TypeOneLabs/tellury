@@ -1,7 +1,6 @@
 package output
 
 import (
-	"bytes"
 	"strings"
 	"testing"
 
@@ -27,11 +26,12 @@ func TestTable_OwnerColumnIsAzureAware(t *testing.T) {
 		RulesEvaluated:       1,
 	}
 
-	var buf bytes.Buffer
-	if err := (tableRenderer{}).Render(&buf, report); err != nil {
-		t.Fatalf("Render(azure): %v", err)
+	got := renderTable(t, false, report)
+	lines := linesOf(got)
+	if len(lines) < 3 {
+		t.Fatalf("expected a table header line, got:\n%s", got)
 	}
-	header := strings.SplitN(buf.String(), "\n", 2)[0]
+	header := lines[2]
 	if !strings.Contains(header, "SUBSCRIPTION") {
 		t.Errorf("azure header = %q, want it to contain SUBSCRIPTION", header)
 	}

@@ -21,10 +21,20 @@ const (
 	AttrIPConfiguration          = azurerules.AttrIPConfiguration
 	AttrIPConfigurationCount     = azurerules.AttrIPConfigurationCount
 	AttrResourceID               = azurerules.AttrResourceID
+
+	AttrVMSize        = azurerules.AttrVMSize
+	AttrPowerState    = azurerules.AttrPowerState
+	AttrPriority      = azurerules.AttrPriority
+	AttrOSType        = azurerules.AttrOSType
+	AttrVMSSID        = azurerules.AttrVMSSID
+	AttrVCpuCount     = azurerules.AttrVCpuCount
+	AttrMemoryGiB     = azurerules.AttrMemoryGiB
+	AttrMachineFamily = azurerules.AttrMachineFamily
 )
 
 // Asset-type tokens (provider's own "azure.<service>.<resource>" spelling).
 const (
 	TypeDisk     = azurerules.TypeDisk
 	TypePublicIP = azurerules.TypePublicIP
+	TypeVM       = azurerules.TypeVM
 )

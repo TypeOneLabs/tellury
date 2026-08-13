@@ -68,8 +68,8 @@ func TestScanWritesArtifacts(t *testing.T) {
 		}
 		seen[d] = true
 
-		graphPath := filepath.Join(cfg.OutDir, d, "graph-projects-my-project.json")
-		findingsPath := filepath.Join(cfg.OutDir, d, "findings-projects-my-project.json")
+		graphPath := filepath.Join(cfg.OutDir, d, "graph.json")
+		findingsPath := filepath.Join(cfg.OutDir, d, "findings.json")
 		if st, err := os.Stat(graphPath); err != nil || st.Size() == 0 {
 			t.Fatalf("scan artifact missing graph snapshot %s: %v", graphPath, err)
 		}
@@ -112,7 +112,7 @@ func TestArtifactGraphIsReplayable(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("expected one scan directory, got %d", len(entries))
 	}
-	graphPath := filepath.Join(cfg.OutDir, entries[0].Name(), "graph-projects-my-project.json")
+	graphPath := filepath.Join(cfg.OutDir, entries[0].Name(), "graph.json")
 
 	// Round-trip through the exact loader --cache-file uses.
 	f, err := os.Open(graphPath)

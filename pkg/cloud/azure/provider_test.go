@@ -12,6 +12,7 @@ import (
 
 	"github.com/TypeOneLabs/tellury/pkg/cloud"
 	"github.com/TypeOneLabs/tellury/pkg/graph"
+	"github.com/TypeOneLabs/tellury/pkg/pricing"
 )
 
 func newTestLogger() *slog.Logger {
@@ -21,6 +22,15 @@ func newTestLogger() *slog.Logger {
 func loadTestFixture(t *testing.T) *Fixture {
 	t.Helper()
 	f, err := LoadFixture(filepath.Join("testdata", "azure-fixture.json"))
+	if err != nil {
+		t.Fatalf("LoadFixture: %v", err)
+	}
+	return f
+}
+
+func loadVMTestFixture(t *testing.T) *Fixture {
+	t.Helper()
+	f, err := LoadFixture(filepath.Join("testdata", "azure-vm-fixture.json"))
 	if err != nil {
 		t.Fatalf("LoadFixture: %v", err)
 	}
@@ -262,5 +272,84 @@ func TestIngest_TenantReportsUnreachableSubscription(t *testing.T) {
 	}
 	if statuses[1].Reason == "" {
 		t.Error("unreachable subscription must carry a reason")
+	}
+}
+
+// TestProvider_SizerIsWiredAndUsable pins the wiring that was missing on AWS:
+// Provider.Sizer() must return a real, usable Azure sizer, not nil. The
+// ladder logic is tested in sizer_test.go; this test is about the provider
+// seam — the CLI must be able to put the provider's sizer on the rules Pass.
+func TestProvider_SizerIsWiredAndUsable(t *testing.T) {
+	p, err := New(context.Background(),
+		WithOffline(),
+		WithFixture(loadVMTestFixture(t)),
+		WithLogger(newTestLogger()))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer p.Close()
+
+	sz := p.Sizer()
+	if sz == nil {
+		t.Fatal("Provider.Sizer() returned nil; the rightsizing branch would be unreachable in production")
+	}
+	regional, ok := sz.(pricing.RegionalSizer)
+	if !ok {
+		t.Fatalf("Provider.Sizer() = %T, want pricing.RegionalSizer", sz)
+	}
+
+	sc := cloud.Scope{Provider: "azure", Azure: &cloud.AzureScope{Subscription: "sub-vm"}}
+	gr, err := p.Ingest(context.Background(), sc, []string{TypeVM})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	vmID := graph.Ref("/subscriptions/sub-vm/resourceGroups/rg-vm/providers/Microsoft.Compute/virtualMachines/vm-a")
+	n, ok := gr.Node(vmID)
+	if !ok {
+		t.Fatalf("VM node %s missing", vmID)
+	}
+
+	if got, ok := n.Num(AttrVCpuCount); !ok || got != 2 {
+		t.Errorf("vcpu_count = %v, %v; want 2, true", got, ok)
+	}
+	if got, ok := n.Num(AttrMemoryGiB); !ok || got != 8 {
+		t.Errorf("memory_gib = %v, %v; want 8, true", got, ok)
+	}
+	if got, ok := n.Str(AttrMachineFamily); !ok || got != "standardDasv5Family" {
+		t.Errorf("machine_family = %q, %v; want standardDasv5Family, true", got, ok)
+	}
+
+	if spec, ok := sz.Spec("Standard_D2as_v5"); !ok || spec.VCPU != 2 {
+		t.Errorf("Sizer.Spec = %#v, %v; want the VM's shape", spec, ok)
+	}
+	ladder := regional.LadderInRegion("standardDasv5Family", "westeurope")
+	if len(ladder) != 2 || ladder[0].Name != "Standard_D2as_v5" || ladder[1].Name != "Standard_D4as_v5" {
+		t.Errorf("westeurope ladder = %v, want [Standard_D2as_v5 Standard_D4as_v5]", machineNames(ladder))
+	}
+}
+
+// TestVMRegions_ReadsTheARGTypeToken pins which type token the region filter
+// matches on. ARG rows carry "microsoft.compute/virtualmachines"; tellury's own
+// asset-type token is "azure.compute.vm". Matching the wrong one returns no
+// regions, which falls back to an unfiltered Resource SKUs call — every SKU in
+// every region, 52 seconds against a subscription holding one VM, and nothing
+// fails while it happens.
+func TestVMRegions_ReadsTheARGTypeToken(t *testing.T) {
+	rows := []map[string]any{
+		{"type": "microsoft.compute/virtualmachines", "location": "swedencentral"},
+		{"type": "microsoft.compute/virtualMachines", "location": "West Europe"}, // casing + display form
+		{"type": "microsoft.compute/disks", "location": "northeurope"},           // not a VM
+		{"type": "microsoft.compute/virtualmachines", "location": "swedencentral"},
+	}
+	got := vmRegions(rows)
+	want := []string{"swedencentral", "westeurope"}
+	if len(got) != len(want) {
+		t.Fatalf("vmRegions = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("vmRegions = %v, want %v", got, want)
+		}
 	}
 }

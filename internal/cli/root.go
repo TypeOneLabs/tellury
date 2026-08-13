@@ -63,7 +63,8 @@ func Execute() (int, error) {
 	}
 	pf := root.PersistentFlags()
 	pf.StringVar(&g.LogLevel, "log-level", "warn", "error|warn|info|debug")
-	pf.BoolVar(&g.NoColor, "no-color", false, "disable ANSI color")
+	pf.BoolVar(&g.NoColor, "no-color", false,
+		"disable ANSI colour in terminal output")
 	pf.DurationVar(&g.Timeout, "timeout", 5*time.Minute, "overall deadline")
 
 	root.AddCommand(

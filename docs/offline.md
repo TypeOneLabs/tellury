@@ -25,10 +25,24 @@ tellury scan --gcp-project my-project \
 ```
 
 ```
+FINDINGS
 No waste found.
-Summary: projects/my-project — 1 project analyzed, 1 resource scanned, 5 rules evaluated, 0 findings, 1 resource skipped, 2ms
 
-5 rule(s) could not be evaluated for lack of metric data: …
+SUMMARY
+--------------------------------------------------------------------------------
+Scope          my-project
+Scope ID       projects/my-project
+Status         ok
+Scanned        1 resource (1 skipped) across 1 project
+Evaluated      5 rules
+Total Waste    $0.00 / month
+Duration       2ms
+Artifacts      /home/you/tellury-out/scan-offline
+               file:///home/you/tellury-out/scan-offline/report.html
+
+COVERAGE
+2 rule(s) could not be evaluated for lack of metric data: no_lifecycle_policy, underutilized_instance
+(use --cache-file from a live `scan` or an enriched `graph export` to evaluate them)
 ```
 
 **EC2 instances are never priced offline.** `TELLURY_PRICE_FIXTURE` carries flat
@@ -49,12 +63,26 @@ TELLURY_PRICE_FIXTURE=pkg/pricing/gcp/testdata/price-fixture.json \
 ```
 
 ```
-RESOURCE            RULE         MONTHLY WASTE
-disk/pd-standard-01 detached_disk        $8.00
-----------------------------------------------
-TOTAL               1 findings           $8.00
-Summary: projects/my-project — 1 project analyzed, 1 resource scanned, 5 rules evaluated, 1 finding, 0 resources skipped, 2ms
+FINDINGS
+--------------------------------------------------------
+RESOURCE            RULE          SEVERITY MONTHLY WASTE
+disk/pd-standard-01 detached_disk MEDIUM           $8.00
+--------------------------------------------------------
+TOTAL               1 finding                      $8.00
 
+SUMMARY
+--------------------------------------------------------
+Scope          my-project
+Scope ID       projects/my-project
+Status         ok
+Scanned        1 resource across 1 project
+Evaluated      5 rules
+Total Waste    $8.00 / month
+Duration       2ms
+Artifacts      /home/you/tellury-out
+               file:///home/you/tellury-out/report.html
+
+COVERAGE
 2 rule(s) could not be evaluated for lack of metric data: no_lifecycle_policy, underutilized_instance
 (use --cache-file from a live `scan` or an enriched `graph export` to evaluate them)
 ```
@@ -134,12 +162,18 @@ Every scan — live, fixture or replay — writes a timestamped directory under 
 
 ```
 tellury-out/
-  projects-my-project-20260807T123456.789012345Z/
-    graph-projects-my-project.json      replayable snapshot
-    findings-projects-my-project.json   the findings, as --format json prints them
-    report-projects-my-project.html     self-contained HTML report
+  my-project-20260807T123456Z/
+    graph.json      replayable snapshot
+    findings.json   the findings, as --format json prints them
+    report.html     self-contained HTML report
 ```
 
-Consecutive runs never overwrite each other. The HTML report inlines its CSS and
+The directory is named for the scope's last segment — what you call the thing — and the
+time the scan started. Consecutive runs never overwrite each other: two scans of the same
+scope within one second get a numeric suffix.
+
+The scan prints this location in its `SUMMARY` block, as the output directory and the
+report as a clickable link, so the artifacts are not something you have to know about in
+advance. The HTML report inlines its CSS and
 JavaScript and fetches nothing at runtime, so it opens on a machine with no network and
 survives being emailed.

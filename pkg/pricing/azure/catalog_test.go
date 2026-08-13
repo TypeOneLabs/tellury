@@ -33,8 +33,8 @@ func loadFixtureEntriesT(t *testing.T) []retailFixtureEntry {
 	if err != nil {
 		t.Fatalf("loadFixtureEntries: %v", err)
 	}
-	if len(entries) != 2 {
-		t.Fatalf("recorded fixture has %d entries, want 2", len(entries))
+	if len(entries) != 4 {
+		t.Fatalf("recorded fixture has %d entries, want 4", len(entries))
 	}
 	return entries
 }
@@ -92,6 +92,40 @@ func TestCatalogPricer_StaticIPResolvesRecordedRate(t *testing.T) {
 	}
 }
 
+func TestCatalogPricer_VMPriceResolvesRecordedRate(t *testing.T) {
+	p := fixtureCatalog(t)
+
+	// Published Sweden Central Standard_D2as_v5 Linux rate: $0.092/hour.
+	// Source: https://prices.azure.com/api/retail/prices, recorded in
+	// testdata/retail-prices-recorded.json.
+	const publishedD2asV5SwedenCentralLinux = 0.092
+	unit, err := p.VMPrice(context.Background(), "swedencentral", "Standard_D2as_v5", "linux")
+	if err != nil {
+		t.Fatalf("VMPrice(linux): %v", err)
+	}
+	if unit != publishedD2asV5SwedenCentralLinux {
+		t.Errorf("VMPrice(linux) = %v, want %v (published Standard_D2as_v5 Linux hourly rate)", unit, publishedD2asV5SwedenCentralLinux)
+	}
+
+	// Windows must not silently fall back to the Linux row. The recorded
+	// Sweden Central Windows rate is $0.184/hour.
+	const publishedD2asV5SwedenCentralWindows = 0.184
+	unit, err = p.VMPrice(context.Background(), "swedencentral", "Standard_D2as_v5", "windows")
+	if err != nil {
+		t.Fatalf("VMPrice(windows): %v", err)
+	}
+	if unit != publishedD2asV5SwedenCentralWindows {
+		t.Errorf("VMPrice(windows) = %v, want %v (published Standard_D2as_v5 Windows hourly rate)", unit, publishedD2asV5SwedenCentralWindows)
+	}
+
+	// VMPrice returns the hourly figure; the rule applies the shared monthly
+	// convention, never a VM-specific one.
+	monthly := unit * pricing.HoursPerMonth
+	if monthly != 134.32 {
+		t.Errorf("monthly = %v, want 134.32 (0.184 * 730)", monthly)
+	}
+}
+
 func TestStaticPricer_ResolvesRecordedRates(t *testing.T) {
 	p, err := NewStaticPricerFromFile(fixturePath(t))
 	if err != nil {
@@ -115,6 +149,29 @@ func TestStaticPricer_ResolvesRecordedRates(t *testing.T) {
 	}
 }
 
+func TestStaticPricer_VMPriceResolvesRecordedRates(t *testing.T) {
+	p, err := NewStaticPricerFromFile(fixturePath(t))
+	if err != nil {
+		t.Fatalf("NewStaticPricerFromFile: %v", err)
+	}
+
+	unit, err := p.VMPrice(context.Background(), "swedencentral", "Standard_D2as_v5", "linux")
+	if err != nil {
+		t.Fatalf("StaticPricer VMPrice linux: %v", err)
+	}
+	if unit != 0.092 {
+		t.Errorf("linux VM = %v, want 0.092", unit)
+	}
+
+	unit, err = p.VMPrice(context.Background(), "swedencentral", "Standard_D2as_v5", "windows")
+	if err != nil {
+		t.Fatalf("StaticPricer VMPrice windows: %v", err)
+	}
+	if unit != 0.184 {
+		t.Errorf("windows VM = %v, want 0.184", unit)
+	}
+}
+
 func TestCatalogPricer_UnresolvableSkips(t *testing.T) {
 	p := fixtureCatalog(t)
 
@@ -132,6 +189,13 @@ func TestCatalogPricer_UnresolvableSkips(t *testing.T) {
 		if _, _, err := p.UnitPrice(tc.kind, "azure", tc.sku, tc.region); err != pricing.ErrNoPrice {
 			t.Errorf("UnitPrice(%s, %q, %q) error = %v, want ErrNoPrice", tc.kind, tc.sku, tc.region, err)
 		}
+	}
+
+	if _, err := p.VMPrice(context.Background(), "swedencentral", "Standard_D2as_v5", "freebsd"); err != pricing.ErrNoPrice {
+		t.Errorf("VMPrice(unhandled os) error = %v, want ErrNoPrice", err)
+	}
+	if _, err := p.VMPrice(context.Background(), "swedencentral", "Standard_D2as_v5", ""); err != pricing.ErrNoPrice {
+		t.Errorf("VMPrice(empty os) error = %v, want ErrNoPrice", err)
 	}
 }
 
@@ -152,6 +216,10 @@ func TestNormalizeUnitPrice(t *testing.T) {
 		{"managed disk spaced monthly", pricing.KindManagedDisk, "1 /Month", 21.68, 21.68, true},
 		{"managed disk hourly to monthly", pricing.KindManagedDisk, "1 Hour", 1, pricing.HoursPerMonth, true},
 		{"managed disk unhandled", pricing.KindManagedDisk, "10K Operations", 1, 0, false},
+		{"vm hourly", pricing.KindVMInstance, "1 Hour", 0.092, 0.092, true},
+		{"vm monthly to hourly", pricing.KindVMInstance, "1/Month", 67.16, 0.092, true},
+		{"vm spaced monthly to hourly", pricing.KindVMInstance, "1 /Month", 67.16, 0.092, true},
+		{"vm unhandled", pricing.KindVMInstance, "1 GB/Month", 1, 0, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -226,6 +294,80 @@ func TestLookupFilters_CompleteAndPinned(t *testing.T) {
 		"tierMinimumUnits": "0",
 	}
 	assertFilterSet(t, ip, ipWantEq)
+}
+
+func TestVMPriceFilters_ProductNameAllowlistNotServiceName(t *testing.T) {
+	linux, err := vmPriceFilters("swedencentral", "Standard_D2as_v5", "linux")
+	if err != nil {
+		t.Fatalf("vmPriceFilters(linux): %v", err)
+	}
+
+	linuxWantEq := map[string]string{
+		"armRegionName":    "swedencentral",
+		"armSkuName":       "Standard_D2as_v5",
+		"type":             "Consumption",
+		"tierMinimumUnits": "0",
+	}
+	seen := map[string]bool{}
+	for _, f := range linux {
+		if f.Field == "serviceName" {
+			t.Errorf("linux VM filter contains serviceName %q; serviceName is not a discriminator and must not be used", f.Value)
+		}
+		if f.Op == filterEq {
+			want, ok := linuxWantEq[f.Field]
+			if !ok {
+				t.Errorf("unexpected VM equality filter %q", f.Field)
+				continue
+			}
+			if f.Value != want {
+				t.Errorf("filter %s = %q, want %q", f.Field, f.Value, want)
+			}
+			seen[f.Field] = true
+		}
+		if f.Op == filterStartsWith && f.Field == "productName" {
+			if f.Value != "Virtual Machines" {
+				t.Errorf("VM productName allowlist = %q, want %q", f.Value, "Virtual Machines")
+			}
+		}
+	}
+	for field := range linuxWantEq {
+		if !seen[field] {
+			t.Errorf("VM equality filter %q missing", field)
+		}
+	}
+	if !hasFilter(linux, "productName", "Virtual Machines", filterStartsWith) {
+		t.Error("VM Linux filter is missing startswith(productName,'Virtual Machines')")
+	}
+
+	windows, err := vmPriceFilters("swedencentral", "Standard_D2as_v5", "windows")
+	if err != nil {
+		t.Fatalf("vmPriceFilters(windows): %v", err)
+	}
+	if !hasFilter(windows, "productName", "Windows", filterContains) {
+		t.Error("VM Windows filter is missing contains(productName,'Windows')")
+	}
+	for _, f := range windows {
+		if f.Op == filterNotContains && f.Field == "productName" && f.Value == "Windows" {
+			t.Error("Windows VM filter excludes Windows rows; it must require them")
+		}
+	}
+
+	sent := serverFilter(linux)
+	if strings.Contains(sent, "serviceName") {
+		t.Errorf("live VM filter contains serviceName: %s", sent)
+	}
+	if !strings.Contains(sent, "startswith(productName,'Virtual Machines')") {
+		t.Errorf("live VM filter does not send productName allowlist: %s", sent)
+	}
+}
+
+func hasFilter(filters []priceFilter, field, value string, op filterOp) bool {
+	for _, f := range filters {
+		if f.Field == field && f.Value == value && f.Op == op {
+			return true
+		}
+	}
+	return false
 }
 
 func assertFilterSet(t *testing.T, got []priceFilter, wantEq map[string]string) {
@@ -322,31 +464,140 @@ func TestRecordedRequestMatchesServerFilter(t *testing.T) {
 	}
 }
 
+// TestRecordedVMRequestMatchesServerFilter pins the VM OData request the same
+// way, but through vmPriceFilters because the VM lookup has an OS axis that
+// lookupFilters cannot express.
+func TestRecordedVMRequestMatchesServerFilter(t *testing.T) {
+	entries := loadFixtureEntriesT(t)
+
+	cases := []struct {
+		entryName string
+		region    string
+		size      string
+		osType    string
+	}{
+		{"vm_standard_d2as_v5_swedencentral_linux", "swedencentral", "Standard_D2as_v5", "linux"},
+		{"vm_standard_d2as_v5_swedencentral_windows", "swedencentral", "Standard_D2as_v5", "windows"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.entryName, func(t *testing.T) {
+			var entry *retailFixtureEntry
+			for i := range entries {
+				if entries[i].Name == tc.entryName {
+					entry = &entries[i]
+					break
+				}
+			}
+			if entry == nil {
+				t.Fatalf("fixture entry %q not found", tc.entryName)
+			}
+			filters, err := vmPriceFilters(tc.region, tc.size, tc.osType)
+			if err != nil {
+				t.Fatalf("vmPriceFilters: %v", err)
+			}
+			u, err := url.Parse(entry.URL)
+			if err != nil {
+				t.Fatalf("parse recorded URL: %v", err)
+			}
+			want := u.Query().Get("$filter")
+			if got := serverFilter(filters); got != want {
+				t.Errorf("serverFilter mismatch\n got: %s\nwant: %s", got, want)
+			}
+		})
+	}
+}
+
 // TestServerFilterUnderPredicateLimit pins the observed Retail Prices API
 // limit that forced the live request to send the full equality set and only
 // as many not-contains terms as the API accepts. The full matcher is still
 // enforced client-side.
 func TestServerFilterUnderPredicateLimit(t *testing.T) {
 	for _, tc := range []struct {
-		kind   pricing.Kind
-		sku    string
-		region string
+		name   string
+		filter func() ([]priceFilter, error)
 		want   int
 	}{
-		{pricing.KindManagedDisk, "P10 LRS", "westeurope", 15},
-		{pricing.KindStaticIP, "Standard", "westeurope", 15},
+		{"managed_disk", func() ([]priceFilter, error) {
+			return lookupFilters(pricing.KindManagedDisk, "P10 LRS", "westeurope")
+		}, 15},
+		{"static_ip", func() ([]priceFilter, error) {
+			return lookupFilters(pricing.KindStaticIP, "Standard", "westeurope")
+		}, 15},
+		{"vm_linux", func() ([]priceFilter, error) {
+			return vmPriceFilters("swedencentral", "Standard_D2as_v5", "linux")
+		}, 14},
+		{"vm_windows", func() ([]priceFilter, error) {
+			return vmPriceFilters("swedencentral", "Standard_D2as_v5", "windows")
+		}, 12},
 	} {
-		filters, err := lookupFilters(tc.kind, tc.sku, tc.region)
-		if err != nil {
-			t.Fatalf("lookupFilters: %v", err)
+		t.Run(tc.name, func(t *testing.T) {
+			filters, err := tc.filter()
+			if err != nil {
+				t.Fatalf("filters: %v", err)
+			}
+			sent := serverFilter(filters)
+			if got := strings.Count(sent, " and ") + 1; got > maxRetailServerPredicates {
+				t.Errorf("server filter has %d predicates, want <= %d: %s", got, maxRetailServerPredicates, sent)
+			}
+			if tc.want > 0 && strings.Count(sent, " and ")+1 != tc.want {
+				t.Errorf("server filter predicate count = %d, want %d", strings.Count(sent, " and ")+1, tc.want)
+			}
+		})
+	}
+}
+
+// TestVMPrice_FlipsDiscriminator proves the productName allowlist is the
+// load-bearing discriminator. If the constant were to rot back to a legacy
+// prefix, the recorded row must stop resolving rather than producing a price
+// for the wrong product line.
+func TestVMPrice_FlipsDiscriminator(t *testing.T) {
+	entries := loadFixtureEntriesT(t)
+	var entry *retailFixtureEntry
+	for i := range entries {
+		if entries[i].Name == "vm_standard_d2as_v5_swedencentral_linux" {
+			entry = &entries[i]
+			break
 		}
-		sent := serverFilter(filters)
-		if got := strings.Count(sent, " and ") + 1; got > maxRetailServerPredicates {
-			t.Errorf("%s server filter has %d predicates, want <= %d: %s", tc.kind, got, maxRetailServerPredicates, sent)
+	}
+	if entry == nil {
+		t.Fatal("VM Linux fixture entry not found")
+	}
+	page, err := parseRetailPage(entry.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	filters, err := vmPriceFilters("swedencentral", "Standard_D2as_v5", "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, ok := selectPrice(page.Items, filters, pricing.KindVMInstance)
+	if !ok {
+		t.Fatal("genuine recorded VM row did not resolve with the measured allowlist")
+	}
+	if res.unitPrice != 0.092 {
+		t.Fatalf("genuine VM row resolved to %v, want 0.092", res.unitPrice)
+	}
+
+	flipped := append([]priceFilter(nil), filters...)
+	changed := false
+	for i := range flipped {
+		if flipped[i].Op == filterStartsWith && flipped[i].Field == "productName" {
+			if flipped[i].Value != "Virtual Machines" {
+				t.Fatalf("allowlist constant = %q, want %q", flipped[i].Value, "Virtual Machines")
+			}
+			// The legacy look-alike measured for this SKU. If this is ever
+			// allowed as the productName prefix, the legacy row resolves and
+			// the VM is priced at twice the real rate.
+			flipped[i].Value = "Dasv5 Series Cloud Services"
+			changed = true
 		}
-		if tc.want > 0 && strings.Count(sent, " and ")+1 != tc.want {
-			t.Errorf("%s server filter predicate count = %d, want %d", tc.kind, strings.Count(sent, " and ")+1, tc.want)
-		}
+	}
+	if !changed {
+		t.Fatal("no productName startsWith filter to flip")
+	}
+	if got, ok := selectPrice(page.Items, flipped, pricing.KindVMInstance); ok {
+		t.Errorf("legacy productName prefix resolved to %v; the allowlist no longer discriminates", got.unitPrice)
 	}
 }
 
@@ -422,7 +673,7 @@ func TestFixtureMatcher_RejectsWrongConstant(t *testing.T) {
 }
 
 // TestRecordedFixtureIsRealResponse is a structural guard: the recorded
-// fixture must be the public Retail Prices API shape with two non-empty
+// fixture must be the public Retail Prices API shape with non-empty
 // responses, not a hand-authored kind->SKU->region table.
 func TestRecordedFixtureIsRealResponse(t *testing.T) {
 	entries := loadFixtureEntriesT(t)

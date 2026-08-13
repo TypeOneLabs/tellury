@@ -8,6 +8,89 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-08-13
+
+Azure gets metrics and a rightsizing rule, and the terminal output is rebuilt around
+being read.
+
+**Upgrading — one thing to check.** Scan artifacts changed name. A scan used to write
+`graph-projects-my-project.json`, `findings-projects-my-project.json` and
+`report-projects-my-project.html` into a directory named for the whole scope plus a
+nanosecond timestamp; it now writes `graph.json`, `findings.json` and `report.html` into a
+directory named for the scope's last segment and the second. If anything you own reads those
+paths, it needs updating. Nothing else changes for an existing user: `--format json` and
+`--format csv` are byte-identical, and every exit code means what it did.
+
+The old naming produced a report path over 200 characters, printed twice in every summary.
+It was also why the report link could not be clicked.
+
+### Added
+
+- **`underutilized_vm`** — an Azure VM whose p95 CPU leaves more than 40% headroom.
+  Recommends a smaller size in the same family, or stop/delete when the family has no
+  smaller member. Members of a Virtual Machine Scale Set are skipped: a scale set owns its
+  members' size, so a per-member recommendation is advice nobody can act on.
+- **Azure Monitor metric enrichment.** `Percentage CPU` becomes the cross-cloud
+  `cpu_utilization_p95`. Azure also publishes `Available Memory Percentage` as a PLATFORM
+  metric, needing no agent in the guest — which neither AWS nor GCP do — so the backend
+  registers memory too, inverted from "available" to "used". No rule declares it yet.
+- **VM discovery and live size shapes.** Resource Graph already returns instance size, power
+  state, priority and creation time, so no hydration call was needed. Family ladders come
+  from the Resource SKUs API, live, with no embedded table.
+- **`scan_status` and `schema_version` in the JSON report.** `scan_status` is `ok`,
+  `no_resources` or `degraded`. It exists because an empty findings list is ambiguous and, on
+  Azure, undecidable: Resource Graph returns an empty result set for resource types the
+  identity cannot read, so a permissions gap and a genuinely clean subscription produce
+  identical data. A CI step or an AI agent is now told rather than left to guess.
+- **A `SEVERITY` column, and colour on an interactive terminal.** Colour encodes severity and
+  nothing else — money stays monochrome, because a colour scale over a continuous value
+  implies a threshold the tool does not have. The column exists so colour is always redundant
+  with something a monochrome or colour-blind reader can still see. `--no-color`, `NO_COLOR`
+  and `TERM=dumb` all disable it, and it is never emitted when stdout is not a terminal.
+- **A sectioned terminal report.** `FINDINGS`, `SUMMARY` and `COVERAGE`, with the summary as
+  an aligned key-value block rather than a single line that ran past 200 characters. It names
+  the scope, the status, what was scanned, the total, and — new — where the artifacts were
+  written, which nothing said before unless a scan produced more than ten findings.
+- **Progress rewrites one line per phase** on an interactive terminal instead of scrolling,
+  and prints plain appended lines with `OK` in place of the tick anywhere else.
+- **A README section on pipelines and agent use**, and a documented JSON contract in
+  `docs/cli.md`.
+
+### Changed
+
+- `--no-color` now does something. It was declared, documented and never read.
+- The empty-result line distinguishes finding nothing from scanning nothing: a scan with zero
+  resources says so and points at the scope and the identity's permissions, rather than
+  reporting "No waste found" — a conclusion it never reached.
+
+### Fixed
+
+- **Azure discovery was 52 seconds for a subscription holding one VM.** The Resource SKUs API
+  was called unfiltered, returning every SKU in every region. Filtered to the regions in use
+  it is 7 seconds, and a scope with no VMs skips the call entirely, which took an empty
+  resource group from 42 seconds to 1.7.
+- **Two of three managed-disk families could never be priced.** The family was derived from
+  the tier token's first letter matched against ARM SKU names, so Standard HDD queried
+  "Standard SSD Managed Disks" and matched nothing, and Standard SSD matched no family at
+  all. Only Premium worked, and nothing failed — the disks skipped as unpriced.
+- Unresolvable price keys are cached, so one unresolvable SKU no longer issues one HTTP
+  request per resource carrying it.
+- A data race in the price-fixture loader, which wrote two maps outside the lock that price
+  lookups read under it.
+
+### Documentation
+
+- `docs/writing-a-rule.md` taught a shipped defect. Its worked example priced a snapshot on
+  the 250 GiB disk it came from at a rate that was never right, reaching $6.50, where the
+  rule prices the 30 GiB it stores at $0.050 and reaches $1.50. Pricing a snapshot on its
+  source disk over-reported by 9x and was caught by a real invoice. A contributor following
+  the guide wrote it back in.
+- Every documented table is now compared against the live renderer by a test, including the
+  contributor guide — the file that had rotted furthest and that nothing watched.
+- Seven factually wrong claims corrected across README.md, AGENTS.md, CONTRIBUTING.md and
+  `docs/cli.md`, including a rule count, a provider list, and a `--provider` help string that
+  omitted Azure three releases after it shipped.
+
 ## [0.5.0] — 2026-08-13
 
 Azure is tellury's third cloud. Inventory, hierarchy and live pricing, with two rules.
@@ -520,7 +603,8 @@ First release. GCP only.
   documentation rather than captured from the API normalizes to a node with empty
   attributes rather than failing loudly.
 
-[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/TypeOneLabs/tellury/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/TypeOneLabs/tellury/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/TypeOneLabs/tellury/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/TypeOneLabs/tellury/compare/v0.2.0...v0.3.0

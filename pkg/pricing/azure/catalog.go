@@ -53,6 +53,8 @@ type filterOp int
 const (
 	filterEq filterOp = iota
 	filterNotContains
+	filterStartsWith
+	filterContains
 )
 
 // priceFilter is one predicate of the Azure price lookup. The same slice is
@@ -95,6 +97,12 @@ type CatalogPricer struct {
 	mu    sync.Mutex
 	cache map[skuKey]resolvedSKU
 
+	// VM pricing has a second cache axis: size + region + OS. A single SKU in
+	// a single region has a distinct Linux and Windows row, so it cannot share
+	// the (kind, sku, region) cache key.
+	vmCache       map[vmPriceKey]resolvedSKU
+	vmUnpriceable map[vmPriceKey]bool
+
 	// unpriceable records keys the API has already refused, so a scan asks
 	// once rather than once per node. Without it, a subscription full of disks
 	// sharing one unresolvable SKU issues one HTTP request per disk — and an
@@ -113,6 +121,7 @@ var (
 	_ pricing.Pricer           = (*CatalogPricer)(nil)
 	_ pricing.ProvenancePricer = (*CatalogPricer)(nil)
 	_ pricing.CurrencyReporter = (*CatalogPricer)(nil)
+	_ VMPricer                 = (*CatalogPricer)(nil)
 )
 
 // NewCatalogPricer builds a pricer over the live Azure Retail Prices API. It
@@ -134,12 +143,14 @@ func NewCatalogPricer(ctx context.Context, log *slog.Logger) (*CatalogPricer, er
 		ctx = context.Background()
 	}
 	return &CatalogPricer{
-		log:         log,
-		ctx:         ctx,
-		client:      &http.Client{Timeout: 30 * time.Second},
-		cache:       map[skuKey]resolvedSKU{},
-		unpriceable: map[skuKey]bool{},
-		last:        map[string]pricing.Provenance{},
+		log:           log,
+		ctx:           ctx,
+		client:        &http.Client{Timeout: 30 * time.Second},
+		cache:         map[skuKey]resolvedSKU{},
+		vmCache:       map[vmPriceKey]resolvedSKU{},
+		vmUnpriceable: map[vmPriceKey]bool{},
+		unpriceable:   map[skuKey]bool{},
+		last:          map[string]pricing.Provenance{},
 	}, nil
 }
 
@@ -232,7 +243,7 @@ func (c *CatalogPricer) liveUnitPrice(kind pricing.Kind, sku, region string) (fl
 			rows = append(rows, page.Items...)
 		}
 	} else {
-		rows, err = c.fetchLive(filters)
+		rows, err = c.fetchLiveContext(c.ctx, filters)
 		if err != nil {
 			c.log.Warn("azure: Retail Prices API unavailable; resources requiring prices will skip", "err", err)
 			return 0, resolvedSKU{}, err
@@ -267,10 +278,20 @@ func (c *CatalogPricer) loadFixture(path string) ([]retailFixtureEntry, error) {
 }
 
 func (c *CatalogPricer) fetchLive(filters []priceFilter) ([]retailItem, error) {
+	return c.fetchLiveContext(c.ctx, filters)
+}
+
+func (c *CatalogPricer) fetchLiveContext(ctx context.Context, filters []priceFilter) ([]retailItem, error) {
+	if ctx == nil {
+		ctx = c.ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	u := retailPricesBaseURL + "?$filter=" + url.QueryEscape(serverFilter(filters))
 	var rows []retailItem
 	for u != "" {
-		req, err := http.NewRequestWithContext(c.ctx, http.MethodGet, u, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -372,11 +393,10 @@ func staticIPFilters(region string) []priceFilter {
 	}, spotAndWindowsExclusions()...)
 }
 
-// spotAndWindowsExclusions returns the constant exclusion predicates. They are
-// all enforced by the fixture/live-row matcher; the live OData request sends
-// as many as the Retail Prices API accepts (see serverFilter and its
-// predicate limit).
-func spotAndWindowsExclusions() []priceFilter {
+// spotExclusions returns the six not-contains terms shared by every Linux
+// consumption lookup. They are enforced by the fixture/live-row matcher; the
+// live OData request sends as many as the Retail Prices API accepts.
+func spotExclusions() []priceFilter {
 	return []priceFilter{
 		{Field: "skuName", Value: "Spot", Op: filterNotContains},
 		{Field: "skuName", Value: "Low Priority", Op: filterNotContains},
@@ -384,16 +404,32 @@ func spotAndWindowsExclusions() []priceFilter {
 		{Field: "meterName", Value: "Low Priority", Op: filterNotContains},
 		{Field: "productName", Value: "Spot", Op: filterNotContains},
 		{Field: "productName", Value: "Low Priority", Op: filterNotContains},
+	}
+}
+
+// windowsExclusions returns the three not-contains terms that keep a Linux row
+// from being selected from a SKU that also has a Windows meter.
+func windowsExclusions() []priceFilter {
+	return []priceFilter{
 		{Field: "productName", Value: "Windows", Op: filterNotContains},
 		{Field: "skuName", Value: "Windows", Op: filterNotContains},
 		{Field: "meterName", Value: "Windows", Op: filterNotContains},
 	}
 }
 
+// spotAndWindowsExclusions returns the constant exclusion predicates for a
+// Linux row. They are all enforced by the fixture/live-row matcher; the live
+// OData request sends as many as the Retail Prices API accepts (see
+// serverFilter and its predicate limit).
+func spotAndWindowsExclusions() []priceFilter {
+	return append(spotExclusions(), windowsExclusions()...)
+}
+
 // serverFilter renders the OData $filter sent to the live API. It sends every
-// equality predicate and as many not-contains exclusions as fit within the
-// API's observed total-predicate limit; the remaining not-contains terms are
-// enforced only by the row matcher, never silently dropped from the lookup.
+// equality, starts-with and contains predicate, then as many not-contains
+// exclusions as fit within the API's observed total-predicate limit; the
+// remaining not-contains terms are enforced only by the row matcher, never
+// silently dropped from the lookup.
 //
 // The equality values are rendered according to their OData type: string
 // fields are single-quoted, while the API's boolean and numeric fields must
@@ -408,13 +444,20 @@ func serverFilter(filters []priceFilter) string {
 		parts = append(parts, eqPredicate(f.Field, f.Value))
 	}
 	for _, f := range filters {
-		if f.Op != filterNotContains {
+		if f.Op != filterStartsWith && f.Op != filterContains && f.Op != filterNotContains {
 			continue
 		}
 		if len(parts)+1 > maxRetailServerPredicates {
 			continue
 		}
-		parts = append(parts, containsFalsePredicate(f.Field, f.Value))
+		switch f.Op {
+		case filterStartsWith:
+			parts = append(parts, startsWithPredicate(f.Field, f.Value))
+		case filterContains:
+			parts = append(parts, containsPredicate(f.Field, f.Value))
+		case filterNotContains:
+			parts = append(parts, containsFalsePredicate(f.Field, f.Value))
+		}
 	}
 	return strings.Join(parts, " and ")
 }
@@ -435,6 +478,14 @@ func eqPredicate(field, value string) string {
 		}
 	}
 	return field + " eq '" + escapeOData(value) + "'"
+}
+
+func startsWithPredicate(field, value string) string {
+	return "startswith(" + field + ",'" + escapeOData(value) + "')"
+}
+
+func containsPredicate(field, value string) string {
+	return "contains(" + field + ",'" + escapeOData(value) + "')"
 }
 
 func containsFalsePredicate(field, value string) string {
@@ -460,6 +511,14 @@ func matchFilters(row retailItem, filters []priceFilter) bool {
 			}
 		case filterNotContains:
 			if strings.Contains(got, f.Value) {
+				return false
+			}
+		case filterStartsWith:
+			if !strings.HasPrefix(got, f.Value) {
+				return false
+			}
+		case filterContains:
+			if !strings.Contains(got, f.Value) {
 				return false
 			}
 		}
@@ -494,7 +553,7 @@ func rowField(row retailItem, field string) string {
 
 // selectPrice applies the full matcher to every row and normalizes the first
 // (and only) matching row's unitOfMeasure to the canonical unit implied by
-// kind. If zero or more than one distinct matching row can be priced, it
+// kind. If zero or more than one distinct billable row can be priced, it
 // returns false — the caller skips rather than guessing which of several
 // plausible rows is the right one.
 func selectPrice(rows []retailItem, filters []priceFilter, kind pricing.Kind) (resolvedSKU, bool) {
@@ -534,6 +593,7 @@ func selectPrice(rows []retailItem, filters []priceFilter, kind pricing.Kind) (r
 //
 //	KindStaticIP    -> per hour
 //	KindManagedDisk -> per disk-month
+//	KindVMInstance  -> per hour (the Azure VM rule multiplies by HoursPerMonth)
 //
 // Unknown or unhandled units return false; tellury never guesses a conversion
 // factor.
@@ -555,6 +615,15 @@ func normalizeUnitPrice(kind pricing.Kind, unitOfMeasure string, unitPrice float
 			return unitPrice, true
 		case "1 hour":
 			return unitPrice * pricing.HoursPerMonth, true
+		default:
+			return 0, false
+		}
+	case pricing.KindVMInstance:
+		switch unit {
+		case "1 hour":
+			return unitPrice, true
+		case "1/month", "1 /month":
+			return unitPrice / pricing.HoursPerMonth, true
 		default:
 			return 0, false
 		}

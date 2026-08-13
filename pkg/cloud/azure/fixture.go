@@ -8,15 +8,16 @@ import (
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v6"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/managementgroups/armmanagementgroups"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph"
 )
 
 // Fixture is the offline data source for an Azure scan. It replays the
-// management-groups hierarchy and per-subscription Azure Resource Graph rows
-// from local JSON, so ingestion is testable and `tellury scan --fixture
-// azure.json --provider azure --azure-tenant <tenant>` runs with no Azure
-// credentials and no network.
+// management-groups hierarchy, per-subscription Azure Resource Graph rows and
+// per-subscription Resource SKUs rows from local JSON, so ingestion is
+// testable and `tellury scan --fixture azure.json --provider azure
+// --azure-tenant <tenant>` runs with no Azure credentials and no network.
 //
 // The JSON shape is:
 //
@@ -34,6 +35,9 @@ import (
 //	    "<subscription-id>": {
 //	      "resources": [ ... Azure Resource Graph rows ... ]
 //	    }
+//	  },
+//	  "resource_skus": {
+//	    "<subscription-id>": [ ... armcompute.ResourceSKU rows ... ]
 //	  }
 //	}
 //
@@ -41,10 +45,13 @@ import (
 // `project id, name, type, location, resourceGroup, subscriptionId, sku,
 // managedBy, tags, properties` columns the live query asks for), so a capture
 // produced by the ARG API feeds the fixture unedited and the normalizers read
-// exactly the fields the live query returns.
+// exactly the fields the live query returns. Each resource-skus element is the
+// JSON object form of one Resource SKUs row, so a capture produced by that API
+// feeds the fixture unedited as well.
 type Fixture struct {
-	ManagementGroups map[string]*ManagementGroupFixture `json:"management_groups"`
-	Subscriptions    map[string]*SubscriptionFixture    `json:"subscriptions"`
+	ManagementGroups map[string]*ManagementGroupFixture   `json:"management_groups"`
+	Subscriptions    map[string]*SubscriptionFixture      `json:"subscriptions"`
+	ResourceSKUs     map[string][]*armcompute.ResourceSKU `json:"resource_skus,omitempty"`
 }
 
 // ManagementGroupFixture is one management group's direct children, exactly
@@ -71,13 +78,14 @@ type SubscriptionFixture struct {
 }
 
 // LoadFixture reads one or more Azure fixture files and merges them. Later
-// files override earlier management-group entries and subscription entries of
-// the same ID, so a multi-file fixture set can layer data the way the AWS and
-// GCP fixture loaders do.
+// files override earlier management-group entries, subscription entries and
+// resource-skus entries of the same ID, so a multi-file fixture set can layer
+// data the way the AWS and GCP fixture loaders do.
 func LoadFixture(paths ...string) (*Fixture, error) {
 	f := &Fixture{
 		ManagementGroups: map[string]*ManagementGroupFixture{},
 		Subscriptions:    map[string]*SubscriptionFixture{},
+		ResourceSKUs:     map[string][]*armcompute.ResourceSKU{},
 	}
 	for _, path := range paths {
 		b, err := os.ReadFile(path)
@@ -86,7 +94,7 @@ func LoadFixture(paths ...string) (*Fixture, error) {
 		}
 		var envelope Fixture
 		if err := json.Unmarshal(b, &envelope); err != nil {
-			return nil, fmt.Errorf("azure: fixture %s: expected a {\"management_groups\":{...},\"subscriptions\":{...}} envelope: %w", path, err)
+			return nil, fmt.Errorf("azure: fixture %s: expected a {\"management_groups\":{...},\"subscriptions\":{...},\"resource_skus\":{...}} envelope: %w", path, err)
 		}
 		mergeFixture(f, &envelope)
 	}
@@ -105,6 +113,12 @@ func mergeFixture(dst, src *Fixture) {
 			continue
 		}
 		dst.Subscriptions[id] = sub
+	}
+	for id, skus := range src.ResourceSKUs {
+		if skus == nil {
+			continue
+		}
+		dst.ResourceSKUs[id] = skus
 	}
 }
 
@@ -201,6 +215,22 @@ func (c *fakeManagementGroups) Get(_ context.Context, groupID string, _ *armmana
 		Properties: properties,
 	}
 	return resp, nil
+}
+
+// fakeResourceSKUs is the fixture-backed Resource SKUs client. It replays one
+// subscription's captured SKU rows, exactly like the live per-subscription
+// NewListPager call.
+type fakeResourceSKUs struct {
+	f *Fixture
+}
+
+var _ resourceSKUsAPI = (*fakeResourceSKUs)(nil)
+
+func (c *fakeResourceSKUs) List(_ context.Context, subscriptionID string, _ []string) ([]*armcompute.ResourceSKU, error) {
+	if c.f == nil {
+		return nil, fmt.Errorf("azure: fixture has no resource skus")
+	}
+	return c.f.ResourceSKUs[subscriptionID], nil
 }
 
 func childARMID(child ChildFixture) string {

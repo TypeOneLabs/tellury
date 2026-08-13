@@ -97,6 +97,17 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 	return cmd
 }
 
+// isTableFormat reports whether a --format value resolves to the human table
+// renderer. The empty value is the default table format, matching output.For.
+func isTableFormat(format string) bool {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "", "table":
+		return true
+	default:
+		return false
+	}
+}
+
 // runScan is the whole pipeline, in order, with no hidden magic.
 // scopeSpansManyOwners reports whether the scan's scope can contain more than
 // one project, account, or subscription, and therefore whether a finding's
@@ -390,11 +401,25 @@ func runScan(
 
 	// 12. Render. Terminal output is byte-for-byte unchanged by the artifact
 	// writing above: artifact names are only logged to stderr, stdout gets the
-	// same table/JSON/CSV it always did.
-	renderer, err := output.For(cfg.Format)
-	if err != nil {
-		return newUsageError(err)
+	// same table/JSON/CSV it always did. Colour is resolved once, here, and
+	// only the human table renderer can carry it: jsonRenderer and csvRenderer
+	// have no colour field and no colour code path, so a --format json or
+	// --format csv stream can never be wrapped in ANSI escapes.
+	var renderer output.Renderer
+	if isTableFormat(cfg.Format) {
+		renderer = output.TableRenderer(colorEnabled(out, g.NoColor))
+	} else {
+		renderer, err = output.For(cfg.Format)
+		if err != nil {
+			return newUsageError(err)
+		}
 	}
+	// Close the progress sequence BEFORE the report, not after: its purpose is
+	// to leave one blank line between the reporter's last line on stderr and
+	// the FINDINGS header on stdout. Deferred to the end of the scan it would
+	// print the separator after everything it was meant to separate.
+	prog.Close()
+
 	if err := renderer.Render(out, report); err != nil {
 		return err
 	}
@@ -451,8 +476,45 @@ func requestedCurrency(state currencyResolution) string {
 // guarantees that two scans run back-to-back (even within the same second,
 // as a test or CI does) still land in distinct subdirectories.
 func artifactDirName(outDir, scope string) string {
-	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
-	return filepath.Join(outDir, sanitizeSegment(scope)+"-"+stamp)
+	// The LAST scope segment, not the whole scope. A full Azure scope
+	// sanitizes to
+	//   subscriptions-000e62f0-1fd2-4e70-b300-6f147b0a687a-resourceGroups-rg-tellury-test
+	// which, with a nanosecond stamp, produced a directory name over 100
+	// characters and a report path over 200 — printed twice in every summary
+	// and unreadable in both. The last segment is what an operator calls the
+	// thing ("rg-tellury-test", "my-project"), and it is what the SUMMARY block
+	// shows as Scope.
+	//
+	// Seconds, not nanoseconds: back-to-back scans of the SAME scope within one
+	// second are the only collision, and uniqueSuffix resolves those.
+	stamp := time.Now().UTC().Format("20060102T150405Z")
+	base := sanitizeSegment(lastScopeSegment(scope)) + "-" + stamp
+	return filepath.Join(outDir, uniqueSuffix(outDir, base))
+}
+
+// lastScopeSegment returns the final path element of a scope, which is the
+// name an operator recognises. Falls back to the whole scope when there is no
+// separator.
+func lastScopeSegment(scope string) string {
+	if i := strings.LastIndex(scope, "/"); i >= 0 && i+1 < len(scope) {
+		return scope[i+1:]
+	}
+	return scope
+}
+
+// uniqueSuffix appends -2, -3 … when a directory of that name already exists,
+// so two scans of the same scope in the same second do not overwrite one
+// another. The unsuffixed name is used whenever it is free, which is almost
+// always.
+func uniqueSuffix(outDir, base string) string {
+	name := base
+	for i := 2; i < 100; i++ {
+		if _, err := os.Stat(filepath.Join(outDir, name)); os.IsNotExist(err) {
+			return name
+		}
+		name = fmt.Sprintf("%s-%d", base, i)
+	}
+	return name
 }
 
 // sanitizeSegment makes a scope token safe to embed in a directory name. A
@@ -497,19 +559,19 @@ func writeArtifacts(dir string, cfg config.Scan, gr *graph.Graph, scope string, 
 	}
 
 	// 1. Graph snapshot (full fidelity, replayable).
-	graphPath := filepath.Join(dir, "graph-"+sanitizeSegment(scope)+".json")
+	graphPath := filepath.Join(dir, "graph.json")
 	if err := writeGraphSnapshot(graphPath, gr, cfg.Provider, scope); err != nil {
 		return "", err
 	}
 
 	// 2. Findings JSON.
-	findingsPath := filepath.Join(dir, "findings-"+sanitizeSegment(scope)+".json")
+	findingsPath := filepath.Join(dir, "findings.json")
 	if err := writeFindingsJSON(findingsPath, report); err != nil {
 		return "", err
 	}
 
 	// 3. Self-contained HTML report.
-	reportPath := filepath.Join(dir, "report-"+sanitizeSegment(scope)+".html")
+	reportPath := filepath.Join(dir, "report.html")
 	if err := writeHTMLReport(reportPath, report); err != nil {
 		return "", err
 	}
@@ -770,8 +832,9 @@ func printSkips(w io.Writer, res rules.Result) {
 	if len(tallies) == 0 {
 		return
 	}
-	fmt.Fprintln(w, "\nskipped resources:")
+	fmt.Fprintln(w, "\nSKIP TALLY")
+	fmt.Fprintf(w, "  %-30s %-32s %s\n", "RULE", "CODE", "COUNT")
 	for _, t := range tallies {
-		fmt.Fprintf(w, "  %-28s %-32s %d\n", t.RuleID, t.Code, t.Count)
+		fmt.Fprintf(w, "  %-30s %-32s %d\n", t.RuleID, t.Code, t.Count)
 	}
 }

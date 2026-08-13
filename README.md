@@ -6,7 +6,7 @@ A single-binary CLI that reads your cloud inventory, builds an in-memory resourc
 and evaluates deterministic rules against it. Each finding carries the evidence behind it,
 the arithmetic that produced its figure, and which price source answered.
 
-> **Early development.** AWS, Azure and GCP. Ten rules. The CLI surface and the rule
+> **Early development.** AWS, Azure and GCP. Eleven rules. The CLI surface and the rule
 > interface may change between minor releases.
 
 ## Quick start
@@ -40,12 +40,26 @@ export AWS_PROFILE=my-profile
 ```
 
 ```
-RESOURCE              RULE               MONTHLY WASTE
-volume/vol-0a1b2c3d   unattached_ebs_volume     $17.60
-address/203.0.113.42  unassociated_eip           $3.65
-------------------------------------------------------
-TOTAL                 2 findings                $21.25
-Summary: accounts/123456789012 — 1 account analyzed, 1 region analyzed (explicit), 5 resources scanned, 3 rules evaluated, 2 findings, 3 resources skipped, 8.1s
+FINDINGS
+-----------------------------------------------------------------
+RESOURCE             RULE                  SEVERITY MONTHLY WASTE
+volume/vol-0a1b2c3d  unattached_ebs_volume MEDIUM          $17.60
+address/203.0.113.42 unassociated_eip      MEDIUM           $3.65
+-----------------------------------------------------------------
+TOTAL                2 findings                            $21.25
+
+SUMMARY
+-----------------------------------------------------------------
+Scope          123456789012
+Scope ID       accounts/123456789012
+Status         ok
+Scanned        5 resources (3 skipped) across 1 account
+Regions        1 region (explicit)
+Evaluated      3 rules
+Total Waste    $21.25 / month
+Duration       8.1s
+Artifacts      /home/you/tellury-out/scan-aws
+               file:///home/you/tellury-out/scan-aws/report.html
 ```
 
 Without `--aws-regions` every enabled region is swept, which is thorough and slow; narrowing
@@ -56,16 +70,29 @@ read-only permissions.
 
 ```bash
 az login
-./tellury scan --azure-subscription 00000000-0000-0000-0000-000000000000
+./tellury scan --azure-subscription 000e62f0-1fd2-4e70-b300-6f147b0a687a \
+  --azure-resource-group rg-tellury-test
 ```
 
 ```
-RESOURCE                 RULE                    MONTHLY WASTE
-address/orphan-ip        unassociated_public_ip          $3.65
-disk/orphan-disk         unattached_managed_disk         $1.54
--------------------------------------------------------------
-TOTAL                    2 findings                      $5.19
-Summary: subscriptions/0000... — 1 subscription analyzed, 3 resources scanned, 2 rules evaluated, 2 findings, 1 resource skipped, 2.1s
+FINDINGS
+----------------------------------------------------------------------
+RESOURCE                 RULE                   SEVERITY MONTHLY WASTE
+address/tellury-orphan-ip unassociated_public_ip MEDIUM           $3.65
+----------------------------------------------------------------------
+TOTAL                    1 finding                               $3.65
+
+SUMMARY
+----------------------------------------------------------------------
+Scope          rg-tellury-test
+Scope ID       subscriptions/000e62f0-1fd2-4e70-b300-6f147b0a687a/resourceGroups/rg-tellury-test
+Status         ok
+Scanned        2 resources (1 skipped) across 1 subscription
+Evaluated      3 rules
+Total Waste    $3.65 / month
+Duration       3.34s
+Artifacts      /home/you/tellury-out/scan-123
+               file:///home/you/tellury-out/scan-123/report.html
 ```
 
 `--azure-resource-group` narrows a subscription scan to one group. See
@@ -80,12 +107,25 @@ gcloud auth application-default login
 ```
 
 ```
-RESOURCE               RULE              MONTHLY WASTE
-disk/pd-standard-01    detached_disk             $8.00
-address/reserved-ip-01 unused_reserved_ip        $7.30
-------------------------------------------------------
-TOTAL                  2 findings               $15.30
-Summary: projects/my-project — 1 project analyzed, 2 resources scanned, 5 rules evaluated, 2 findings, 0 resources skipped, 2ms
+FINDINGS
+----------------------------------------------------------------
+RESOURCE               RULE               SEVERITY MONTHLY WASTE
+disk/pd-standard-01    detached_disk      MEDIUM           $8.00
+address/reserved-ip-01 unused_reserved_ip MEDIUM           $7.30
+----------------------------------------------------------------
+TOTAL                  2 findings                         $15.30
+
+SUMMARY
+----------------------------------------------------------------
+Scope          my-project
+Scope ID       projects/my-project
+Status         ok
+Scanned        2 resources across 1 project
+Evaluated      5 rules
+Total Waste    $15.30 / month
+Duration       2ms
+Artifacts      /home/you/tellury-out/scan-gcp
+               file:///home/you/tellury-out/scan-gcp/report.html
 ```
 
 See [GCP setup](docs/gcp-setup.md) for the four roles and what each one buys you.
@@ -102,14 +142,27 @@ across everything beneath it:
 ```
 
 ```
-RESOURCE               PROJECT       RULE              MONTHLY WASTE
-disk/old-cache         ml-training   detached_disk            $20.00
-disk/pd-standard-01    data-platform detached_disk             $8.00
-disk/scratch-disk      web-frontend  detached_disk             $8.00
-address/reserved-ip-01 data-platform unused_reserved_ip        $7.30
---------------------------------------------------------------------
-TOTAL                  4 findings                             $43.30
-Summary: organizations/123456789012 — 3 projects analyzed, 4 resources scanned, 5 rules evaluated, 4 findings, 0 resources skipped, 2ms
+FINDINGS
+------------------------------------------------------------------------------
+RESOURCE               PROJECT       RULE               SEVERITY MONTHLY WASTE
+disk/old-cache         ml-training   detached_disk      MEDIUM          $20.00
+disk/pd-standard-01    data-platform detached_disk      MEDIUM           $8.00
+disk/scratch-disk      web-frontend  detached_disk      MEDIUM           $8.00
+address/reserved-ip-01 data-platform unused_reserved_ip MEDIUM           $7.30
+------------------------------------------------------------------------------
+TOTAL                  4 findings                                       $43.30
+
+SUMMARY
+------------------------------------------------------------------------------
+Scope          123456789012
+Scope ID       organizations/123456789012
+Status         ok
+Scanned        4 resources across 3 projects
+Evaluated      5 rules
+Total Waste    $43.30 / month
+Duration       2ms
+Artifacts      /home/you/tellury-out/scan-org
+               file:///home/you/tellury-out/scan-org/report.html
 ```
 
 `--gcp-folder`, `--aws-organizational-unit` and `--azure-management-group` scope to a
@@ -120,6 +173,34 @@ account outcomes rather than failing the scan.
 A scan runs one provider at a time: passing both `--gcp-*` and `--aws-*` flags fails before
 doing any work. Each scan writes a graph snapshot, findings JSON and an HTML report into
 `tellury-out/`.
+
+## In a pipeline, or as an agent's tool
+
+`tellury` exits `0` when it ran clean, `3` when it found waste, `2` on a usage error, and
+non-zero otherwise. `--fail-on-findings=false` turns findings into a report rather than a
+build failure — worth doing on the first run, since an established account almost always has
+pre-existing waste and a build that fails on day one gets switched off on day two.
+
+To gate on a threshold rather than on any finding at all:
+
+```bash
+tellury scan --aws-account 123456789012 --aws-regions eu-west-1 \
+  --format json --fail-on-findings=false > scan.json
+
+jq -e '.scan_status == "ok"' scan.json > /dev/null \
+  || { echo "scan did not complete cleanly: $(jq -r .scan_status scan.json)"; exit 1; }
+
+jq -e '.total_monthly_waste_usd < 50' scan.json > /dev/null \
+  || { echo "waste above threshold: $(jq -r .total_monthly_waste_usd scan.json)"; exit 1; }
+```
+
+That first check matters more than it looks. An empty result is ambiguous — and on Azure
+undecidable — because a permissions gap and a genuinely clean account produce identical
+findings. `scan_status` separates `ok` from `no_resources` and `degraded`, so a pipeline
+cannot mistake "could not look" for "nothing to fix". The same field is what makes `tellury`
+usable as a tool an AI agent invokes: JSON on stdout, stable rule IDs and skip codes, nothing
+that blocks on input, and no HTML report it cannot open. See
+[the JSON contract](docs/cli.md#json-the-machine-contract).
 
 ## What it does
 
@@ -148,7 +229,10 @@ no per-resource hydration call is needed. Management-group and tenant scopes fan
 subscriptions and report each one's outcome, so a subscription the identity cannot read is
 named rather than silently missing from the total.
 
-Not there yet: Azure metrics, and therefore Azure rightsizing.
+Azure metrics come from Azure Monitor, which — unlike CloudWatch and Cloud Monitoring —
+publishes guest memory as a platform metric needing no agent in the VM.
+
+Not there yet: any cloud beyond these three.
 
 ## Rules
 
@@ -164,11 +248,15 @@ Not there yet: Azure metrics, and therefore Azure rightsizing.
 | `underutilized_ec2` | aws / ec2 | high | EC2 instances overprovisioned for their CPU load |
 | `unattached_managed_disk` | azure / compute | medium | Managed disks attached to no VM |
 | `unassociated_public_ip` | azure / network | medium | Public IPs associated with nothing |
+| `underutilized_vm` | azure / compute | high | Azure VMs overprovisioned for their CPU load |
 
-`underutilized_instance` and `no_lifecycle_policy` read Cloud Monitoring; `underutilized_ec2`
-reads CloudWatch. Without metric access they skip and say so — they never guess a value from
-missing data. Neither cloud publishes guest memory without an agent installed in the VM, so
-every rule here judges CPU only.
+`underutilized_instance` and `no_lifecycle_policy` read Cloud Monitoring, `underutilized_ec2`
+reads CloudWatch, and `underutilized_vm` reads Azure Monitor. Without metric access they skip
+and say so — they never guess a value from missing data.
+
+Every rule here judges CPU only. AWS and GCP publish no guest memory without an agent
+installed in the VM; Azure does publish it as a platform metric, and tellury reads it, but no
+rule declares it yet.
 
 `tellury rules list` shows the catalogue; `tellury rules explain <id>` prints one rule's full
 declaration.
