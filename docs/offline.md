@@ -162,12 +162,18 @@ Every scan — live, fixture or replay — writes a timestamped directory under 
 
 ```
 tellury-out/
-  projects-my-project-20260807T123456.789012345Z/
-    graph-projects-my-project.json      replayable snapshot
-    findings-projects-my-project.json   the findings, as --format json prints them
-    report-projects-my-project.html     self-contained HTML report
+  my-project-20260807T123456Z/
+    graph.json      replayable snapshot
+    findings.json   the findings, as --format json prints them
+    report.html     self-contained HTML report
 ```
 
-Consecutive runs never overwrite each other. The HTML report inlines its CSS and
+The directory is named for the scope's last segment — what you call the thing — and the
+time the scan started. Consecutive runs never overwrite each other: two scans of the same
+scope within one second get a numeric suffix.
+
+The scan prints this location in its `SUMMARY` block, as the output directory and the
+report as a clickable link, so the artifacts are not something you have to know about in
+advance. The HTML report inlines its CSS and
 JavaScript and fetches nothing at runtime, so it opens on a machine with no network and
 survives being emailed.
