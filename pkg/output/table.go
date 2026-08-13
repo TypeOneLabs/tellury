@@ -117,7 +117,19 @@ func (t tableRenderer) Render(w io.Writer, r Report) error {
 		// Deliberately short: the summary line below already names the scope,
 		// the resources scanned and the rules evaluated, and repeating them
 		// here made two consecutive lines say the same thing.
-		if _, err := fmt.Fprintln(w, "No waste found."); err != nil {
+		//
+		// SCANNING NOTHING IS NOT THE SAME AS FINDING NOTHING, and the
+		// difference is not cosmetic. On Azure, an identity missing read
+		// access to a resource TYPE gets an empty result set from Resource
+		// Graph rather than a denial, so a permissions gap and a clean
+		// account produce identical data. Printing "No waste found" over
+		// zero scanned resources states a conclusion the scan did not reach.
+		msg := "No waste found."
+		if r.ResourcesScanned == 0 {
+			msg = "No resources scanned — nothing was found to evaluate. " +
+				"Check the scope and the identity's permissions."
+		}
+		if _, err := fmt.Fprintln(w, msg); err != nil {
 			return err
 		}
 	} else {

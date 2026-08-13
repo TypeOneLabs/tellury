@@ -18,7 +18,7 @@ Every command, flag and exit code. For a short introduction see the
 | Flag | Default | Meaning |
 |---|---|---|
 | `--log-level` | `warn` | `error`, `warn`, `info`, `debug`. Diagnostics on stderr. |
-| `--no-color` | off | Disable ANSI colour. |
+| `--no-color` | off | Accepted and ignored. `tellury` emits no ANSI colour on any stream, so there is nothing to disable; the flag is kept so scripts that pass it keep working. |
 | `--timeout` | `5m` | Overall deadline for the run, including every API call. |
 
 ## `tellury scan`
@@ -141,6 +141,35 @@ and `csv` always contain every finding — they are consumed by other tools.
 The table carries an owner column — `ACCOUNT` on AWS, `PROJECT` on GCP — whenever the scope
 can hold more than one owner. A single `--aws-account` or `--gcp-project` scan omits it,
 since every finding belongs to the scope named on the command line.
+
+### JSON: the machine contract
+
+`--format json` is the interface for anything that is not a person — a CI step, or an AI
+agent invoking `tellury` as a tool. Two fields exist for that consumer:
+
+| Field | Meaning |
+|---|---|
+| `schema_version` | The shape of the document. Bumped when a field is removed or changes meaning; adding a field is not a bump. |
+| `scan_status` | `ok`, `no_resources`, or `degraded`. |
+
+**`scan_status` is the field that makes an empty result readable.** An empty `findings` list
+alone is ambiguous, and on Azure it is undecidable: Resource Graph returns an empty result
+set for resource types the identity cannot read, so a permissions gap and a genuinely clean
+subscription produce identical data. The status distinguishes them:
+
+- `ok` — resources were scanned. No findings means nothing wasteful was found.
+- `no_resources` — the scan ran but saw nothing. Either the scope is empty or the identity
+  cannot read the resource types the selected rules need. **Do not read this as "clean".**
+- `degraded` — part of the scope could not be reached (an unreachable account or
+  subscription). Findings are real but incomplete, so the total is a floor, not an answer.
+  `account_statuses` / `subscription_statuses` name which.
+
+`json` and `csv` always contain every finding regardless of what the terminal table shows,
+and nothing ever blocks on input, so a scan is safe to run unattended.
+
+Rule IDs (`detached_disk`, `underutilized_ec2`, …) and skip codes (`in_use`, `no_price`,
+`too_young`, …) are stable identifiers you can branch on. `tellury rules list` enumerates the
+former; `--explain-skips` reports the latter.
 
 ### Offline input
 

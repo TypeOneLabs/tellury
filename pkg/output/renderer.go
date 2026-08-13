@@ -17,6 +17,25 @@ import (
 
 // Report is the render input.
 type Report struct {
+	// SchemaVersion identifies the shape of this document. It exists so a
+	// machine consumer — a CI step or an AI agent invoking tellury as a tool —
+	// can detect a change in the contract rather than discovering it through a
+	// parse error. It is bumped when a field is removed or its meaning
+	// changes; adding a field is not a bump.
+	SchemaVersion int `json:"schema_version"`
+
+	// ScanStatus tells a machine consumer what the scan actually managed to
+	// do, which an empty Findings list cannot: "ok" (resources were scanned),
+	// "no_resources" (the scan ran but saw nothing — a scope with nothing in
+	// it, or an identity that cannot read the resource types), or "degraded"
+	// (some part of the scope could not be reached).
+	//
+	// Without this an agent must guess from a combination of counts, and on
+	// Azure it cannot guess correctly at all: Resource Graph returns an empty
+	// result set for resource types the identity cannot read, so a permissions
+	// gap and a genuinely clean subscription produce identical JSON.
+	ScanStatus string `json:"scan_status"`
+
 	Scope       string    `json:"scope"`
 	Provider    string    `json:"provider"`
 	GeneratedAt time.Time `json:"generated_at"`
@@ -204,6 +223,51 @@ type Meta struct {
 
 // NewReport assembles a Report and computes the totals exactly once. The sum is
 // over unrounded finding values and is rounded a single time (invariant I3).
+// SchemaVersion is the current shape of the JSON report. Bump it when a field
+// is removed or changes meaning; adding a field is not a bump, because a
+// consumer that ignores unknown fields is unaffected by one.
+const SchemaVersion = 1
+
+// Scan status values. A machine consumer switches on these rather than trying
+// to infer intent from a combination of counts.
+const (
+	// StatusOK: resources were scanned. An empty findings list means the scan
+	// looked and found nothing wasteful.
+	StatusOK = "ok"
+	// StatusNoResources: the scan ran but saw no resources at all. Either the
+	// scope holds nothing, or the identity cannot read the resource types the
+	// selected rules need. Those are indistinguishable from the data, which is
+	// exactly why this is not reported as "ok".
+	StatusNoResources = "no_resources"
+	// StatusDegraded: part of the scope could not be reached — an account or
+	// subscription reported as unreachable. Findings are real but incomplete,
+	// so a total is a floor rather than an answer.
+	StatusDegraded = "degraded"
+)
+
+// scanStatus classifies what the scan managed to do. Order matters: a scan
+// that reached nothing is reported as no_resources even if part of the scope
+// was also unreachable, because the more useful thing to tell the caller is
+// that there is nothing to act on.
+func scanStatus(m Meta) string {
+	if m.ResourcesScanned == 0 {
+		return StatusNoResources
+	}
+	// "unreachable" is the only status that means the scan could not look.
+	// "no_resources" and "suspended" are answers, not failures.
+	for _, a := range m.AccountStatuses {
+		if a.Status == "unreachable" {
+			return StatusDegraded
+		}
+	}
+	for _, sub := range m.SubscriptionStatuses {
+		if sub.Status == "unreachable" {
+			return StatusDegraded
+		}
+	}
+	return StatusOK
+}
+
 func NewReport(res rules.Result, m Meta) Report {
 	// A default scan (no currency requested, nothing detected) must render
 	// exactly as it did before currency existed: no currency fields, "$"
@@ -215,6 +279,8 @@ func NewReport(res rules.Result, m Meta) Report {
 	}
 
 	r := Report{
+		SchemaVersion:         SchemaVersion,
+		ScanStatus:            scanStatus(m),
 		Scope:                 m.Scope,
 		Provider:              m.Provider,
 		GeneratedAt:           m.GeneratedAt.UTC(),

@@ -109,7 +109,7 @@ func newGraphExportCmd(g *globalFlags) *cobra.Command {
 	// set is hardcoded here — GCP's --gcp-* and AWS's --aws-* flags appear by
 	// construction.
 	addAllScopeFlags(f, &cfg)
-	f.StringVar(&cfg.Provider, "provider", "", "cloud provider (gcp|aws; default: inferred from the scope flags, else gcp)")
+	f.StringVar(&cfg.Provider, "provider", "", "cloud provider (gcp|aws|azure; default: inferred from the scope flags, else gcp)")
 	f.StringSliceVar(&cfg.AWSRegions, "aws-regions", nil,
 		"regions to scan for the AWS provider (default: every region enabled for the account via DescribeRegions; "+
 			"an availability-zone form like us-east-1a is accepted and flattened to its region)")

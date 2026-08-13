@@ -416,9 +416,15 @@ func vmRegions(rows []map[string]any) []string {
 func (p *Provider) addResourceRows(ctx context.Context, g *graph.Graph, edges map[graph.Edge]struct{}, subscriptionID string, rows []map[string]any, assetTypeHints []string) error {
 	wantVM := wantsAssetType(assetTypeHints, TypeVM)
 	if wantVM && p.sizer != nil {
-		if err := p.sizer.LoadSubscription(ctx, subscriptionID, vmRegions(rows)); err != nil {
-			p.log.Warn("azure: could not resolve VM size shapes; shape-dependent rules will skip VMs",
-				"subscription", subscriptionID, "err", err)
+		// No VM rows means no shapes to resolve. Skipping is not just an
+		// optimisation: with an empty region list the SKUs call falls back to
+		// its unfiltered form, so a scope holding no VMs paid 42 seconds to
+		// fetch every SKU in every region and use none of them.
+		if regions := vmRegions(rows); len(regions) > 0 {
+			if err := p.sizer.LoadSubscription(ctx, subscriptionID, regions); err != nil {
+				p.log.Warn("azure: could not resolve VM size shapes; shape-dependent rules will skip VMs",
+					"subscription", subscriptionID, "err", err)
+			}
 		}
 	}
 

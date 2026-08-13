@@ -6,7 +6,7 @@ A single-binary CLI that reads your cloud inventory, builds an in-memory resourc
 and evaluates deterministic rules against it. Each finding carries the evidence behind it,
 the arithmetic that produced its figure, and which price source answered.
 
-> **Early development.** AWS, Azure and GCP. Ten rules. The CLI surface and the rule
+> **Early development.** AWS, Azure and GCP. Eleven rules. The CLI surface and the rule
 > interface may change between minor releases.
 
 ## Quick start
@@ -121,6 +121,34 @@ A scan runs one provider at a time: passing both `--gcp-*` and `--aws-*` flags f
 doing any work. Each scan writes a graph snapshot, findings JSON and an HTML report into
 `tellury-out/`.
 
+## In a pipeline, or as an agent's tool
+
+`tellury` exits `0` when it ran clean, `3` when it found waste, `2` on a usage error, and
+non-zero otherwise. `--fail-on-findings=false` turns findings into a report rather than a
+build failure — worth doing on the first run, since an established account almost always has
+pre-existing waste and a build that fails on day one gets switched off on day two.
+
+To gate on a threshold rather than on any finding at all:
+
+```bash
+tellury scan --aws-account 123456789012 --aws-regions eu-west-1 \
+  --format json --fail-on-findings=false > scan.json
+
+jq -e '.scan_status == "ok"' scan.json > /dev/null \
+  || { echo "scan did not complete cleanly: $(jq -r .scan_status scan.json)"; exit 1; }
+
+jq -e '.total_monthly_waste_usd < 50' scan.json > /dev/null \
+  || { echo "waste above threshold: $(jq -r .total_monthly_waste_usd scan.json)"; exit 1; }
+```
+
+That first check matters more than it looks. An empty result is ambiguous — and on Azure
+undecidable — because a permissions gap and a genuinely clean account produce identical
+findings. `scan_status` separates `ok` from `no_resources` and `degraded`, so a pipeline
+cannot mistake "could not look" for "nothing to fix". The same field is what makes `tellury`
+usable as a tool an AI agent invokes: JSON on stdout, stable rule IDs and skip codes, nothing
+that blocks on input, and no HTML report it cannot open. See
+[the JSON contract](docs/cli.md#json-the-machine-contract).
+
 ## What it does
 
 - Reads GCP inventory from Cloud Asset Inventory, metrics from Cloud Monitoring, prices from
@@ -148,7 +176,10 @@ no per-resource hydration call is needed. Management-group and tenant scopes fan
 subscriptions and report each one's outcome, so a subscription the identity cannot read is
 named rather than silently missing from the total.
 
-Not there yet: Azure metrics, and therefore Azure rightsizing.
+Azure metrics come from Azure Monitor, which — unlike CloudWatch and Cloud Monitoring —
+publishes guest memory as a platform metric needing no agent in the VM.
+
+Not there yet: any cloud beyond these three.
 
 ## Rules
 
@@ -164,11 +195,15 @@ Not there yet: Azure metrics, and therefore Azure rightsizing.
 | `underutilized_ec2` | aws / ec2 | high | EC2 instances overprovisioned for their CPU load |
 | `unattached_managed_disk` | azure / compute | medium | Managed disks attached to no VM |
 | `unassociated_public_ip` | azure / network | medium | Public IPs associated with nothing |
+| `underutilized_vm` | azure / compute | high | Azure VMs overprovisioned for their CPU load |
 
-`underutilized_instance` and `no_lifecycle_policy` read Cloud Monitoring; `underutilized_ec2`
-reads CloudWatch. Without metric access they skip and say so — they never guess a value from
-missing data. Neither cloud publishes guest memory without an agent installed in the VM, so
-every rule here judges CPU only.
+`underutilized_instance` and `no_lifecycle_policy` read Cloud Monitoring, `underutilized_ec2`
+reads CloudWatch, and `underutilized_vm` reads Azure Monitor. Without metric access they skip
+and say so — they never guess a value from missing data.
+
+Every rule here judges CPU only. AWS and GCP publish no guest memory without an agent
+installed in the VM; Azure does publish it as a platform metric, and tellury reads it, but no
+rule declares it yet.
 
 `tellury rules list` shows the catalogue; `tellury rules explain <id>` prints one rule's full
 declaration.
