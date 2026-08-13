@@ -17,6 +17,7 @@ import (
 	"github.com/TypeOneLabs/tellury/internal/config"
 	"github.com/TypeOneLabs/tellury/pkg/cloud"
 	"github.com/TypeOneLabs/tellury/pkg/cloud/aws"
+	"github.com/TypeOneLabs/tellury/pkg/cloud/azure"
 	"github.com/TypeOneLabs/tellury/pkg/cloud/gcp"
 	"github.com/TypeOneLabs/tellury/pkg/graph"
 	"github.com/TypeOneLabs/tellury/pkg/metrics"
@@ -39,6 +40,7 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 			"  tellury scan --currency EUR --gcp-project my-gcp-project   # price in EUR\n" +
 			"  tellury scan --aws-account 123456789012   # provider inferred from the AWS scope flag\n" +
 			"  tellury scan --aws-organization o-xxxxxxxxxx   # scan every account in the org\n" +
+			"  tellury scan --azure-subscription 00000000-0000-0000-0000-000000000000   # provider inferred from the Azure scope flag\n" +
 			"  tellury scan --cache-file snap.json   # offline replay (full fidelity)\n" +
 			"  tellury scan --fixture cai-assets.json   # offline replay (topology only)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -59,10 +61,10 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 	// environment variables: addAllScopeFlags iterates cloud.Providers() and
 	// each provider's cloud.ScopesFor(...) yields its scope dimensions with
 	// their provider-owned --<provider>-<scope> flag names. No literal flag
-	// set is hardcoded here — GCP's --gcp-* and AWS's --aws-* flags appear by
-	// construction.
+	// set is hardcoded here — GCP's --gcp-*, AWS's --aws-* and Azure's
+	// --azure-* flags appear by construction.
 	addAllScopeFlags(f, &cfg)
-	f.StringVar(&cfg.Provider, "provider", "", "cloud provider (gcp|aws; default: inferred from the scope flags, else gcp)")
+	f.StringVar(&cfg.Provider, "provider", "", "cloud provider (gcp|aws|azure; default: inferred from the scope flags, else gcp)")
 	f.StringSliceVar(&cfg.AWSRegions, "aws-regions", nil,
 		"regions to scan for the AWS provider (default: every region enabled for the account via DescribeRegions; "+
 			"an availability-zone form like us-east-1a is accepted and flattened to its region)")
@@ -97,13 +99,18 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 
 // runScan is the whole pipeline, in order, with no hidden magic.
 // scopeSpansManyOwners reports whether the scan's scope can contain more than
-// one project or account, and therefore whether a finding's owner is knowable
-// from the scope alone.
+// one project, account, or subscription, and therefore whether a finding's
+// owner is knowable from the scope alone.
 func scopeSpansManyOwners(sc cloud.Scope) bool {
 	if sc.GCP != nil && (sc.GCP.Organization != "" || sc.GCP.Folder != "") {
 		return true
 	}
 	if sc.AWS != nil && (sc.AWS.Organization != "" || sc.AWS.OrganizationalUnit != "") {
+		return true
+	}
+	// An Azure tenant or management group spans many subscriptions. A single
+	// subscription — with or without a resource-group filter — does not.
+	if sc.Azure != nil && (sc.Azure.Tenant != "" || sc.Azure.ManagementGroup != "") {
 		return true
 	}
 	return false
@@ -302,13 +309,14 @@ func runScan(
 		// Show the owner column whenever the SCOPE can hold more than one owner,
 		// not only when the resources found happen to span several.
 		//
-		// A --gcp-project or --aws-account scan needs no column: every finding
-		// obviously belongs to the scope named on the command line. An
-		// organization, folder or OU scan is the opposite — a finding could be
-		// in any account beneath it, and without the column the operator cannot
-		// tell which. Keying this off the resources meant an organization scan
-		// whose findings all landed in one account printed no column at all,
-		// which is precisely when the reader has no other way to know.
+		// A --gcp-project, --aws-account or --azure-subscription scan needs no
+		// column: every finding obviously belongs to the scope named on the
+		// command line. An organization, folder, OU, tenant or management-group
+		// scan is the opposite — a finding could be in any owner beneath it, and
+		// without the column the operator cannot tell which. Keying this off the
+		// resources meant an organization scan whose findings all landed in one
+		// owner printed no column at all, which is precisely when the reader has
+		// no other way to know.
 		MultiProject:      gr.ProjectCount() > 1 || scopeSpansManyOwners(scope),
 		Currency:          effectiveCurrency,
 		CurrencySource:    currencyState.source,
@@ -337,6 +345,16 @@ func runScan(
 		// scan returns nil and the report field stays empty.
 		if ar, ok := provider.(accountReporter); ok {
 			meta.AccountStatuses = ar.AccountStatuses()
+		}
+	}
+	// Azure subscription coverage is the Azure analog of AWS's account
+	// coverage: the subscription container count is the denominator for a
+	// tenant or management-group scan, and the provider reports per-subscription
+	// outcomes so a total never silently omits an unreachable subscription.
+	if cfg.Provider == "azure" {
+		meta.SubscriptionsAnalyzed = gr.SubscriptionContainerCount()
+		if sr, ok := provider.(subscriptionReporter); ok {
+			meta.SubscriptionStatuses = sr.SubscriptionStatuses()
 		}
 	}
 	report := output.NewReport(res, meta)
@@ -407,6 +425,13 @@ type regionReporter interface {
 // field stays empty.
 type accountReporter interface {
 	AccountStatuses() []aws.AccountStatus
+}
+
+// subscriptionReporter is the Azure analog of accountReporter: a tenant or
+// management-group scan reports the outcome for each subscription it found,
+// so an operator can see which subscriptions were scanned and which were not.
+type subscriptionReporter interface {
+	SubscriptionStatuses() []azure.SubscriptionStatus
 }
 
 // requestedCurrency renders the currency the scan was asked/detected to price
@@ -544,13 +569,14 @@ func cacheIfPresent(path string) (*graph.Graph, *graph.Snapshot, error) {
 
 // newProvider builds the cloud provider for the scan's selected provider. It
 // dispatches on cfg.Provider — the provider seam, not a GCP hardcode — so a
-// config that resolved to "aws" is never silently served a GCP provider. It
-// accepts two offline signals it has no way to derive on its own:
+// config that resolved to "aws" or "azure" is never silently served a GCP
+// provider. It accepts two offline signals it has no way to derive on its own:
 //
 //   - offline=true  => this is a --fixture or a cache-hit scan: no cloud SDK
-//     client is constructed at all (see aws.WithOffline / gcp.WithOffline).
-//     Pricing loads from TELLURY_PRICE_FIXTURE if set, otherwise every
-//     resource requiring a price skips.
+//     client is constructed at all (see aws.WithOffline / gcp.WithOffline /
+//     azure.WithOffline). Pricing loads from TELLURY_PRICE_FIXTURE if set for
+//     providers that support it, otherwise every resource requiring a price
+//     skips.
 //   - cacheHit=true => the graph already came from the cache file, so there
 //     is no asset source to build; this is only used for the log line.
 func newProvider(ctx context.Context, cfg config.Scan, log *slog.Logger, offline, cacheHit bool) (cloud.Provider, error) {
@@ -589,6 +615,23 @@ func newProvider(ctx context.Context, cfg config.Scan, log *slog.Logger, offline
 			opts = append(opts, aws.WithOffline())
 		}
 		return aws.New(ctx, opts...)
+	case "azure":
+		opts := []azure.Option{azure.WithLogger(log)}
+		if len(cfg.Fixture) > 0 {
+			fx, err := azure.LoadFixture(cfg.Fixture...)
+			if err != nil {
+				return nil, err
+			}
+			opts = append(opts, azure.WithFixture(fx))
+			log.Info("using fixture assets",
+				"files", len(cfg.Fixture),
+				"management_groups", len(fx.ManagementGroups),
+				"subscriptions", len(fx.Subscriptions))
+		}
+		if offline {
+			opts = append(opts, azure.WithOffline())
+		}
+		return azure.New(ctx, opts...)
 	default:
 		return nil, cloud.UnknownProviderError(cfg.Provider)
 	}

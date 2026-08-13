@@ -166,11 +166,11 @@ func (g *Graph) NodeCount() int     { return len(g.nodes) }
 func (g *Graph) DanglingEdges() int { return g.dangling }
 
 // ResourceNodeCount is the count of leaf (non-container) nodes. Container
-// nodes — organization, folder, project, region — are hierarchy scaffolding
-// that must not inflate an operator's reading of "N resources", so the scan
-// report uses this count, not NodeCount(). Region nodes are containers, so a
-// graph with region nodes reports the same "N resources" figure a graph
-// without them does.
+// nodes — organization, folder, project, region, subscription — are hierarchy
+// scaffolding that must not inflate an operator's reading of "N resources", so
+// the scan report uses this count, not NodeCount(). Region and subscription
+// nodes are containers, so a graph with them reports the same "N resources"
+// figure a graph without them does.
 func (g *Graph) ResourceNodeCount() int {
 	n := 0
 	g.Nodes(func(node *Node) bool {
@@ -210,6 +210,15 @@ func (g *Graph) ProjectCount() int {
 // ambiguity the scan summary exists to resolve.
 func (g *Graph) ProjectContainerCount() int {
 	return len(g.byKind[KindProject])
+}
+
+// SubscriptionContainerCount reports how many Azure subscription container
+// nodes the graph carries. It is the Azure analog of ProjectContainerCount:
+// the scan report's "subscriptions analyzed" figure comes from these container
+// nodes, never from the findings, so a clean tenant scan still reports the
+// subscriptions it actually looked at.
+func (g *Graph) SubscriptionContainerCount() int {
+	return len(g.byKind[KindSubscription])
 }
 
 func (g *Graph) EdgeCount() int {

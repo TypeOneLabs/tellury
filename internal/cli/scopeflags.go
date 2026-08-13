@@ -10,9 +10,9 @@ import (
 // addAllScopeFlags registers every scope flag every registered provider
 // declares onto fs, each bound to the corresponding named field on cfg. It
 // iterates cloud.Providers(), so the CLI flag surface is driven entirely by
-// the provider registry: GCP's --gcp-* flags and AWS's --aws-* flags (plus
-// any future provider) all appear here by construction, with no literal flag
-// list in the CLI. The per-provider work is addScopeFlags.
+// the provider registry: GCP's --gcp-* flags, AWS's --aws-* flags and Azure's
+// --azure-* flags (plus any future provider) all appear here by construction,
+// with no literal flag list in the CLI. The per-provider work is addScopeFlags.
 //
 // The helper returns the number of flags it registered, which tests assert
 // equals the sum of every provider's declared scope count.
@@ -50,10 +50,10 @@ func addScopeFlags(fs *pflag.FlagSet, provider string, cfg *config.Scan) int {
 		case "folder":
 			dst = &cfg.Folder
 		case "organization":
-			// Both providers declare a scope named "organization"; each owns a
+			// Both GCP and AWS declare a scope named "organization"; each owns a
 			// distinct config field (GCP's Organization, AWS's
 			// AWSOrganization) so the CLI never loses which provider's flag
-			// set it — the two-provider conflict check depends on that.
+			// set it — the provider conflict check depends on that.
 			if provider == "aws" {
 				dst = &cfg.AWSOrganization
 			} else {
@@ -63,6 +63,14 @@ func addScopeFlags(fs *pflag.FlagSet, provider string, cfg *config.Scan) int {
 			dst = &cfg.Account
 		case "organizational_unit":
 			dst = &cfg.OrganizationalUnit
+		case "tenant":
+			dst = &cfg.AzureTenant
+		case "management_group":
+			dst = &cfg.AzureManagementGroup
+		case "subscription":
+			dst = &cfg.AzureSubscription
+		case "resource_group":
+			dst = &cfg.AzureResourceGroup
 		default:
 			// A dimension without a config field cannot be bound; skip it.
 			continue

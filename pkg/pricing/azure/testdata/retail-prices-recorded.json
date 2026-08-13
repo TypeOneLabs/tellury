@@ -1,0 +1,72 @@
+[
+  {
+    "name": "managed_disk_premium_p10_westeurope",
+    "url": "https://prices.azure.com/api/retail/prices?$filter=serviceName+eq+%27Storage%27+and+armRegionName+eq+%27westeurope%27+and+skuName+eq+%27P10+LRS%27+and+type+eq+%27Consumption%27+and+productName+eq+%27Premium+SSD+Managed+Disks%27+and+meterName+eq+%27P10+LRS+Disk%27+and+isPrimaryMeterRegion+eq+true+and+tierMinimumUnits+eq+0+and+contains%28skuName%2C%27Spot%27%29+eq+false+and+contains%28skuName%2C%27Low+Priority%27%29+eq+false+and+contains%28meterName%2C%27Spot%27%29+eq+false+and+contains%28meterName%2C%27Low+Priority%27%29+eq+false+and+contains%28productName%2C%27Spot%27%29+eq+false+and+contains%28productName%2C%27Low+Priority%27%29+eq+false+and+contains%28productName%2C%27Windows%27%29+eq+false",
+    "body": {
+      "BillingCurrency": "USD",
+      "CustomerEntityId": "Default",
+      "CustomerEntityType": "Retail",
+      "Items": [
+        {
+          "currencyCode": "USD",
+          "tierMinimumUnits": 0.0,
+          "retailPrice": 21.68,
+          "unitPrice": 21.68,
+          "armRegionName": "westeurope",
+          "location": "EU West",
+          "effectiveStartDate": "2018-05-01T00:00:00Z",
+          "meterId": "137d3f72-fe0e-4a78-b5d0-92d704aa3cac",
+          "meterName": "P10 LRS Disk",
+          "productId": "DZH318Z0BP04",
+          "skuId": "DZH318Z0BP04/0080",
+          "productName": "Premium SSD Managed Disks",
+          "skuName": "P10 LRS",
+          "serviceName": "Storage",
+          "serviceId": "DZH317F1HKN0",
+          "serviceFamily": "Storage",
+          "unitOfMeasure": "1/Month",
+          "type": "Consumption",
+          "isPrimaryMeterRegion": true,
+          "armSkuName": "Premium_SSD_Managed_Disk_P10"
+        }
+      ],
+      "NextPageLink": null,
+      "Count": 1
+    }
+  },
+  {
+    "name": "public_ip_standard_westeurope",
+    "url": "https://prices.azure.com/api/retail/prices?$filter=serviceName+eq+%27Virtual+Network%27+and+armRegionName+eq+%27westeurope%27+and+skuName+eq+%27Standard%27+and+type+eq+%27Consumption%27+and+productName+eq+%27IP+Addresses%27+and+meterName+eq+%27Standard+IPv4+Static+Public+IP%27+and+tierMinimumUnits+eq+0+and+contains%28skuName%2C%27Spot%27%29+eq+false+and+contains%28skuName%2C%27Low+Priority%27%29+eq+false+and+contains%28meterName%2C%27Spot%27%29+eq+false+and+contains%28meterName%2C%27Low+Priority%27%29+eq+false+and+contains%28productName%2C%27Spot%27%29+eq+false+and+contains%28productName%2C%27Low+Priority%27%29+eq+false+and+contains%28productName%2C%27Windows%27%29+eq+false+and+contains%28skuName%2C%27Windows%27%29+eq+false",
+    "body": {
+      "BillingCurrency": "USD",
+      "CustomerEntityId": "Default",
+      "CustomerEntityType": "Retail",
+      "Items": [
+        {
+          "currencyCode": "USD",
+          "tierMinimumUnits": 0.0,
+          "retailPrice": 0.005,
+          "unitPrice": 0.005,
+          "armRegionName": "westeurope",
+          "location": "EU West",
+          "effectiveStartDate": "2018-06-01T00:00:00Z",
+          "meterId": "9c150bf9-2bad-430e-a53c-c213804f49ef",
+          "meterName": "Standard IPv4 Static Public IP",
+          "productId": "DZH318Z0BNXN",
+          "skuId": "DZH318Z0BNXN/0002",
+          "productName": "IP Addresses",
+          "skuName": "Standard",
+          "serviceName": "Virtual Network",
+          "serviceId": "DZH314HC0WV9",
+          "serviceFamily": "Networking",
+          "unitOfMeasure": "1 Hour",
+          "type": "Consumption",
+          "isPrimaryMeterRegion": false,
+          "armSkuName": ""
+        }
+      ],
+      "NextPageLink": null,
+      "Count": 1
+    }
+  }
+]

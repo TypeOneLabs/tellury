@@ -169,6 +169,7 @@ never as free.
 | [CLI reference](docs/cli.md) | Every command, flag, environment variable and exit code |
 | [GCP setup](docs/gcp-setup.md) | Authentication, IAM roles, APIs, currency detection |
 | [AWS setup](docs/aws-setup.md) | Credentials, IAM permissions, regions, pricing caveats |
+| [Azure setup](docs/azure-setup.md) | Credentials, Reader vs a least-privilege custom role, scopes above a subscription |
 | [Offline scanning](docs/offline.md) | Fixtures, snapshots, `graph export`, scan artifacts |
 | [Writing a rule](docs/writing-a-rule.md) | The `NodeRule` interface end to end, with a worked example |
 | [AGENTS.md](AGENTS.md) | Repository conventions, for people and coding agents |

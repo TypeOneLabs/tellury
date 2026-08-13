@@ -22,6 +22,8 @@ import (
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/unassociated_eip"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/unattached_ebs_volume"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/underutilized_instance"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/azure/compute/unattached_managed_disk"
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/azure/network/unassociated_public_ip"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/detached_disk"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/old_snapshot"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/gcp/compute/underutilized_instance"
@@ -107,8 +109,8 @@ func TestRuleRegistryContainsEveryRuleAllImports(t *testing.T) {
 		for _, imp := range imported {
 			parts := strings.Split(imp, "/")
 			if len(parts) >= 3 {
-				prov := parts[len(parts)-3] // e.g. "aws" or "gcp"
-				svc := parts[len(parts)-2]  // e.g. "ec2" or "compute"
+				prov := parts[len(parts)-3] // e.g. "aws" or "gcp" or "azure"
+				svc := parts[len(parts)-2]  // e.g. "ec2" or "compute" or "network"
 				if strings.EqualFold(r.Meta().Provider, prov) && strings.EqualFold(r.Meta().Service, svc) {
 					expectedIDs[r.Meta().ID] = true
 				}

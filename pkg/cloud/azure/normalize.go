@@ -1,0 +1,258 @@
+package azure
+
+import (
+	"encoding/json"
+	"strconv"
+	"strings"
+
+	"github.com/TypeOneLabs/tellury/pkg/graph"
+)
+
+// Azure Resource Graph type and service tokens. The service token is the ARG
+// type's provider namespace ("microsoft.compute" / "microsoft.network") and
+// the asset-type token is tellury's own stable "azure.<service>.<resource>"
+// spelling, matching the rule registry.
+const (
+	argTypeDisk     = "microsoft.compute/disks"
+	argTypePublicIP = "microsoft.network/publicipaddresses"
+
+	serviceCompute = "microsoft.compute"
+	serviceNetwork = "microsoft.network"
+)
+
+// NormalizeResource dispatches one Azure Resource Graph row to the matching
+// normalizer based on the row's `type` column. A row whose type is not one of
+// the modelled ARG types returns nil.
+func NormalizeResource(row map[string]any) *graph.Node {
+	switch strings.ToLower(stringOf(row["type"])) {
+	case argTypeDisk:
+		return NormalizeDisk(row)
+	case argTypePublicIP:
+		return NormalizePublicIP(row)
+	default:
+		return nil
+	}
+}
+
+// NormalizeDisk converts one Microsoft.Compute/disks Resource Graph row into a
+// graph node. A row without an ARM resource `id` is dropped.
+//
+// Attrs, named from the ARG row fields they came from:
+//
+//	resource_id      — row.id (the ARM resource ID; also the node ID)
+//	resource_group   — row.resourceGroup
+//	subscription_id  — row.subscriptionId
+//	sku_name         — row.sku.name, e.g. "Premium_LRS"
+//	disk_size_gb     — row.properties.diskSizeGB, in GiB
+//	disk_state       — row.properties.diskState, e.g. "Unattached"/"Attached"
+//	managed_by       — row.managedBy; written unconditionally, "" means unattached
+//	time_created     — row.properties.timeCreated
+//
+// disk_size_gb is written ONLY when Resource Graph returned a positive value.
+// An absent key therefore means "the payload did not carry a billable size",
+// never "a zero-size disk" — the same distinction the GCP snapshot normalizer
+// preserves for storage_bytes. managed_by is written unconditionally so a rule
+// can tell the unattached state ("managed_by" present, empty) from an
+// unparsed payload (the key would be absent).
+func NormalizeDisk(row map[string]any) *graph.Node {
+	id := stringOf(row["id"])
+	if id == "" {
+		return nil
+	}
+
+	subscriptionID := stringOf(row["subscriptionId"])
+	if subscriptionID == "" {
+		subscriptionID = subscriptionFromID(id)
+	}
+	location := locationRegion(stringOf(row["location"]))
+
+	n := &graph.Node{
+		ID:        graph.Ref(id),
+		Kind:      graph.KindDisk,
+		Name:      resourceName(row, id),
+		Provider:  "azure",
+		Service:   serviceCompute,
+		AssetType: TypeDisk,
+		Project:   subscriptionID,
+		Location:  location,
+		Labels:    labelsOf(row["tags"]),
+		Attrs:     map[string]any{},
+	}
+
+	n.SetAttr(AttrResourceID, id)
+	n.SetAttr(AttrResourceGroup, stringOf(row["resourceGroup"]))
+	n.SetAttr(AttrSubscriptionID, subscriptionID)
+
+	sku := mapOf(row["sku"])
+	n.SetAttr(AttrSKUName, stringOf(sku["name"]))
+
+	properties := mapOf(row["properties"])
+	n.SetAttr(AttrDiskState, stringOf(properties["diskState"]))
+	n.SetAttr(AttrManagedBy, stringOf(row["managedBy"]))
+
+	if size, ok := numOf(properties["diskSizeGB"]); ok && size > 0 {
+		n.SetAttr(AttrDiskSizeGB, size)
+	}
+	if created := stringOf(properties["timeCreated"]); created != "" {
+		n.SetAttr(AttrTimeCreated, created)
+	}
+
+	return n
+}
+
+// NormalizePublicIP converts one Microsoft.Network/publicIPAddresses Resource
+// Graph row into a graph node. A row without an ARM resource `id` is dropped.
+//
+// Attrs, named from the ARG row fields they came from:
+//
+//	resource_id                  — row.id (the ARM resource ID; also the node ID)
+//	resource_group               — row.resourceGroup
+//	subscription_id              — row.subscriptionId
+//	sku_name                     — row.sku.name, "Standard" or "Basic"
+//	public_ip_allocation_method  — row.properties.publicIPAllocationMethod
+//	ip_address                   — row.properties.ipAddress, when allocated
+//	ip_configuration             — row.properties.ipConfiguration, present
+//	                               exactly when associated
+//	ip_configuration_count       — derived: 0 or 1, ALWAYS written
+//
+// ip_configuration_count is the countable attribute written unconditionally:
+// zero means "known unassociated", while an absent attribute would mean the
+// payload was not parsed. ip_configuration itself keeps the raw ARM object so
+// the rule can also test association exactly as ARG expressed it.
+func NormalizePublicIP(row map[string]any) *graph.Node {
+	id := stringOf(row["id"])
+	if id == "" {
+		return nil
+	}
+
+	subscriptionID := stringOf(row["subscriptionId"])
+	if subscriptionID == "" {
+		subscriptionID = subscriptionFromID(id)
+	}
+	location := locationRegion(stringOf(row["location"]))
+
+	n := &graph.Node{
+		ID:        graph.Ref(id),
+		Kind:      graph.KindAddress,
+		Name:      resourceName(row, id),
+		Provider:  "azure",
+		Service:   serviceNetwork,
+		AssetType: TypePublicIP,
+		Project:   subscriptionID,
+		Location:  location,
+		Labels:    labelsOf(row["tags"]),
+		Attrs:     map[string]any{},
+	}
+
+	n.SetAttr(AttrResourceID, id)
+	n.SetAttr(AttrResourceGroup, stringOf(row["resourceGroup"]))
+	n.SetAttr(AttrSubscriptionID, subscriptionID)
+
+	sku := mapOf(row["sku"])
+	n.SetAttr(AttrSKUName, stringOf(sku["name"]))
+
+	properties := mapOf(row["properties"])
+	n.SetAttr(AttrPublicIPAllocationMethod, stringOf(properties["publicIPAllocationMethod"]))
+
+	if ip := stringOf(properties["ipAddress"]); ip != "" {
+		n.SetAttr(AttrIPAddress, ip)
+	}
+
+	// The count is written first, then overwritten when the ARM configuration
+	// object is present. The attribute is therefore never absent for a parsed
+	// row, exactly like attachment_count / user_count on the other providers.
+	n.SetAttr(AttrIPConfigurationCount, 0.0)
+	if cfg := mapOf(properties["ipConfiguration"]); cfg != nil {
+		n.SetAttr(AttrIPConfigurationCount, 1.0)
+		n.SetAttr(AttrIPConfiguration, cfg)
+	}
+
+	return n
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Row field helpers. Resource Graph returns JSON decoded into any; every
+// normalizer reads through these so a malformed field degrades to absent
+// rather than panicking.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func stringOf(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func numOf(v any) (float64, bool) {
+	switch t := v.(type) {
+	case float64:
+		return t, true
+	case float32:
+		return float64(t), true
+	case int:
+		return float64(t), true
+	case int64:
+		return float64(t), true
+	case json.Number:
+		f, err := t.Float64()
+		return f, err == nil
+	case string:
+		f, err := strconv.ParseFloat(t, 64)
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func mapOf(v any) map[string]any {
+	m, _ := v.(map[string]any)
+	return m
+}
+
+func resourceName(row map[string]any, id string) string {
+	if name := stringOf(row["name"]); name != "" {
+		return name
+	}
+	return lastPathSegment(id)
+}
+
+func lastPathSegment(s string) string {
+	s = strings.TrimSuffix(s, "/")
+	if i := strings.LastIndex(s, "/"); i >= 0 {
+		return s[i+1:]
+	}
+	return s
+}
+
+// subscriptionFromID extracts the subscription ID from an ARM resource ID:
+// /subscriptions/<sub>/resourceGroups/... -> <sub>.
+func subscriptionFromID(id string) string {
+	parts := strings.Split(id, "/")
+	for i := 0; i < len(parts)-1; i++ {
+		if strings.EqualFold(parts[i], "subscriptions") {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
+func labelsOf(v any) map[string]string {
+	switch t := v.(type) {
+	case map[string]string:
+		if len(t) == 0 {
+			return nil
+		}
+		return t
+	case map[string]any:
+		out := make(map[string]string, len(t))
+		for k, raw := range t {
+			if s, ok := raw.(string); ok && s != "" {
+				out[k] = s
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return nil
+	}
+}

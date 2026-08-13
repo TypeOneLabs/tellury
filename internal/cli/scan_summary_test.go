@@ -3,12 +3,12 @@ package cli
 import (
 	"bytes"
 	"context"
-	"github.com/TypeOneLabs/tellury/pkg/cloud"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/TypeOneLabs/tellury/internal/config"
+	"github.com/TypeOneLabs/tellury/pkg/cloud"
 )
 
 // TestScanSummary_ProjectsDerivedFromGraphNodes drives the summary through the
@@ -139,8 +139,8 @@ func TestScanSummary_JSONCarriesSummaryFields(t *testing.T) {
 // It used to key off the resources found: an organization scan whose findings
 // all landed in one account printed no ACCOUNT column — precisely the case
 // where the reader has no other way to know which account a finding is in.
-// A single-account or single-project scan needs no column, because the owner
-// is named on the command line.
+// A single-account, single-project or single-subscription scan needs no
+// column, because the owner is named on the command line.
 func TestScopeSpansManyOwners(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -153,6 +153,10 @@ func TestScopeSpansManyOwners(t *testing.T) {
 		{"gcp organization", cloud.Scope{Provider: "gcp", GCP: &cloud.GCPScope{Organization: "1234"}}, true},
 		{"gcp folder", cloud.Scope{Provider: "gcp", GCP: &cloud.GCPScope{Folder: "5678"}}, true},
 		{"gcp single project", cloud.Scope{Provider: "gcp", GCP: &cloud.GCPScope{Project: "p"}}, false},
+		{"azure tenant", cloud.Scope{Provider: "azure", Azure: &cloud.AzureScope{Tenant: "t"}}, true},
+		{"azure management group", cloud.Scope{Provider: "azure", Azure: &cloud.AzureScope{ManagementGroup: "mg"}}, true},
+		{"azure single subscription", cloud.Scope{Provider: "azure", Azure: &cloud.AzureScope{Subscription: "s"}}, false},
+		{"azure subscription resource group", cloud.Scope{Provider: "azure", Azure: &cloud.AzureScope{Subscription: "s", ResourceGroup: "rg"}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := scopeSpansManyOwners(tc.scope); got != tc.want {

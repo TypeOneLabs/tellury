@@ -110,6 +110,17 @@ func Providers() []string {
 	return out
 }
 
+// ProviderRegistered reports whether provider has registered a scope
+// vocabulary. The provider gate in config uses this rather than a literal
+// provider list, so a third cloud that registers its scopes is accepted
+// without widening a hardcoded "gcp or aws" chain.
+func ProviderRegistered(provider string) bool {
+	scopeMu.RLock()
+	defer scopeMu.RUnlock()
+	_, ok := scopeRegistry[provider]
+	return ok
+}
+
 // ScopesFor returns the scope vocabulary a provider has declared, sorted by
 // Name. Returns nil for an unregistered provider.
 func ScopesFor(provider string) []ScopeVar {

@@ -36,13 +36,19 @@ const (
 	// The node ID is the OU's ARN, and containment edges follow the same
 	// "contained → container" convention as every other edge in the graph.
 	KindOrganizationalUnit ResourceKind = "organizational_unit"
+	// KindSubscription is an Azure subscription container node. It is the
+	// Azure owner tier: resources roll up
+	// resource -> region -> subscription -> management group -> tenant. A
+	// subscription is a container, never a billable leaf.
+	KindSubscription ResourceKind = "subscription"
 	// KindRegion is the location tier of the hierarchy: a per-project (or
-	// per-account, for AWS) container node ("projects/<id>/regions/<location>"
-	// / "accounts/<id>/regions/<region>") that sits between a resource and
-	// its project/account. A rollup walks
-	// resource -> region -> project|account -> folder -> organization. Region
-	// nodes are containers, never billable leaves — no rule ever sees one and
-	// ResourceNodeCount never counts one.
+	// per-account, for AWS; per-subscription, for Azure) container node
+	// ("projects/<id>/regions/<location>" / "accounts/<id>/regions/<region>" /
+	// "subscriptions/<id>/regions/<region>") that sits between a resource and
+	// its project/account/subscription. A rollup walks
+	// resource -> region -> project|account|subscription -> folder -> organization.
+	// Region nodes are containers, never billable leaves — no rule ever sees
+	// one and ResourceNodeCount never counts one.
 	KindRegion  ResourceKind = "region"
 	KindUnknown ResourceKind = "unknown"
 )
@@ -101,21 +107,22 @@ type Node struct {
 
 // Container reports whether the node is resource-hierarchy scaffolding rather
 // than a billable leaf resource. Organization, folder, project, account,
-// organizational-unit and region nodes are containers. They are added during
-// ingestion so a finding can be attributed to a folder or rolled up across
-// projects, but they must never be evaluated by a rule and never appear as a
-// finding.
+// organizational-unit, subscription and region nodes are containers. They are
+// added during ingestion so a finding can be attributed to a folder or rolled
+// up across projects, but they must never be evaluated by a rule and never
+// appear as a finding.
 //
 // This exclusion is structural, not per-rule: every rule enters the graph
 // through Graph.ByKind with a leaf ResourceKind, and a container node's Kind
 // is always one of the container kinds, so a rule can never be handed a
 // container node regardless of which leaf kinds it iterates. The scan
 // report's "N resources" count uses Graph.ResourceNodeCount, which excludes
-// containers, so containers never inflate that figure either. Region nodes
-// inherit every one of these guarantees from this single switch.
+// containers, so containers never inflate that figure either. Subscription
+// and region nodes inherit every one of these guarantees from this single
+// switch.
 func (n *Node) Container() bool {
 	switch n.Kind {
-	case KindOrganization, KindFolder, KindProject, KindAccount, KindOrganizationalUnit, KindRegion:
+	case KindOrganization, KindFolder, KindProject, KindAccount, KindOrganizationalUnit, KindSubscription, KindRegion:
 		return true
 	}
 	return false

@@ -7,15 +7,16 @@ import (
 
 	"github.com/TypeOneLabs/tellury/internal/config"
 	"github.com/TypeOneLabs/tellury/pkg/cloud"
-	_ "github.com/TypeOneLabs/tellury/pkg/cloud/gcp" // registers GCP scopes via init()
+	_ "github.com/TypeOneLabs/tellury/pkg/cloud/azure" // registers Azure scopes via init()
+	_ "github.com/TypeOneLabs/tellury/pkg/cloud/gcp"   // registers GCP scopes via init()
 )
 
 // TestScopeFlagsRegisterFromRegistry asserts that the CLI's scope flag
 // surface is driven entirely by cloud.ScopesFor — the same registry that owns
 // scope environment variables — and not by a literal list hardcoded in the
 // CLI. It holds the invariant this task exists for: flag names come from the
-// provider package, so a future AWS registration (--aws-account,
-// --aws-region) shows up here with no shared code change.
+// provider package, so a future provider registration shows up here with no
+// shared code change.
 func TestScopeFlagsRegisterFromRegistry(t *testing.T) {
 	cfg := &config.Scan{}
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
@@ -57,10 +58,11 @@ func TestScopeFlagsRegisterFromRegistry(t *testing.T) {
 }
 
 // TestAddAllScopeFlagsRegistersEveryProvider asserts that the CLI's full
-// scope flag surface is driven by cloud.Providers(): both GCP's --gcp-* flags
-// and AWS's --aws-* flags are registered in one call, each bound to the
-// provider's own config fields, with no literal flag list in the CLI. The AWS
-// package is registered in this test binary through root.go's blank import.
+// scope flag surface is driven by cloud.Providers(): GCP's --gcp-* flags,
+// AWS's --aws-* flags and Azure's --azure-* flags are registered in one call,
+// each bound to the provider's own config fields, with no literal flag list in
+// the CLI. AWS and Azure are registered in this test binary through package
+// imports (root.go and scan.go).
 func TestAddAllScopeFlagsRegistersEveryProvider(t *testing.T) {
 	cfg := &config.Scan{}
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
@@ -73,9 +75,13 @@ func TestAddAllScopeFlagsRegistersEveryProvider(t *testing.T) {
 		"aws-account":             false,
 		"aws-organizational-unit": false,
 		"aws-organization":        false,
+		"azure-tenant":            false,
+		"azure-management-group":  false,
+		"azure-subscription":      false,
+		"azure-resource-group":    false,
 	}
 	if n != len(wantFlags) {
-		t.Fatalf("addAllScopeFlags registered %d flags; want %d (3 GCP + 3 AWS)", n, len(wantFlags))
+		t.Fatalf("addAllScopeFlags registered %d flags; want %d (3 GCP + 3 AWS + 4 Azure)", n, len(wantFlags))
 	}
 	for name := range wantFlags {
 		if fs.Lookup(name) == nil {
@@ -115,6 +121,32 @@ func TestAddAllScopeFlagsRegistersEveryProvider(t *testing.T) {
 	}
 	if cfg.AWSOrganization != "o-abc" {
 		t.Errorf("--gcp-organization must not clobber cfg.AWSOrganization; got %q", cfg.AWSOrganization)
+	}
+
+	// The Azure flags bind to Azure-owned config fields.
+	if err := fs.Set("azure-tenant", "11111111-1111-1111-1111-111111111111"); err != nil {
+		t.Fatalf("Set(--azure-tenant): %v", err)
+	}
+	if cfg.AzureTenant != "11111111-1111-1111-1111-111111111111" {
+		t.Errorf("--azure-tenant must bind to cfg.AzureTenant; got %q", cfg.AzureTenant)
+	}
+	if err := fs.Set("azure-management-group", "mg-abc"); err != nil {
+		t.Fatalf("Set(--azure-management-group): %v", err)
+	}
+	if cfg.AzureManagementGroup != "mg-abc" {
+		t.Errorf("--azure-management-group must bind to cfg.AzureManagementGroup; got %q", cfg.AzureManagementGroup)
+	}
+	if err := fs.Set("azure-subscription", "22222222-2222-2222-2222-222222222222"); err != nil {
+		t.Fatalf("Set(--azure-subscription): %v", err)
+	}
+	if cfg.AzureSubscription != "22222222-2222-2222-2222-222222222222" {
+		t.Errorf("--azure-subscription must bind to cfg.AzureSubscription; got %q", cfg.AzureSubscription)
+	}
+	if err := fs.Set("azure-resource-group", "rg-1"); err != nil {
+		t.Fatalf("Set(--azure-resource-group): %v", err)
+	}
+	if cfg.AzureResourceGroup != "rg-1" {
+		t.Errorf("--azure-resource-group must bind to cfg.AzureResourceGroup; got %q", cfg.AzureResourceGroup)
 	}
 }
 

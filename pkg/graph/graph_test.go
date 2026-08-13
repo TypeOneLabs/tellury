@@ -130,6 +130,32 @@ func TestKindRegion_IsContainer(t *testing.T) {
 	}
 }
 
+// TestKindSubscription_IsContainer pins the Azure owner-tier container kind.
+// A subscription node is hierarchy scaffolding, not a billable leaf, so
+// Container() must return true, ResourceNodeCount must not count it, and
+// SubscriptionContainerCount must count it for the scan summary's
+// "N subscriptions analyzed" figure.
+func TestKindSubscription_IsContainer(t *testing.T) {
+	g := New()
+	leaf := &Node{ID: Ref("subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/disks/d1"), Kind: KindDisk, Name: "d1", Project: "s"}
+	subscription := &Node{ID: Ref("subscriptions/s"), Kind: KindSubscription, Name: "s", Project: "s"}
+	for _, n := range []*Node{leaf, subscription} {
+		if err := g.AddNode(n); err != nil {
+			t.Fatalf("AddNode(%s): %v", n.ID, err)
+		}
+	}
+	if !subscription.Container() {
+		t.Errorf("a KindSubscription node must report Container() == true")
+	}
+	g.Freeze()
+	if got := g.ResourceNodeCount(); got != 1 {
+		t.Errorf("ResourceNodeCount = %d, want 1 (the subscription is a container, not a billable leaf)", got)
+	}
+	if got := g.SubscriptionContainerCount(); got != 1 {
+		t.Errorf("SubscriptionContainerCount = %d, want 1", got)
+	}
+}
+
 func addProjectWithLeaf(t *testing.T, g *Graph, projectToken, leafID string) {
 	t.Helper()
 	proj := &Node{ID: Ref(projectToken), Kind: KindProject, Name: lastSeg(projectToken), Project: lastSeg(projectToken)}
