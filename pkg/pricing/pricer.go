@@ -20,6 +20,12 @@ const (
 	KindGCSRetrieval   Kind = "gcs_retrieval"
 	KindGCSOpsClassA   Kind = "gcs_ops_class_a"
 	KindStaticIP       Kind = "static_ip"
+	// KindManagedDisk is the Azure managed-disk dimension: a flat charge per
+	// provisioned disk tier per month. It is intentionally distinct from
+	// KindDiskCapacity (per GiB-month) so an Azure P10 disk prices the same
+	// way a GCP or AWS disk does: one disk-month, not a capacity-derived
+	// guess.
+	KindManagedDisk Kind = "managed_disk"
 	// KindSnapshotStorage is the flat per-GiB-month charge for keeping a
 	// persistent disk snapshot. A snapshot is never "attached" to anything,
 	// so this is an idle, flat cost: it bills every month the snapshot

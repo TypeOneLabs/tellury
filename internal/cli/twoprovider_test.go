@@ -95,6 +95,77 @@ func TestExecute_TwoProviderConflictExitsUsage(t *testing.T) {
 	}
 }
 
+// TestExecute_ProviderConflictsCoverEveryPair extends the two-provider
+// conflict from gcp+aws to every pair among gcp, aws and azure. A pair of
+// scope flags must remain a usage error, and the message must name the two
+// providers that actually collided — never a generic "multiple providers"
+// that leaves the operator guessing which flags to remove.
+func TestExecute_ProviderConflictsCoverEveryPair(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		first string
+		other string
+		flags []string
+	}{
+		{
+			name:  "gcp and aws",
+			args:  []string{"--gcp-project", "my-project", "--aws-account", "123456789012"},
+			first: "GCP",
+			other: "AWS",
+			flags: []string{
+				"--gcp-project", "--gcp-folder", "--gcp-organization",
+				"--aws-account", "--aws-organizational-unit", "--aws-organization",
+			},
+		},
+		{
+			name:  "gcp and azure",
+			args:  []string{"--gcp-project", "my-project", "--azure-subscription", "22222222-2222-2222-2222-222222222222"},
+			first: "GCP",
+			other: "AZURE",
+			flags: []string{
+				"--gcp-project", "--gcp-folder", "--gcp-organization",
+				"--azure-management-group", "--azure-resource-group", "--azure-subscription", "--azure-tenant",
+			},
+		},
+		{
+			name:  "aws and azure",
+			args:  []string{"--aws-account", "123456789012", "--azure-subscription", "22222222-2222-2222-2222-222222222222"},
+			first: "AWS",
+			other: "AZURE",
+			flags: []string{
+				"--aws-account", "--aws-organizational-unit", "--aws-organization",
+				"--azure-management-group", "--azure-resource-group", "--azure-subscription", "--azure-tenant",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, execErr, stdout, _ := runExecute(t, append([]string{"scan"}, tc.args...)...)
+
+			if code != ExitUsage {
+				t.Fatalf("exit code = %d, want %d (usage error)", code, ExitUsage)
+			}
+			if execErr == nil {
+				t.Fatal("Execute must return an error for a provider scope conflict")
+			}
+			var ue usageError
+			if !errors.As(execErr, &ue) {
+				t.Fatalf("error type = %T, want a usage error: %v", execErr, execErr)
+			}
+			if stdout != "" {
+				t.Errorf("a provider conflict must write nothing to stdout; got:\n%s", stdout)
+			}
+
+			msg := execErr.Error()
+			for _, want := range append([]string{"both", tc.first, tc.other, "pick one provider"}, tc.flags...) {
+				if !strings.Contains(msg, want) {
+					t.Errorf("conflict error must name %q; got: %s", want, msg)
+				}
+			}
+		})
+	}
+}
+
 // TestExecute_AWSAccountAloneSelectsAWS is the end-to-end proof of provider
 // inference AND of AWS rule registration: `tellury scan --aws-account
 // 123456789012` (no --provider) must pass validation — inferring the AWS
@@ -181,10 +252,11 @@ func TestExecute_GCPProjectAloneStillWorks(t *testing.T) {
 	}
 }
 
-// TestScanAndGraphExportExposeBothProviderFlagSets asserts that BOTH
-// providers' scope flags appear on `tellury scan` and `tellury graph export` —
-// the requirement that the CLI surface is not GCP-only anymore.
-func TestScanAndGraphExportExposeBothProviderFlagSets(t *testing.T) {
+// TestScanAndGraphExportExposeAllProviderFlagSets asserts that GCP's, AWS's
+// and Azure's scope flags all appear on `tellury scan` and `tellury graph
+// export` — the requirement that the CLI surface is registry-driven and
+// multi-cloud, not GCP-only.
+func TestScanAndGraphExportExposeAllProviderFlagSets(t *testing.T) {
 	commands := []struct {
 		name string
 		cmd  interface {
@@ -200,6 +272,7 @@ func TestScanAndGraphExportExposeBothProviderFlagSets(t *testing.T) {
 			for _, name := range []string{
 				"gcp-project", "gcp-folder", "gcp-organization",
 				"aws-account", "aws-organizational-unit", "aws-organization",
+				"azure-tenant", "azure-management-group", "azure-subscription", "azure-resource-group",
 			} {
 				if fs.Lookup(name) == nil {
 					t.Errorf("%s must expose --%s", tc.name, name)
@@ -207,7 +280,7 @@ func TestScanAndGraphExportExposeBothProviderFlagSets(t *testing.T) {
 			}
 			// The --provider flag must default to empty so the scope flags can
 			// infer the provider (the historical "gcp" default would make
-			// --aws-account alone a two-provider conflict).
+			// --aws-account or --azure-subscription alone a provider conflict).
 			fl := fs.Lookup("provider")
 			if fl == nil {
 				t.Fatalf("%s must expose --provider", tc.name)

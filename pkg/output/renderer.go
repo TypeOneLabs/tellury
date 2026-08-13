@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/TypeOneLabs/tellury/pkg/cloud/aws"
+	"github.com/TypeOneLabs/tellury/pkg/cloud/azure"
 	"github.com/TypeOneLabs/tellury/pkg/pricing"
 	"github.com/TypeOneLabs/tellury/pkg/rules"
 )
@@ -42,6 +43,12 @@ type Report struct {
 	// the table summary shows it in place of the projects figure.
 	AccountsAnalyzed int `json:"accounts_analyzed,omitempty"`
 
+	// SubscriptionsAnalyzed is the Azure analog of ProjectsAnalyzed: the
+	// number of subscription container nodes the scan's graph carried. It is
+	// set only for an Azure scan and the table summary shows it in place of
+	// the projects figure.
+	SubscriptionsAnalyzed int `json:"subscriptions_analyzed,omitempty"`
+
 	// RegionsAnalyzed is the number of region container nodes the scan's
 	// graph carried — the "which regions did the scan actually cover" answer
 	// an AWS operator needs to tell "nothing wasteful" from "nothing
@@ -69,6 +76,11 @@ type Report struct {
 	// reader can see exactly which accounts were skipped and why.
 	AccountStatuses []aws.AccountStatus `json:"account_statuses,omitempty"`
 
+	// SubscriptionStatuses is the Azure analog of AccountStatuses: the
+	// outcome for each subscription in a tenant or management-group scan. It
+	// is nil for a single-subscription scan.
+	SubscriptionStatuses []azure.SubscriptionStatus `json:"subscription_statuses,omitempty"`
+
 	// ResourcesSkipped is the total number of resource-rule skips recorded
 	// during evaluation — the sum of every entry in Skipped, which is exactly
 	// the count `--explain-skips` breaks down per (rule, code). It is the
@@ -88,10 +100,11 @@ type Report struct {
 	Skipped    []rules.SkipTally `json:"skipped,omitempty"`
 
 	// MultiProject reports whether the scan's findings span more than one
-	// project. The table renderer surfaces a PROJECT column only in that
-	// case, so a single-project scan keeps its compact width while an
-	// organization-wide scan gives the operator a way to tell where each
-	// resource lives. CSV always writes the project column per finding.
+	// owner. The table renderer surfaces an owner column only in that case,
+	// so a single-owner scan keeps its compact width while a tenant,
+	// organization or management-group scan gives the operator a way to tell
+	// where each resource lives. CSV always writes the owner column per
+	// finding.
 	MultiProject bool `json:"multi_project,omitempty"`
 
 	// MetricsBlocked lists the rule IDs that were NOT evaluated because the
@@ -154,6 +167,10 @@ type Meta struct {
 	AccountsAnalyzed int
 	RegionsAnalyzed  int
 
+	// SubscriptionsAnalyzed is the Azure analog (subscription container
+	// nodes). It stays zero for GCP and AWS scans.
+	SubscriptionsAnalyzed int
+
 	// RegionSource is the AWS region coverage source: "explicit"
 	// (--aws-regions), "resource_explorer" (discovery narrowed the list),
 	// "describe_regions" (fallback full sweep) or "fixture" (offline replay).
@@ -163,6 +180,10 @@ type Meta struct {
 	// AccountStatuses carries the outcome of every account in an organization
 	// scan. Nil for a single-account scan.
 	AccountStatuses []aws.AccountStatus
+
+	// SubscriptionStatuses carries the outcome of every subscription in a
+	// tenant or management-group scan. Nil for a single-subscription scan.
+	SubscriptionStatuses []azure.SubscriptionStatus
 
 	// Duration is the scan's wall-clock duration, measured by the scan's own
 	// clock and never re-measured inside a renderer.
@@ -194,26 +215,28 @@ func NewReport(res rules.Result, m Meta) Report {
 	}
 
 	r := Report{
-		Scope:             m.Scope,
-		Provider:          m.Provider,
-		GeneratedAt:       m.GeneratedAt.UTC(),
-		WindowDays:        m.WindowDays,
-		Findings:          res.Findings,
-		FindingCount:      len(res.Findings),
-		ResourcesScanned:  m.ResourcesScanned,
-		RulesEvaluated:    m.RulesEvaluated,
-		ProjectsAnalyzed:  m.ProjectsAnalyzed,
-		AccountsAnalyzed:  m.AccountsAnalyzed,
-		RegionsAnalyzed:   m.RegionsAnalyzed,
-		RegionSource:      m.RegionSource,
-		AccountStatuses:   m.AccountStatuses,
-		Duration:          m.Duration,
-		MultiProject:      m.MultiProject,
-		Skipped:           res.SkipTotals(),
-		Currency:          m.Currency,
-		CurrencySource:    m.CurrencySource,
-		CurrencyRequested: m.CurrencyRequested,
-		CurrencyMixed:     m.CurrencyMixed,
+		Scope:                 m.Scope,
+		Provider:              m.Provider,
+		GeneratedAt:           m.GeneratedAt.UTC(),
+		WindowDays:            m.WindowDays,
+		Findings:              res.Findings,
+		FindingCount:          len(res.Findings),
+		ResourcesScanned:      m.ResourcesScanned,
+		RulesEvaluated:        m.RulesEvaluated,
+		ProjectsAnalyzed:      m.ProjectsAnalyzed,
+		AccountsAnalyzed:      m.AccountsAnalyzed,
+		SubscriptionsAnalyzed: m.SubscriptionsAnalyzed,
+		RegionsAnalyzed:       m.RegionsAnalyzed,
+		RegionSource:          m.RegionSource,
+		AccountStatuses:       m.AccountStatuses,
+		SubscriptionStatuses:  m.SubscriptionStatuses,
+		Duration:              m.Duration,
+		MultiProject:          m.MultiProject,
+		Skipped:               res.SkipTotals(),
+		Currency:              m.Currency,
+		CurrencySource:        m.CurrencySource,
+		CurrencyRequested:     m.CurrencyRequested,
+		CurrencyMixed:         m.CurrencyMixed,
 	}
 	// ResourcesSkipped is the sum of the skip tallies the report already
 	// carries, so the two can never disagree: the summary's "N resources
@@ -338,13 +361,17 @@ func currencyDisclosure(r Report) []string {
 }
 
 // ownerLabel is the column heading for the tier a finding is attributed to.
-// GCP resources belong to a project; AWS resources belong to an account. The
-// Report carries the same value in Finding.Project either way — the field is
-// the owning container, not a GCP concept — but a column of AWS account IDs
-// headed PROJECT is simply wrong on the page.
+// GCP resources belong to a project; AWS resources belong to an account; Azure
+// resources belong to a subscription. The Report carries the same value in
+// Finding.Project either way — the field is the owning container, not a GCP
+// concept — but a column of AWS account IDs headed PROJECT, or a column of
+// Azure subscription IDs headed ACCOUNT, is simply wrong on the page.
 func (r Report) ownerLabel() string {
-	if r.Provider == "aws" {
+	switch r.Provider {
+	case "aws":
 		return "ACCOUNT"
+	case "azure":
+		return "SUBSCRIPTION"
 	}
 	return "PROJECT"
 }

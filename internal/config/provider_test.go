@@ -5,8 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/TypeOneLabs/tellury/pkg/cloud/aws" // registers TELLURY_AWS_* via init()
-	_ "github.com/TypeOneLabs/tellury/pkg/cloud/gcp" // registers TELLURY_GCP_* via init()
+	_ "github.com/TypeOneLabs/tellury/pkg/cloud/aws"   // registers TELLURY_AWS_* via init()
+	_ "github.com/TypeOneLabs/tellury/pkg/cloud/azure" // registers TELLURY_AZURE_* via init()
+	_ "github.com/TypeOneLabs/tellury/pkg/cloud/gcp"   // registers TELLURY_GCP_* via init()
 )
 
 // TestValidate_ProviderInferredFromAWSFlag is the acceptance test for provider
@@ -69,6 +70,31 @@ func TestValidate_ProviderInferredFromGCPFlag(t *testing.T) {
 	}
 }
 
+// TestValidate_ProviderInferredFromAzureFlag asserts a --azure-* flag alone
+// selects Azure. Resource-group is not a top-level dimension, so the three
+// top-level Azure dimensions are the inference cases.
+func TestValidate_ProviderInferredFromAzureFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  Scan
+	}{
+		{"tenant", Scan{AzureTenant: "11111111-1111-1111-1111-111111111111"}},
+		{"management_group", Scan{AzureManagementGroup: "mg-abc"}},
+		{"subscription", Scan{AzureSubscription: "22222222-2222-2222-2222-222222222222"}},
+		{"subscription_resource_group", Scan{AzureSubscription: "22222222-2222-2222-2222-222222222222", AzureResourceGroup: "rg-1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("Validate failed: %v", err)
+			}
+			if cfg.Provider != "azure" {
+				t.Fatalf("Provider = %q, want azure (inferred from the Azure scope flag)", cfg.Provider)
+			}
+		})
+	}
+}
+
 // TestValidate_ProviderDefaultsToGCP pins the historical default: no scope
 // flags anywhere, no scope environment variables, no --provider — the
 // provider is gcp, exactly as it always was. The config is offline (a cache
@@ -86,7 +112,8 @@ func TestValidate_ProviderDefaultsToGCP(t *testing.T) {
 
 // TestValidate_ProviderInferredFromEnv asserts the scope ENVIRONMENT variables
 // also infer the provider when no flag does — TELLURY_AWS_ACCOUNT alone makes
-// an AWS scan, TELLURY_GCP_PROJECT alone makes a GCP scan.
+// an AWS scan, TELLURY_GCP_PROJECT alone makes a GCP scan,
+// TELLURY_AZURE_SUBSCRIPTION alone makes an Azure scan.
 func TestValidate_ProviderInferredFromEnv(t *testing.T) {
 	t.Run("aws env", func(t *testing.T) {
 		t.Setenv("TELLURY_AWS_ACCOUNT", "123456789012")
@@ -106,6 +133,16 @@ func TestValidate_ProviderInferredFromEnv(t *testing.T) {
 		}
 		if cfg.Provider != "gcp" || cfg.Project != "my-project" {
 			t.Fatalf("Provider/Project = %q/%q, want gcp/my-project", cfg.Provider, cfg.Project)
+		}
+	})
+	t.Run("azure env", func(t *testing.T) {
+		t.Setenv("TELLURY_AZURE_SUBSCRIPTION", "22222222-2222-2222-2222-222222222222")
+		cfg := &Scan{Format: "table", OutDir: filepath.Join(t.TempDir(), "out")}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate with TELLURY_AZURE_SUBSCRIPTION failed: %v", err)
+		}
+		if cfg.Provider != "azure" || cfg.AzureSubscription != "22222222-2222-2222-2222-222222222222" {
+			t.Fatalf("Provider/AzureSubscription = %q/%q, want azure/22222222-2222-2222-2222-222222222222", cfg.Provider, cfg.AzureSubscription)
 		}
 	})
 }
@@ -187,12 +224,13 @@ func TestValidate_TwoProviderConflict_ExplicitProviderContradicted(t *testing.T)
 	}{
 		{"provider gcp + aws flag", Scan{Provider: "gcp", Account: "123456789012"}},
 		{"provider aws + gcp flag", Scan{Provider: "aws", Project: "my-project"}},
+		{"provider azure + gcp flag", Scan{Provider: "azure", Project: "my-project"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := tc.cfg
 			err := cfg.Validate()
 			if err == nil {
-				t.Fatalf("Validate(%+v) must fail as a two-provider conflict", tc.cfg)
+				t.Fatalf("Validate(%+v) must fail as a provider conflict", tc.cfg)
 			}
 			if !strings.Contains(err.Error(), "pick one provider") {
 				t.Errorf("error must tell the operator to pick one provider; got: %s", err)
@@ -233,10 +271,74 @@ func TestValidate_AWSScopeRequiresExactlyOne(t *testing.T) {
 	}
 }
 
+// TestValidate_AzureScopeShape pins the Azure dependent-flag validation: the
+// three top-level dimensions are each valid alone, resource group is valid
+// only with subscription, and resource group cannot be combined with tenant or
+// management group.
+func TestValidate_AzureScopeShape(t *testing.T) {
+	valid := []Scan{
+		{Provider: "azure", AzureTenant: "11111111-1111-1111-1111-111111111111"},
+		{Provider: "azure", AzureManagementGroup: "mg-abc"},
+		{Provider: "azure", AzureSubscription: "22222222-2222-2222-2222-222222222222"},
+		{Provider: "azure", AzureSubscription: "22222222-2222-2222-2222-222222222222", AzureResourceGroup: "rg-1"},
+	}
+	for _, cfg := range valid {
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate(%+v) failed: %v", cfg, err)
+		}
+	}
+
+	invalid := []struct {
+		name string
+		cfg  Scan
+		want string
+	}{
+		{
+			name: "resource group alone",
+			cfg:  Scan{Provider: "azure", AzureResourceGroup: "rg-1"},
+			want: "cloud: azure scope: --azure-resource-group requires --azure-subscription",
+		},
+		{
+			name: "resource group with tenant",
+			cfg:  Scan{Provider: "azure", AzureTenant: "t", AzureResourceGroup: "rg-1"},
+			want: "cloud: azure scope: --azure-resource-group can only be combined with --azure-subscription",
+		},
+		{
+			name: "resource group with management group",
+			cfg:  Scan{Provider: "azure", AzureManagementGroup: "mg", AzureResourceGroup: "rg-1"},
+			want: "cloud: azure scope: --azure-resource-group can only be combined with --azure-subscription",
+		},
+		{
+			name: "no top level dimension",
+			cfg:  Scan{Provider: "azure"},
+			want: "cloud: azure scope requires exactly one of --azure-tenant, --azure-management-group, or --azure-subscription",
+		},
+		{
+			name: "two top level dimensions",
+			cfg:  Scan{Provider: "azure", AzureTenant: "t", AzureSubscription: "s"},
+			want: "cloud: azure scope requires exactly one of --azure-tenant, --azure-management-group, or --azure-subscription",
+		},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			cfg.Format = "table"
+			cfg.OutDir = filepath.Join(t.TempDir(), "out")
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("Validate(%+v) must fail", tc.cfg)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %q, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
 // TestValidate_UnknownProviderRejected pins the widening of the provider gate:
-// "gcp" and "aws" are accepted, anything else is still an unknown provider.
+// gcp, aws and azure are accepted, anything else is still an unknown provider.
 func TestValidate_UnknownProviderRejected(t *testing.T) {
-	for _, provider := range []string{"mars", "azure", "other-test-provider"} {
+	for _, provider := range []string{"mars", "jupiter"} {
 		cfg := &Scan{Provider: provider, Project: "p"}
 		if err := cfg.Validate(); err == nil {
 			t.Fatalf("Validate(--provider %s) must fail", provider)
@@ -279,6 +381,34 @@ func TestScan_ScopeRendersAWS(t *testing.T) {
 	}
 }
 
+// TestScan_ScopeRendersAzure asserts the Azure scope renders in Azure
+// vocabulary and has no single Parent string, matching AWS.
+func TestScan_ScopeRendersAzure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  Scan
+		want string
+	}{
+		{"tenant", Scan{Provider: "azure", AzureTenant: "t"}, "tenants/t"},
+		{"management group", Scan{Provider: "azure", AzureManagementGroup: "mg"}, "management-groups/mg"},
+		{"subscription", Scan{Provider: "azure", AzureSubscription: "sub"}, "subscriptions/sub"},
+		{"subscription resource group", Scan{Provider: "azure", AzureSubscription: "sub", AzureResourceGroup: "rg"}, "subscriptions/sub/resourceGroups/rg"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.cfg.Validate(); err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			sc := tc.cfg.Scope()
+			if got := sc.String(); got != tc.want {
+				t.Errorf("Scope().String() = %q, want %q", got, tc.want)
+			}
+			if got := sc.Parent(); got != "" {
+				t.Errorf("Scope().Parent() = %q, want \"\" for Azure", got)
+			}
+		})
+	}
+}
+
 // TestValidate_GCPScopeHintUnchanged pins the exactly-one-scope error message
 // a live GCP scan with no scope produces — byte for byte the historical text.
 func TestValidate_GCPScopeHintUnchanged(t *testing.T) {
@@ -288,6 +418,22 @@ func TestValidate_GCPScopeHintUnchanged(t *testing.T) {
 		t.Fatal("a live GCP scan with no scope must fail")
 	}
 	want := "cloud: scope requires exactly one of project/folder/organization (set --gcp-project or TELLURY_GCP_PROJECT)"
+	if err.Error() != want {
+		t.Errorf("scope error = %q, want %q", err, want)
+	}
+}
+
+// TestValidate_AzureScopeHintPrefersSubscription pins the Azure missing-scope
+// hint: it tells the operator to set --azure-subscription or
+// TELLURY_AZURE_SUBSCRIPTION, not the alphabetically-first management-group
+// scope.
+func TestValidate_AzureScopeHintPrefersSubscription(t *testing.T) {
+	cfg := &Scan{Provider: "azure", Format: "table", OutDir: filepath.Join(t.TempDir(), "out")}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a live Azure scan with no scope must fail")
+	}
+	want := "cloud: azure scope requires exactly one of --azure-tenant, --azure-management-group, or --azure-subscription (set --azure-subscription or TELLURY_AZURE_SUBSCRIPTION)"
 	if err.Error() != want {
 		t.Errorf("scope error = %q, want %q", err, want)
 	}

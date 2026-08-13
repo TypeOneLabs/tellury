@@ -35,12 +35,19 @@ Exactly one scope is required. Flags take precedence over environment variables.
 | `--aws-account` | `TELLURY_AWS_ACCOUNT` | One account |
 | `--aws-organizational-unit` | `TELLURY_AWS_ORGANIZATIONAL_UNIT` | An OU and every account under it |
 | `--aws-organization` | `TELLURY_AWS_ORGANIZATION` | An organization and every account in it |
+| `--azure-subscription` | `TELLURY_AZURE_SUBSCRIPTION` | One subscription |
+| `--azure-resource-group` | `TELLURY_AZURE_RESOURCE_GROUP` | One resource group (requires `--azure-subscription`) |
+| `--azure-management-group` | `TELLURY_AZURE_MANAGEMENT_GROUP` | A management group and every subscription under it |
+| `--azure-tenant` | `TELLURY_AZURE_TENANT` | A tenant and every subscription in it |
 
-Mixing the two providers' scope flags is a usage error: `--gcp-project` with `--aws-account`
-exits `2` asking for one provider at a time.
+Mixing two providers' scope flags is a usage error: `--gcp-project` with `--aws-account`
+exits `2` naming both providers and asking for one at a time.
 
-`--provider` is inferred from the scope flags and rarely needs setting; with no scope flags
-at all it defaults to `gcp`.
+`--azure-resource-group` narrows a subscription scope rather than standing alone. Passing it
+without `--azure-subscription` exits `2`; it is the only scope flag that depends on another.
+
+`--provider` (`gcp`, `aws`, `azure`) is inferred from the scope flags and rarely needs
+setting; with no scope flags at all it defaults to `gcp`.
 
 **GCP.** The scope is passed to Cloud Asset Inventory's `SearchAllResources` as its parent.
 Scanning a folder or organization builds the whole hierarchy from that one result — no
@@ -51,6 +58,13 @@ accounts beneath it, and each is scanned in turn. The caller's own account is sc
 directly; every other account is reached by assuming a role in it (see `--aws-role-name`).
 An account that cannot be reached is reported in the account outcomes rather than failing
 the scan.
+
+**Azure.** Inventory comes from Azure Resource Graph, one KQL query per subscription. A
+management-group or tenant scope is expanded through the management-groups API and each
+subscription is queried separately, so a subscription the identity cannot read is reported as
+unreachable rather than silently omitted. A resource-group scope adds a filter to the same
+query and costs no extra calls. See [Azure setup](azure-setup.md) for the permissions —
+notably that a missing resource-type permission yields an empty result rather than an error.
 
 ### AWS-specific flags
 
@@ -98,7 +112,8 @@ These filter what is **reported**, not what is evaluated. A rule's own noise flo
 | `--currency` | `TELLURY_CURRENCY` | ISO 4217 code to price in, e.g. `EUR`. Overrides auto-detection. |
 
 Pricing comes from the live catalog API: Cloud Billing Catalog for GCP, Price List API
-(pricing:GetProducts) for AWS. There is no embedded fallback table. A price that cannot be
+(pricing:GetProducts) for AWS, Retail Prices for Azure — the last of which is public, so
+Azure pricing needs no credentials. There is no embedded fallback table. A price that cannot be
 resolved makes the rule skip the resource with `SkipNoPrice` — it never guesses a dollar
 figure.
 
@@ -186,6 +201,10 @@ enabled. It is a status channel independent of `--log-level`.
 | `TELLURY_AWS_ACCOUNT` | `--aws-account` |
 | `TELLURY_AWS_ORGANIZATIONAL_UNIT` | `--aws-organizational-unit` |
 | `TELLURY_AWS_ORGANIZATION` | `--aws-organization` |
+| `TELLURY_AZURE_SUBSCRIPTION` | `--azure-subscription` |
+| `TELLURY_AZURE_RESOURCE_GROUP` | `--azure-resource-group` |
+| `TELLURY_AZURE_MANAGEMENT_GROUP` | `--azure-management-group` |
+| `TELLURY_AZURE_TENANT` | `--azure-tenant` |
 | `TELLURY_CURRENCY` | `--currency` |
 | `TELLURY_PROGRESS` | `--progress` |
 

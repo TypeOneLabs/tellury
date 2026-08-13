@@ -1,0 +1,94 @@
+{
+  "management_groups": {
+    "tenant-aaaa-1111": {
+      "display_name": "Tenant Root Group",
+      "children": [
+        {
+          "type": "Microsoft.Management/managementGroups",
+          "name": "mg-child",
+          "display_name": "Child Management Group"
+        },
+        {
+          "type": "/subscriptions",
+          "name": "sub-2",
+          "display_name": "Subscription Two"
+        }
+      ]
+    },
+    "mg-child": {
+      "display_name": "Child Management Group",
+      "children": [
+        {
+          "type": "/subscriptions",
+          "name": "sub-1",
+          "display_name": "Subscription One"
+        }
+      ]
+    }
+  },
+  "subscriptions": {
+    "sub-1": {
+      "resources": [
+        {
+          "id": "/subscriptions/sub-1/resourceGroups/rg-a/providers/Microsoft.Compute/disks/disk-a",
+          "name": "disk-a",
+          "type": "microsoft.compute/disks",
+          "location": "West Europe",
+          "resourceGroup": "rg-a",
+          "subscriptionId": "sub-1",
+          "sku": {
+            "name": "Premium_LRS"
+          },
+          "managedBy": "",
+          "tags": {
+            "env": "test"
+          },
+          "properties": {
+            "diskSizeGB": 128,
+            "diskState": "Unattached",
+            "timeCreated": "2024-01-02T03:04:05Z"
+          }
+        },
+        {
+          "id": "/subscriptions/sub-1/resourceGroups/rg-b/providers/Microsoft.Network/publicIPAddresses/pip-a",
+          "name": "pip-a",
+          "type": "microsoft.network/publicipaddresses",
+          "location": "East US",
+          "resourceGroup": "rg-b",
+          "subscriptionId": "sub-1",
+          "sku": {
+            "name": "Standard"
+          },
+          "properties": {
+            "publicIPAllocationMethod": "Static",
+            "ipAddress": "203.0.113.10",
+            "ipConfiguration": {
+              "id": "/subscriptions/sub-1/resourceGroups/rg-b/providers/Microsoft.Network/networkInterfaces/nic-a/ipConfigurations/ipconfig1"
+            }
+          }
+        }
+      ]
+    },
+    "sub-2": {
+      "resources": [
+        {
+          "id": "/subscriptions/sub-2/resourceGroups/rg-c/providers/Microsoft.Compute/disks/disk-c",
+          "name": "disk-c",
+          "type": "microsoft.compute/disks",
+          "location": "westeurope",
+          "resourceGroup": "rg-c",
+          "subscriptionId": "sub-2",
+          "sku": {
+            "name": "StandardSSD_LRS"
+          },
+          "managedBy": "/subscriptions/sub-2/resourceGroups/rg-c/providers/Microsoft.Compute/virtualMachines/vm-c",
+          "properties": {
+            "diskSizeGB": 32,
+            "diskState": "Attached",
+            "timeCreated": "2024-02-03T04:05:06Z"
+          }
+        }
+      ]
+    }
+  }
+}

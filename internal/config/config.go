@@ -14,19 +14,24 @@ import (
 
 // Scope dimension names. These are provider-agnostic identity keys, NOT
 // surface names: a provider maps each one it accepts to its own CLI flag
-// (--gcp-project, --aws-account) and environment variable (TELLURY_GCP_PROJECT,
-// TELLURY_AWS_ACCOUNT) via cloud.RegisterScopes. config never hardcodes a
-// surface name or a provider-shaped scope set — it only knows these dimensions
-// the CLI exposes, and asks the selected provider (through cloud.ScopeFlag/
-// ScopeEnvVar, keyed by provider) what each one's flag and variable are
-// actually called. "organization" is shared by both providers: GCP and AWS
-// each own their own surface names for it, resolved by provider.
+// (--gcp-project, --aws-account, --azure-subscription) and environment
+// variable (TELLURY_GCP_PROJECT, TELLURY_AWS_ACCOUNT,
+// TELLURY_AZURE_SUBSCRIPTION) via cloud.RegisterScopes. config never hardcodes
+// a surface name or a provider-shaped scope set — it only knows these
+// dimensions the CLI exposes, and asks the selected provider (through
+// cloud.ScopeFlag/ScopeEnvVar, keyed by provider) what each one's flag and
+// variable are actually called. "organization" is shared by both GCP and AWS:
+// each owns its own surface names for it, resolved by provider.
 const (
 	scopeProject            = "project"
 	scopeFolder             = "folder"
 	scopeOrganization       = "organization"
 	scopeAccount            = "account"
 	scopeOrganizationalUnit = "organizational_unit"
+	scopeTenant             = "tenant"
+	scopeManagementGroup    = "management_group"
+	scopeSubscription       = "subscription"
+	scopeResourceGroup      = "resource_group"
 )
 
 // Metric window bounds. Below 7 days the p95 sample floor cannot be met, above
@@ -67,7 +72,7 @@ type Scan struct {
 	// AWSOrganization is AWS's own organization field: it is deliberately a
 	// DISTINCT field rather than sharing GCP's Organization, so the CLI never
 	// loses which provider's --*-organization flag set it — which is what lets
-	// the two-provider conflict check name both flags.
+	// the provider conflict check name both flags.
 	Account            string
 	OrganizationalUnit string
 	AWSOrganization    string
@@ -86,6 +91,15 @@ type Scan struct {
 	// form like "us-east-1a" becomes its region "us-east-1" — so an operator
 	// can pass either spelling.
 	AWSRegions []string
+
+	// Azure scope dimensions. Tenant, ManagementGroup and Subscription are
+	// the three top-level dimensions (exactly one is set). ResourceGroup is
+	// not a dimension by itself: it is an optional filter that is meaningful
+	// only with Subscription.
+	AzureTenant          string
+	AzureManagementGroup string
+	AzureSubscription    string
+	AzureResourceGroup   string
 
 	Provider string
 
@@ -145,6 +159,16 @@ func (c Scan) Scope() cloud.Scope {
 				Organization:       c.AWSOrganization,
 			},
 		}
+	case "azure":
+		return cloud.Scope{
+			Provider: "azure",
+			Azure: &cloud.AzureScope{
+				Tenant:          c.AzureTenant,
+				ManagementGroup: c.AzureManagementGroup,
+				Subscription:    c.AzureSubscription,
+				ResourceGroup:   c.AzureResourceGroup,
+			},
+		}
 	}
 	return cloud.Scope{Provider: c.Provider}
 }
@@ -162,7 +186,7 @@ func (c *Scan) Validate() error {
 	if err := c.resolveProvider(); err != nil {
 		return err
 	}
-	if c.Provider != "gcp" && c.Provider != "aws" {
+	if !cloud.ProviderRegistered(c.Provider) {
 		return cloud.UnknownProviderError(c.Provider)
 	}
 
@@ -185,6 +209,11 @@ func (c *Scan) Validate() error {
 		c.Account = resolveScope(c.Provider, scopeAccount, c.Account)
 		c.OrganizationalUnit = resolveScope(c.Provider, scopeOrganizationalUnit, c.OrganizationalUnit)
 		c.AWSOrganization = resolveScope(c.Provider, scopeOrganization, c.AWSOrganization)
+	case "azure":
+		c.AzureTenant = resolveScope(c.Provider, scopeTenant, c.AzureTenant)
+		c.AzureManagementGroup = resolveScope(c.Provider, scopeManagementGroup, c.AzureManagementGroup)
+		c.AzureSubscription = resolveScope(c.Provider, scopeSubscription, c.AzureSubscription)
+		c.AzureResourceGroup = resolveScope(c.Provider, scopeResourceGroup, c.AzureResourceGroup)
 	}
 
 	// A cache file or fixture already names its own scope; a live scan does not.
@@ -238,71 +267,104 @@ func (c *Scan) Validate() error {
 	return nil
 }
 
-// resolveProvider settles which provider a scan targets, and rejects the
-// two-provider ambiguity as a usage error before any work is done. Precedence:
+// resolveProvider settles which provider a scan targets, and rejects a
+// multi-provider ambiguity as a usage error before any work is done.
+// Precedence:
 //
 //  1. An explicit --provider value (non-empty) is authoritative. Scope flags
-//     belonging to the OTHER provider are then a hard conflict.
-//  2. Otherwise the scope FLAGS infer the provider: any --gcp-* flag set
-//     means gcp, any --aws-* flag set means aws, both means a conflict.
+//     belonging to another provider are then a hard conflict.
+//  2. Otherwise the scope FLAGS infer the provider. Flags from two or more
+//     providers are a conflict.
 //  3. Otherwise the scope ENVIRONMENT variables infer the provider, with the
-//     same logic (TELLURY_GCP_* vs TELLURY_AWS_*).
+//     same logic.
 //  4. Otherwise the historical default: gcp.
 //
 // Mixed evidence is never guessed at. An explicit flag always wins over a
 // passive environment variable, so an operator whose shell carries
 // TELLURY_GCP_PROJECT can still run `tellury scan --aws-account 123` — the
 // AWS flag selects AWS, and the unrelated GCP variable is never consulted.
+//
+// The set of providers is discovered from cloud.Providers(), not from a
+// literal gcp/aws/azure chain, so adding a fourth cloud that registers scope
+// vocabulary widens conflict detection without a code change here.
 func (c *Scan) resolveProvider() error {
 	if c.Provider != "" {
-		other := otherProvider(c.Provider)
-		if other != "" && c.providerFlagsSet(other) {
-			return providerConflictError(c.Provider, other)
+		if !cloud.ProviderRegistered(c.Provider) {
+			// Let Validate report the unknown provider; there are no
+			// registered scope flags against which to check a conflict.
+			return nil
 		}
-		return nil
+		others := c.otherProvidersSetByFlags(c.Provider)
+		switch len(others) {
+		case 0:
+			return nil
+		case 1:
+			return providerConflictError(c.Provider, others[0])
+		default:
+			return providerConflictListError(append([]string{c.Provider}, others...))
+		}
 	}
 
-	gcpFlags := c.providerFlagsSet("gcp")
-	awsFlags := c.providerFlagsSet("aws")
-	switch {
-	case gcpFlags && awsFlags:
-		return providerConflictError("gcp", "aws")
-	case gcpFlags:
-		c.Provider = "gcp"
+	flags := c.providersSetByFlags()
+	switch len(flags) {
+	case 0:
+	case 1:
+		c.Provider = flags[0]
 		return nil
-	case awsFlags:
-		c.Provider = "aws"
-		return nil
+	default:
+		return providerConflictErrorForSet(flags)
 	}
 
-	gcpEnv := c.providerEnvSet("gcp")
-	awsEnv := c.providerEnvSet("aws")
-	switch {
-	case gcpEnv && awsEnv:
-		return providerConflictError("gcp", "aws")
-	case gcpEnv:
-		c.Provider = "gcp"
+	envs := c.providersSetByEnv()
+	switch len(envs) {
+	case 0:
+	case 1:
+		c.Provider = envs[0]
 		return nil
-	case awsEnv:
-		c.Provider = "aws"
-		return nil
+	default:
+		return providerConflictErrorForSet(envs)
 	}
 
 	c.Provider = "gcp"
 	return nil
 }
 
-// otherProvider returns the other of the two supported providers, or "" when
-// provider is not one of them (so an unknown explicit provider is never given
-// a conflict check it has no meaningful counterpart for).
-func otherProvider(provider string) string {
-	switch provider {
-	case "gcp":
-		return "aws"
-	case "aws":
-		return "gcp"
+// providersSetByFlags returns every registered provider with at least one
+// non-empty scope flag value on the config struct, sorted by provider name.
+func (c *Scan) providersSetByFlags() []string {
+	return c.providersWhere(func(provider string) bool { return c.providerFlagsSet(provider) })
+}
+
+// providersSetByEnv returns every registered provider with at least one
+// declared scope environment variable set, sorted by provider name.
+func (c *Scan) providersSetByEnv() []string {
+	return c.providersWhere(func(provider string) bool { return c.providerEnvSet(provider) })
+}
+
+// providersWhere filters the registered provider list through pred.
+func (c *Scan) providersWhere(pred func(string) bool) []string {
+	providers := cloud.Providers()
+	out := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		if pred(provider) {
+			out = append(out, provider)
+		}
 	}
-	return ""
+	return out
+}
+
+// otherProvidersSetByFlags returns the registered providers, other than
+// provider, that have a scope flag set. The explicit-provider conflict check
+// uses this so `--provider azure --gcp-project p` names both AZURE and GCP.
+func (c *Scan) otherProvidersSetByFlags(provider string) []string {
+	providers := c.providersSetByFlags()
+	out := make([]string, 0, len(providers))
+	for _, p := range providers {
+		if p != provider {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // providerFlagsSet reports whether any of the provider's scope dimensions
@@ -315,6 +377,8 @@ func (c *Scan) providerFlagsSet(provider string) bool {
 		return c.Project != "" || c.Folder != "" || c.Organization != ""
 	case "aws":
 		return c.Account != "" || c.OrganizationalUnit != "" || c.AWSOrganization != ""
+	case "azure":
+		return c.AzureTenant != "" || c.AzureManagementGroup != "" || c.AzureSubscription != "" || c.AzureResourceGroup != ""
 	}
 	return false
 }
@@ -332,6 +396,16 @@ func (c *Scan) providerEnvSet(provider string) bool {
 	return false
 }
 
+// providerConflictErrorForSet renders a two-provider conflict in the
+// historical "both X and Y scope flags" form, and a three-or-more provider
+// conflict in the general multi-provider form.
+func providerConflictErrorForSet(providers []string) error {
+	if len(providers) == 2 {
+		return providerConflictError(providers[0], providers[1])
+	}
+	return providerConflictListError(providers)
+}
+
 // providerConflictError renders the two-provider usage error. It names both
 // providers' scope flag groups — resolved from the registry, never a literal
 // GCP-shaped list — and tells the operator to pick one provider.
@@ -339,6 +413,19 @@ func providerConflictError(providerA, providerB string) error {
 	return fmt.Errorf("both %s and %s scope flags are set (%s and %s); pick one provider",
 		strings.ToUpper(providerA), strings.ToUpper(providerB),
 		scopeFlagList(providerA), scopeFlagList(providerB))
+}
+
+// providerConflictListError renders a three-or-more provider conflict. It is
+// deliberately distinct from the two-provider message so the common case
+// keeps its historical wording while a three-way conflict still names every
+// provider involved.
+func providerConflictListError(providers []string) error {
+	groups := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		groups = append(groups, scopeFlagList(provider))
+	}
+	return fmt.Errorf("scope flags from multiple providers are set (%s); pick one provider",
+		strings.Join(groups, " and "))
 }
 
 // scopeFlagList renders the "--flag/--flag/--flag" group a provider declares
@@ -411,13 +498,14 @@ func validCurrencyCode(code string) bool {
 
 // scopeHint renders the flag/env pair the provider publishes for its first
 // usable scope dimension, so an error message tells the operator what to
-// actually type. It prefers the "project" dimension — the historical GCP hint
-// — and falls back to the provider's first declared dimension for a provider
-// without one (AWS resolves to --aws-account or TELLURY_AWS_ACCOUNT). Names
-// come from the registry, never a literal list.
+// actually type. It prefers the dimension each provider treats as its
+// day-to-day owner: GCP's "project", AWS's "account", Azure's
+// "subscription". If the provider does not declare that dimension, it falls
+// back to the provider's first declared dimension. Names come from the
+// registry, never a literal list.
 func scopeHint(provider string) string {
-	name := scopeProject
-	if _, ok := cloud.ScopeFlag(provider, scopeProject); !ok {
+	name := preferredScopeName(provider)
+	if _, ok := cloud.ScopeFlag(provider, name); !ok {
 		scopes := cloud.ScopesFor(provider)
 		if len(scopes) == 0 {
 			return "--" + "?"
@@ -433,6 +521,22 @@ func scopeHint(provider string) string {
 		hint += " or " + envVar
 	}
 	return hint
+}
+
+// preferredScopeName is the dimension a missing-scope hint should prefer for
+// each provider. GCP keeps its historical project hint; AWS resolves to
+// account; Azure resolves to subscription (the design's scopeHint preference).
+func preferredScopeName(provider string) string {
+	switch provider {
+	case "gcp":
+		return scopeProject
+	case "aws":
+		return scopeAccount
+	case "azure":
+		return scopeSubscription
+	default:
+		return ""
+	}
 }
 
 // resolveScope returns flagValue if set, otherwise the value of the
