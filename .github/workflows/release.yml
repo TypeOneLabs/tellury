@@ -40,6 +40,25 @@ jobs:
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean --release-notes=/tmp/release-notes.md
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Set the body explicitly rather than through goreleaser's --release-notes.
+      # v0.5.0 shipped with an EMPTY body: the flag was passed and accepted, but
+      # `changelog: disable: true` in .goreleaser.yaml short-circuits the step
+      # that would have loaded the file, so the notes were silently dropped and
+      # the release published anyway. Setting the body here is independent of
+      # goreleaser's internal ordering, and the verification below fails the job
+      # rather than leaving another release with no notes.
+      - name: publish release notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${GITHUB_REF_NAME}" --notes-file /tmp/release-notes.md
+          body="$(gh release view "${GITHUB_REF_NAME}" --json body -q .body)"
+          if [ -z "$body" ]; then
+            echo "release ${GITHUB_REF_NAME} has an empty body" >&2
+            exit 1
+          fi
+          echo "release notes published: $(printf '%s' "$body" | wc -l) lines"
