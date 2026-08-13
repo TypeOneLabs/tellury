@@ -6,8 +6,8 @@ A single-binary CLI that reads your cloud inventory, builds an in-memory resourc
 and evaluates deterministic rules against it. Each finding carries the evidence behind it,
 the arithmetic that produced its figure, and which price source answered.
 
-> **Early development.** GCP and AWS. Eight rules. The CLI surface and the rule interface
-> may change between minor releases.
+> **Early development.** AWS, Azure and GCP. Ten rules. The CLI surface and the rule
+> interface may change between minor releases.
 
 ## Quick start
 
@@ -52,6 +52,26 @@ Without `--aws-regions` every enabled region is swept, which is thorough and slo
 it is the single biggest lever on scan time. See [AWS setup](docs/aws-setup.md) for the six
 read-only permissions.
 
+### Azure
+
+```bash
+az login
+./tellury scan --azure-subscription 00000000-0000-0000-0000-000000000000
+```
+
+```
+RESOURCE                 RULE                    MONTHLY WASTE
+address/orphan-ip        unassociated_public_ip          $3.65
+disk/orphan-disk         unattached_managed_disk         $1.54
+-------------------------------------------------------------
+TOTAL                    2 findings                      $5.19
+Summary: subscriptions/0000... — 1 subscription analyzed, 3 resources scanned, 2 rules evaluated, 2 findings, 1 resource skipped, 2.1s
+```
+
+`--azure-resource-group` narrows a subscription scan to one group. See
+[Azure setup](docs/azure-setup.md) for Reader versus a least-privilege custom role, and for
+what a scan above a subscription needs.
+
 ### GCP
 
 ```bash
@@ -78,6 +98,7 @@ across everything beneath it:
 ```bash
 ./tellury scan --gcp-organization 123456789012
 ./tellury scan --aws-organization o-abc123 --aws-regions eu-west-1
+./tellury scan --azure-management-group mg-engineering
 ```
 
 ```
@@ -91,7 +112,8 @@ TOTAL                  4 findings                             $43.30
 Summary: organizations/123456789012 — 3 projects analyzed, 4 resources scanned, 5 rules evaluated, 4 findings, 0 resources skipped, 2ms
 ```
 
-`--gcp-folder` and `--aws-organizational-unit` scope to a subtree. On AWS, member accounts
+`--gcp-folder`, `--aws-organizational-unit` and `--azure-management-group` scope to a
+subtree; `--azure-tenant` covers a whole tenant. On AWS, member accounts
 are reached by assuming a role in each; an account that cannot be reached is reported in the
 account outcomes rather than failing the scan.
 
@@ -102,11 +124,13 @@ doing any work. Each scan writes a graph snapshot, findings JSON and an HTML rep
 ## What it does
 
 - Reads GCP inventory from Cloud Asset Inventory, metrics from Cloud Monitoring, prices from
-  the Cloud Billing Catalog; and AWS inventory from the EC2 API, metrics from CloudWatch,
-  prices from the Price List API (pricing:GetProducts).
+  the Cloud Billing Catalog; AWS inventory from the EC2 API, metrics from CloudWatch, prices
+  from the Price List API; and Azure inventory from Resource Graph, prices from the Retail
+  Prices API — which is public, so Azure pricing needs no credentials at all.
 - Builds a resource graph: instances, disks, snapshots, addresses, networks and buckets,
-  plus the hierarchy above them — organization, folder and project on GCP, account on AWS,
-  with a region tier beneath, so waste rolls up by place as well as by owner.
+  plus the hierarchy above them — organization, folder and project on GCP; organization, OU
+  and account on AWS; tenant, management group and subscription on Azure — with a region tier
+  beneath, so waste rolls up by place as well as by owner.
 - Evaluates rules against it and prices each finding, in USD or your billing account's own
   currency.
 - Writes a directory of artifacts per scan: a replayable graph snapshot, findings JSON, and
@@ -119,7 +143,12 @@ with cross-account role assumption, and Resource Explorer narrows the region swe
 resources actually are. Prices come from the live Price List API — EBS capacity, IOPS and
 throughput, the hourly address charge, and On-Demand instance rates.
 
-Not there yet: Azure.
+On Azure, one Resource Graph query per subscription returns resource properties directly, so
+no per-resource hydration call is needed. Management-group and tenant scopes fan out across
+subscriptions and report each one's outcome, so a subscription the identity cannot read is
+named rather than silently missing from the total.
+
+Not there yet: Azure metrics, and therefore Azure rightsizing.
 
 ## Rules
 
@@ -133,6 +162,8 @@ Not there yet: Azure.
 | `unattached_ebs_volume` | aws / ec2 | medium | EBS volumes attached to nothing |
 | `unassociated_eip` | aws / ec2 | medium | Elastic IPs associated with nothing |
 | `underutilized_ec2` | aws / ec2 | high | EC2 instances overprovisioned for their CPU load |
+| `unattached_managed_disk` | azure / compute | medium | Managed disks attached to no VM |
+| `unassociated_public_ip` | azure / network | medium | Public IPs associated with nothing |
 
 `underutilized_instance` and `no_lifecycle_policy` read Cloud Monitoring; `underutilized_ec2`
 reads CloudWatch. Without metric access they skip and say so — they never guess a value from
@@ -197,11 +228,13 @@ internal/cli/     command wiring, flags, output selection
 pkg/graph/        in-memory resource graph
 pkg/cloud/gcp/    Cloud Asset Inventory ingestion and normalization
 pkg/cloud/aws/    EC2, Organizations and Resource Explorer ingestion
+pkg/cloud/azure/  Resource Graph ingestion and hierarchy walking
 pkg/metrics/      metric registry, with GCP and AWS backends
 pkg/pricing/      pricing interfaces, live API clients, test fixtures
 pkg/rules/        rule engine, NodeRule interface, skip vocabulary
 pkg/rules/gcp/    the shipped GCP rules
 pkg/rules/aws/    the shipped AWS rules
+pkg/rules/azure/  the shipped Azure rules
 pkg/output/       table, JSON, CSV and HTML renderers
 ```
 
@@ -216,6 +249,10 @@ pkg/output/       table, JSON, CSV and HTML renderers
   requires.
 - EC2 instances are not priced on the offline path, so `underutilized_ec2` produces no
   findings from a fixture. See [Offline scanning](docs/offline.md).
+- On Azure, an identity missing read access to a resource **type** produces an empty scan
+  rather than an error: Resource Graph returns no rows instead of denying the query, so a
+  permissions gap looks like a clean bill of health. The built-in Reader role avoids this;
+  see [Azure setup](docs/azure-setup.md).
 
 ## Contributing
 

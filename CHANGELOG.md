@@ -8,6 +8,62 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-13
+
+Azure is tellury's third cloud. Inventory, hierarchy and live pricing, with two rules.
+
+**Upgrading:** nothing to do. GCP and AWS scans are byte-identical to 0.4.0 — this release is
+additive. If you scan Azure, read [docs/azure-setup.md](docs/azure-setup.md) first, in
+particular the difference between the Reader role and a least-privilege custom role.
+
+### Added
+
+- **Azure provider.** Inventory comes from Azure Resource Graph, one KQL query per
+  subscription, projecting only the columns the rules read. Resource Graph returns resource
+  properties directly, so unlike the AWS path there is no per-resource hydration call.
+- **Four scopes.** `--azure-subscription`, `--azure-resource-group`,
+  `--azure-management-group` and `--azure-tenant`, each with a `TELLURY_AZURE_*` environment
+  variable. `--azure-resource-group` narrows a subscription scan and is applied as a filter
+  on the Resource Graph query, so it costs no extra API calls; passing it without
+  `--azure-subscription` is a usage error naming what to add. It is the first scope flag in
+  the tool that depends on another.
+- **Hierarchy.** Tenant, management group and subscription become container nodes, so waste
+  rolls up through them exactly as it does through GCP's folders and AWS's OUs. A management
+  group or tenant scan fans out one query per subscription rather than handing the whole
+  scope to Resource Graph, so each subscription's outcome is reported separately and one the
+  identity cannot read is named rather than silently missing from the total.
+- **Live pricing from the Azure Retail Prices API**, which is public and unauthenticated —
+  Azure pricing needs no credentials, no role and no API enablement, unlike both other
+  clouds. Rates are filtered to Consumption, excluding the Reservation, DevTest, spot,
+  low-priority and Windows rows the same query returns; a lookup that matches two distinct
+  billable rows refuses to pick rather than taking the first.
+- **`unattached_managed_disk`** — a managed disk attached to no virtual machine, priced by
+  its provisioned tier, with a seven-day grace period so a disk freed moments ago is not
+  reported as waste.
+- **`unassociated_public_ip`** — a Standard public IP address associated with nothing.
+- **[docs/azure-setup.md](docs/azure-setup.md)**, recording a permission set verified by
+  assigning it to a service principal with no other rights and running a real scan.
+
+### Changed
+
+- The provider conflict check is now three-way and names which two providers collided.
+- The owner column reads `SUBSCRIPTION` on Azure, alongside `ACCOUNT` on AWS and `PROJECT`
+  on GCP.
+
+### Known issue
+
+On Azure, an identity that lacks read access to a resource **type** produces an empty scan
+rather than an error: Resource Graph returns no rows instead of denying the query, so a
+permissions gap is indistinguishable from a clean bill of health. This is a property of
+Resource Graph, not of tellury, and it is why the setup guide recommends the built-in Reader
+role unless someone owns keeping a custom role current.
+
+### Notes on what is not here
+
+Azure metrics. There is no Azure Monitor integration and therefore no Azure rightsizing rule.
+AWS shipped inventory and configuration-only rules one release before CloudWatch arrived, and
+that sequencing kept the work small enough to finish; Azure follows it.
+
 ## [0.4.0] — 2026-08-12
 
 tellury reads metrics on AWS. The first metric-dependent AWS rule ships with it.
@@ -464,7 +520,8 @@ First release. GCP only.
   documentation rather than captured from the API normalizes to a node with empty
   attributes rather than failing loudly.
 
-[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/TypeOneLabs/tellury/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/TypeOneLabs/tellury/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/TypeOneLabs/tellury/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/TypeOneLabs/tellury/compare/v0.1.4...v0.2.0
