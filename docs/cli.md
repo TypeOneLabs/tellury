@@ -18,7 +18,7 @@ Every command, flag and exit code. For a short introduction see the
 | Flag | Default | Meaning |
 |---|---|---|
 | `--log-level` | `warn` | `error`, `warn`, `info`, `debug`. Diagnostics on stderr. |
-| `--no-color` | off | Disable colour. Colour is off already unless stdout is a terminal, so this is for the case where it is one and you do not want it. `NO_COLOR` (any value) and `TERM=dumb` do the same. |
+| `--no-color` | off | Disable colour and Unicode section rules. Both are off already unless stdout is a terminal, so this is for the case where it is one and you do not want them. `NO_COLOR` (any value) and `TERM=dumb` do the same. |
 | `--timeout` | `5m` | Overall deadline for the run, including every API call. |
 
 ## `tellury scan`
@@ -138,20 +138,23 @@ scan.
 `table` shows the ten largest findings and links to the HTML report for the rest. `json`
 and `csv` always contain every finding — they are consumed by other tools.
 
-**Colour.** On an interactive terminal the table colours the `SEVERITY` column only: red for
-high, yellow for medium, plain for low. Nothing else is coloured — money stays monochrome
-because a colour scale on a continuous value implies a threshold `tellury` does not have.
-Colour is always redundant: the severity words are printed either way, so a monochrome or
-colour-blind reader loses nothing.
+**Colour and glyphs.** On an interactive terminal the table colours the `SEVERITY` column
+only: red for high, yellow for medium, plain for low. Nothing else is coloured — money stays
+monochrome because a colour scale on a continuous value implies a threshold `tellury` does
+not have. Section rules use Unicode `─` on the same interactive-terminal gate. Colour is
+always redundant: the severity words are printed either way, so a monochrome or colour-blind
+reader loses nothing.
 
-Colour switches itself off when stdout is not a terminal, so piped output, CI captures and
-anything an agent reads are byte-identical with or without it. `--no-color`, `NO_COLOR` and
-`TERM=dumb` disable it explicitly. `json` and `csv` are never coloured under any
-circumstances.
+Colour and Unicode section rules switch themselves off when stdout is not a terminal, so
+piped output, CI captures and anything an agent reads are byte-identical with or without
+them; plain mode uses ASCII `-` rules and no ANSI. `--no-color`, `NO_COLOR` and `TERM=dumb`
+disable both explicitly. `json` and `csv` are never coloured and never contain section
+rules under any circumstances.
 
-The table carries an owner column — `ACCOUNT` on AWS, `PROJECT` on GCP — whenever the scope
-can hold more than one owner. A single `--aws-account` or `--gcp-project` scan omits it,
-since every finding belongs to the scope named on the command line.
+The table carries an owner column — `ACCOUNT` on AWS, `PROJECT` on GCP, `SUBSCRIPTION` on
+Azure — whenever the scope can hold more than one owner. A single `--aws-account`,
+`--gcp-project` or `--azure-subscription` scan omits it, since every finding belongs to the
+scope named on the command line.
 
 ### JSON: the machine contract
 

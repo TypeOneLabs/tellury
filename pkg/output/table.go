@@ -3,6 +3,7 @@ package output
 import (
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -29,6 +30,26 @@ const maxTableFindings = 10
 // are sized to their widest displayed value for each scan, the money column is
 // fixed so the table's right edge never shifts with the amounts.
 const colMoney = 13
+
+// summaryLabelWidth is the width of the label column in the SUMMARY key-value
+// block. Labels are left-justified in this many runes, followed by one space,
+// so values start at rune 15 (column 16 for a human counting from one).
+const summaryLabelWidth = 14
+
+// defaultSummaryWidth is the SUMMARY block width when the scan has no findings
+// table. With a table, SUMMARY borrows the table's computed separator width so
+// every section rule lines up; without one, 80 is the stable full-width block.
+const defaultSummaryWidth = 80
+
+// glyphs for section rules. The Unicode glyph is the only new glyph in the
+// redesign; ASCII fallback is the historical dash. Which one is used is
+// controlled by the same colourEnabled boolean that controls ANSI severity
+// colour: decorated output gets Unicode rules and ANSI, plain output gets
+// dashes and no ANSI.
+const (
+	unicodeRule = "─"
+	asciiRule   = "-"
+)
 
 // ANSI SGR sequences used by the table renderer. They are the 8 basic
 // foreground colours only, deliberately not bright, 256-colour or truecolour:
@@ -113,7 +134,8 @@ func (l tableLayout) totalSummaryWidth() int {
 
 // tableRenderer is the human table renderer. color is the only place colour
 // capability lives; jsonRenderer and csvRenderer have no colour field and no
-// colour code path.
+// colour code path. The same boolean also selects the section-rule glyph:
+// decorated output uses Unicode "─", plain output uses ASCII "-".
 type tableRenderer struct {
 	color bool
 }
@@ -121,12 +143,19 @@ type tableRenderer struct {
 func (tableRenderer) Format() string { return "table" }
 
 func (t tableRenderer) Render(w io.Writer, r Report) error {
+	rule := asciiRule
+	if t.color {
+		rule = unicodeRule
+	}
+
 	// Currency disclosure, before anything else: an operator reading non-USD
 	// figures must see which currency they are in and how it was decided
 	// before they read a single number. The default USD scan emits nothing,
-	// keeping its output byte-identical to the pre-currency build. These
-	// lines stay plain in every mode.
+	// keeping its output byte-identical to the pre-currency build.
 	if lines := currencyDisclosure(r); len(lines) > 0 {
+		if _, err := fmt.Fprintln(w, "CURRENCY"); err != nil {
+			return err
+		}
 		for _, line := range lines {
 			if _, err := fmt.Fprintln(w, line); err != nil {
 				return err
@@ -137,39 +166,26 @@ func (t tableRenderer) Render(w io.Writer, r Report) error {
 		}
 	}
 
+	if _, err := fmt.Fprintln(w, "FINDINGS"); err != nil {
+		return err
+	}
+
+	var summaryWidth int
 	if len(r.Findings) == 0 {
-		// Deliberately short: the summary line below already names the scope,
-		// the resources scanned and the rules evaluated, and repeating them
-		// here made two consecutive lines say the same thing.
-		//
-		// SCANNING NOTHING IS NOT THE SAME AS FINDING NOTHING, and the
-		// difference is not cosmetic. On Azure, an identity missing read
-		// access to a resource TYPE gets an empty result set from Resource
-		// Graph rather than a denial, so a permissions gap and a clean
-		// account produce identical data. Printing "No waste found" over
-		// zero scanned resources states a conclusion the scan did not reach.
-		msg := "No waste found."
-		code := ""
-		if r.ResourcesScanned == 0 {
-			msg = "No resources scanned — nothing was found to evaluate. " +
-				"Check the scope and the identity's permissions."
-			code = ansiYellow
-		} else if r.ScanStatus == StatusOK && len(r.MetricsBlocked) == 0 {
-			code = ansiGreen
-		} else {
-			code = ansiYellow
-		}
-		if !t.color {
-			code = ""
-		}
-		if _, err := fmt.Fprintln(w, paint(code, msg)); err != nil {
+		if err := t.writeFindingsEmpty(w, r); err != nil {
 			return err
 		}
+		summaryWidth = defaultSummaryWidth
 	} else {
 		// The table shows at most the ten largest findings by monthly waste
 		// (tableFindings); the TOTAL row below still sums every finding.
 		display := tableFindings(r)
 		layout := layoutTable(r, display)
+		summaryWidth = layout.separatorWidth()
+
+		if _, err := fmt.Fprintln(w, strings.Repeat(rule, layout.separatorWidth())); err != nil {
+			return err
+		}
 
 		severityHeader := fmt.Sprintf("%-*s", layout.severity, "SEVERITY")
 
@@ -193,16 +209,13 @@ func (t tableRenderer) Render(w io.Writer, r Report) error {
 			}
 		}
 
-		if _, err := fmt.Fprintln(w, strings.Repeat("-", layout.separatorWidth())); err != nil {
+		if _, err := fmt.Fprintln(w, strings.Repeat(rule, layout.separatorWidth())); err != nil {
 			return err
 		}
 
-		// The TOTAL row's finding summary spans the columns left of the money
-		// cell: it is not a project, so it must not inherit the PROJECT column's
-		// width (the old fixed 9-rune width truncated it to "9 findin…"). The
-		// summary is left-aligned in that full span and is therefore never
-		// truncated.
-		summary := fmt.Sprintf("%d findings", r.FindingCount)
+		// TOTAL agrees with the JSON finding_count and with the SUMMARY
+		// pluralisation: "1 finding", not "1 findings".
+		summary := countPhrase(r.FindingCount, "finding", "findings")
 		if err := writeTotalRow(w, layout, "TOTAL", summary, r.money(r.TotalMonthlyWasteUSD)); err != nil {
 			return err
 		}
@@ -222,50 +235,321 @@ func (t tableRenderer) Render(w io.Writer, r Report) error {
 		}
 	}
 
-	// Scan summary — printed after the table (or after the no-findings line
-	// when the scan produced no table), in every case. It is the "what did
-	// the scan actually look at" context, not the headline: the denominators
-	// that tell an operator whether an empty findings table means "nothing
-	// wasteful" (projects analyzed > 0, resources scanned > 0) or "nothing
-	// scanned" (a broken scope with zero projects). Every number here is
-	// carried by the Report, never measured at render time, so a replayed or
-	// fixture-driven scan reports its real counts and its real duration and
-	// the output stays deterministic for a given Report.
-	if _, err := fmt.Fprintln(w, summaryLine(r)); err != nil {
+	// One blank line separates FINDINGS from SUMMARY.
+	if _, err := fmt.Fprintln(w); err != nil {
 		return err
 	}
 
-	// Account status: when the scan walked an organization and some accounts
-	// were unreachable or suspended, report them so an operator reading a
-	// total is not silently handed a figure that skips a third of the org.
+	if err := t.renderSummary(w, r, rule, summaryWidth); err != nil {
+		return err
+	}
+
+	if hasCoverage(r) {
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(w, "COVERAGE"); err != nil {
+			return err
+		}
+		if err := writeCoverage(w, r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t tableRenderer) writeFindingsEmpty(w io.Writer, r Report) error {
+	// SCANNING NOTHING IS NOT THE SAME AS FINDING NOTHING. On Azure, an
+	// identity missing read access to a resource TYPE gets an empty result set
+	// from Resource Graph rather than a denial, so a permissions gap and a
+	// clean account produce identical data. Printing "No waste found" over
+	// zero scanned resources states a conclusion the scan did not reach.
+	msg := "No waste found."
+	code := ""
+	if r.ResourcesScanned == 0 {
+		msg = "No resources scanned — nothing was found to evaluate. " +
+			"Check the scope and the identity's permissions."
+		code = ansiYellow
+	} else if r.ScanStatus == StatusOK && len(r.MetricsBlocked) == 0 {
+		code = ansiGreen
+	} else {
+		code = ansiYellow
+	}
+	if !t.color {
+		code = ""
+	}
+	_, err := fmt.Fprintln(w, paint(code, msg))
+	return err
+}
+
+// renderSummary writes the always-on SUMMARY key-value block. The separator
+// width follows the findings table when one exists and defaults to 80 runes
+// for an empty FINDINGS section.
+func (t tableRenderer) renderSummary(w io.Writer, r Report, rule string, width int) error {
+	if _, err := fmt.Fprintln(w, "SUMMARY"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, strings.Repeat(rule, width)); err != nil {
+		return err
+	}
+
+	type field struct {
+		label string
+		value string
+	}
+	fields := []field{
+		{"Scope", orDash(scopeName(r.Scope))},
+		{"Scope ID", orDash(r.Scope)},
+		{"Status", orDash(r.ScanStatus)},
+		{"Scanned", scannedValue(r)},
+	}
+	if r.Provider == "aws" {
+		fields = append(fields, field{"Regions", regionsValue(r)})
+	}
+	fields = append(fields,
+		field{"Evaluated", countPhrase(r.RulesEvaluated, "rule", "rules")},
+		field{"Total Waste", r.money(r.TotalMonthlyWasteUSD) + " / month"},
+		field{"Duration", formatDuration(r.Duration)},
+		field{"Artifacts", artifactsValue(r)},
+	)
+
+	for _, f := range fields {
+		if err := writeSummaryField(w, f.label, f.value, width); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeSummaryField writes one SUMMARY key-value row, wrapping values longer
+// than the summary block at slash, middle-dot or space boundaries.
+func writeSummaryField(w io.Writer, label, value string, blockWidth int) error {
+	valueWidth := blockWidth - summaryLabelWidth - 1
+	if valueWidth < 1 {
+		valueWidth = 1
+	}
+	lines := wrapSummaryValue(value, valueWidth)
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+	if _, err := fmt.Fprintf(w, "%-*s %s\n", summaryLabelWidth, label, lines[0]); err != nil {
+		return err
+	}
+	indent := strings.Repeat(" ", summaryLabelWidth+1)
+	for _, line := range lines[1:] {
+		if _, err := fmt.Fprintln(w, indent+line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// wrapSummaryValue wraps a SUMMARY value at the available value width. Spaces
+// are the preferred break; slashes and middle dots are used when no space is
+// available. A single unbreakable token longer than the width is emitted whole
+// and may overflow — values are never truncated and never split inside a
+// token.
+func wrapSummaryValue(value string, width int) []string {
+	if width <= 0 || value == "" {
+		return []string{value}
+	}
+
+	// WRAP AT SPACES, NEVER INSIDE A TOKEN. A token here is a scope ID, a
+	// filesystem path or a file:// URL, and breaking one across lines makes it
+	// unselectable by double-click, useless to copy-paste and — for a URL —
+	// unclickable, which was the entire reason for rendering it as a URL.
+	//
+	// A token wider than the column therefore overflows on a line of its own.
+	// That is deliberate: the terminal soft-wraps it and the value survives
+	// intact, where a hard break would destroy it. Splitting on "/" produced a
+	// six-line artifacts row whose URL no terminal would open.
+	var (
+		out  []string
+		line string
+	)
+	for _, tok := range strings.Fields(value) {
+		switch {
+		case line == "":
+			line = tok
+		case len([]rune(line))+1+len([]rune(tok)) <= width:
+			line += " " + tok
+		default:
+			out = append(out, line)
+			line = tok
+		}
+	}
+	if line != "" {
+		out = append(out, line)
+	}
+	if len(out) == 0 {
+		return []string{value}
+	}
+	return out
+}
+
+// lastSummaryBreak returns the index of the preferred break within width:
+// the rightmost space, falling back to the rightmost slash or middle dot.
+func lastSummaryBreak(runes []rune, width int) int {
+	limit := width - 1
+	if limit >= len(runes) {
+		limit = len(runes) - 1
+	}
+	for i := limit; i >= 0; i-- {
+		if runes[i] == ' ' {
+			return i
+		}
+	}
+	for i := limit; i >= 0; i-- {
+		if runes[i] == '/' || runes[i] == '·' {
+			return i
+		}
+	}
+	return -1
+}
+
+// nextSummaryBreak finds the first break at or after width. It is used when a
+// single token is too long for the width: the over-long token is emitted whole
+// and the next break becomes the wrap point.
+func nextSummaryBreak(runes []rune, width int) int {
+	if width >= len(runes) {
+		return -1
+	}
+	for i := width; i < len(runes); i++ {
+		if runes[i] == ' ' {
+			return i
+		}
+	}
+	for i := width; i < len(runes); i++ {
+		if runes[i] == '/' || runes[i] == '·' {
+			return i
+		}
+	}
+	return -1
+}
+
+// hasCoverage reports whether the optional COVERAGE section has anything to
+// say: AWS account outcomes, Azure subscription outcomes, or offline
+// metric-blocked rules.
+func hasCoverage(r Report) bool {
+	return len(r.AccountStatuses) > 0 || len(r.SubscriptionStatuses) > 0 || len(r.MetricsBlocked) > 0
+}
+
+// writeCoverage renders the COVERAGE section content.
+func writeCoverage(w io.Writer, r Report) error {
 	if len(r.AccountStatuses) > 0 {
 		if _, err := fmt.Fprintln(w, accountStatusLines(r.AccountStatuses)); err != nil {
 			return err
 		}
 	}
-
-	// Subscription status: the Azure analog of account status. When a tenant
-	// or management-group scan could not reach some subscriptions, name them
-	// and their reasons so the total is never silently incomplete.
 	if len(r.SubscriptionStatuses) > 0 {
 		if _, err := fmt.Fprintln(w, subscriptionStatusLines(r.SubscriptionStatuses)); err != nil {
 			return err
 		}
 	}
-
-	// Offline honesty: when the scan's data carried no metrics for some rules,
-	// "no waste" would be a lie — those rules simply could not evaluate. State
-	// which ones explicitly so a fixture run does not look like a clean bill of
-	// health when it was actually "could not check".
 	if len(r.MetricsBlocked) > 0 {
 		if _, err := fmt.Fprintf(w,
-			"\n%d rule(s) could not be evaluated for lack of metric data: %s\n"+
+			"%d rule(s) could not be evaluated for lack of metric data: %s\n"+
 				"(use --cache-file from a live `scan` or an enriched `graph export` to evaluate them)\n",
 			len(r.MetricsBlocked), strings.Join(r.MetricsBlocked, ", ")); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// scopeName returns the last path segment of a scope ID: the human-readable
+// short name kept separate from the full Scope ID in SUMMARY.
+func scopeName(scope string) string {
+	scope = strings.TrimRight(scope, "/")
+	if i := strings.LastIndex(scope, "/"); i >= 0 {
+		return scope[i+1:]
+	}
+	return scope
+}
+
+// scannedValue renders the SUMMARY Scanned row: resources, optional skipped
+// parenthetical, and the provider denominator that says how much ground the
+// scan actually covered.
+func scannedValue(r Report) string {
+	v := countPhrase(r.ResourcesScanned, "resource", "resources")
+	if r.ResourcesSkipped > 0 {
+		v += fmt.Sprintf(" (%d skipped)", r.ResourcesSkipped)
+	}
+	v += " across " + providerDenominator(r)
+	return v
+}
+
+// providerDenominator renders the container count a scan's resource total is
+// measured against. The field is provider-owned: GCP reports projects, AWS
+// accounts, Azure subscriptions.
+func providerDenominator(r Report) string {
+	switch r.Provider {
+	case "aws":
+		return countPhrase(r.AccountsAnalyzed, "account", "accounts")
+	case "azure":
+		return countPhrase(r.SubscriptionsAnalyzed, "subscription", "subscriptions")
+	default:
+		return countPhrase(r.ProjectsAnalyzed, "project", "projects")
+	}
+}
+
+// regionsValue renders the SUMMARY Regions row for an AWS scan, including the
+// source annotation that says whether discovery narrowed the sweep.
+func regionsValue(r Report) string {
+	v := countPhrase(r.RegionsAnalyzed, "region", "regions")
+	if r.RegionSource != "" {
+		v += " (" + r.RegionSource + ")"
+	}
+	return v
+}
+
+// artifactsValue names the artifact directory and the HTML report as a
+// clickable file:// URL. The middle dot is the visual separator; the wrapping
+// logic breaks on the spaces around it when the value exceeds the SUMMARY
+// width.
+// artifactsValue is the scan's output directory, shortened to a path relative
+// to the working directory when it lives under it — which is the common case,
+// since --out-dir defaults to ./tellury-out. The absolute form is 100+
+// characters and tells a reader standing in the directory nothing they did not
+// know.
+//
+// The directory and the report are one value separated by a space, so the
+// wrapper breaks between them rather than through either: each stays a single
+// token, selectable by double-click and clickable as a URL.
+//
+// Both are shown because they answer different questions — where everything
+// was written, and what to open. Neither was mentioned anywhere before unless
+// a scan produced more than ten findings.
+func artifactsValue(r Report) string {
+	if r.ReportPath == "" {
+		return "-"
+	}
+	// Separated by a space, not a glyph: the wrapper breaks between tokens, so
+	// a "·" joiner became a line containing nothing but the joiner.
+	return shortenDir(filepath.Dir(r.ReportPath)) + " " + reportURL(r.ReportPath)
+}
+
+// shortenDir renders a path relative to the working directory when it lives
+// under it, which is the common case: --out-dir defaults to ./tellury-out. The
+// absolute form runs past 100 characters and tells a reader standing in that
+// directory nothing they did not already know.
+func shortenDir(dir string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return dir
+	}
+	rel, err := filepath.Rel(cwd, dir)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return dir
+	}
+	return rel
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 // severityLabel renders a finding severity as the uppercase text the SEVERITY
@@ -319,60 +603,8 @@ func (t tableRenderer) paintSeverity(l tableLayout, s rules.Severity) string {
 	return paint(severityCode(s), cell)
 }
 
-// summaryLine renders the one-line scan summary: how much ground the scan
-// covered (projects analyzed, resources scanned, rules evaluated) and what it
-// produced (findings, resources skipped, duration). It is context, not the
-// headline, so it is a single compact line. The duration comes from the
-// Report — the scan's own clock — so rendering a Report twice always prints
-// the same line.
-//
-// An AWS scan reports the account and the regions it actually covered — "1
-// account analyzed, 2 regions analyzed (resource_explorer), ..." — in place
-// of the GCP projects figure. An Azure scan reports subscriptions analyzed in
-// the same place. The region source annotation tells an operator whether the
-// AWS scan was narrowed by Resource Explorer (eventually consistent — a
-// recently created resource may be missed) or swept every enabled region
-// (complete coverage, chattier). The branch keys on the provider-owned fields,
-// which only the matching provider's report sets, so a GCP report renders
-// byte-identically to the pre-AWS and pre-Azure builds.
-func summaryLine(r Report) string {
-	parts := make([]string, 0, 7)
-	switch {
-	case r.AccountsAnalyzed > 0:
-		parts = append(parts, countPhrase(r.AccountsAnalyzed, "account analyzed", "accounts analyzed"))
-		if r.RegionsAnalyzed > 0 {
-			regionPart := countPhrase(r.RegionsAnalyzed, "region analyzed", "regions analyzed")
-			if r.RegionSource != "" {
-				regionPart += " (" + r.RegionSource + ")"
-			}
-			parts = append(parts, regionPart)
-		}
-	case r.Provider == "azure":
-		parts = append(parts, countPhrase(r.SubscriptionsAnalyzed, "subscription analyzed", "subscriptions analyzed"))
-	default:
-		parts = append(parts, countPhrase(r.ProjectsAnalyzed, "project analyzed", "projects analyzed"))
-	}
-	parts = append(parts,
-		countPhrase(r.ResourcesScanned, "resource scanned", "resources scanned"),
-		countPhrase(r.RulesEvaluated, "rule evaluated", "rules evaluated"),
-		countPhrase(r.FindingCount, "finding", "findings"),
-		countPhrase(r.ResourcesSkipped, "resource skipped", "resources skipped"),
-		formatDuration(r.Duration),
-	)
-	// The scope leads the line. Without it a findings table says nothing about
-	// what it is a scan OF: the PROJECT column only appears when findings span
-	// more than one project, so a single-project run named the project nowhere
-	// at all, and a table pasted into a ticket or scrolled past in CI could not
-	// be attributed. The empty-result path has always named the scope
-	// ("No waste found in projects/x"); this makes the two consistent.
-	if r.Scope != "" {
-		return "Summary: " + r.Scope + " — " + strings.Join(parts, ", ")
-	}
-	return "Summary: " + strings.Join(parts, ", ")
-}
-
-// accountStatusLines renders the account outcome report below the summary
-// line. When an organization scan skipped some accounts — because the role
+// accountStatusLines renders the account outcome report below the COVERAGE
+// header. When an organization scan skipped some accounts — because the role
 // could not be assumed, the account was suspended, or ingestion failed — the
 // total is incomplete and the operator must know exactly which accounts were
 // affected and why.
@@ -436,9 +668,9 @@ func accountStatusLines(statuses []aws.AccountStatus) string {
 }
 
 // subscriptionStatusLines renders the subscription outcome report below the
-// summary line. When a tenant or management-group scan found subscriptions it
-// could not query, the total is incomplete and the operator must know exactly
-// which subscriptions were affected and why.
+// COVERAGE header. When a tenant or management-group scan found subscriptions
+// it could not query, the total is incomplete and the operator must know
+// exactly which subscriptions were affected and why.
 func subscriptionStatusLines(statuses []azure.SubscriptionStatus) string {
 	scanned, unreachable, noResources := 0, 0, 0
 	for _, s := range statuses {

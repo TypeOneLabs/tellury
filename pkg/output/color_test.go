@@ -36,8 +36,8 @@ func colourReport() Report {
 // TestTableColourPaintsOnlySeverity is the presence half of the colour
 // contract: with colour enabled, the ONLY bytes that change from the plain
 // table are SGR wrappers around the already-padded HIGH and MEDIUM severity
-// cells. LOW stays plain. Resource, rule, money, TOTAL, separator and summary
-// are untouched.
+// cells, and the section-rule glyph changes from ASCII to Unicode. LOW stays
+// plain. Resource, rule, money, TOTAL and summary values are untouched.
 func TestTableColourPaintsOnlySeverity(t *testing.T) {
 	report := colourReport()
 
@@ -49,14 +49,10 @@ func TestTableColourPaintsOnlySeverity(t *testing.T) {
 		t.Fatalf("coloured Render: %v", err)
 	}
 
-	// The plain table is the monochrome baseline: no escapes anywhere.
 	if bytes.Contains(plain.Bytes(), []byte(ansiESC)) {
 		t.Fatalf("plain table must contain no ANSI escapes:\n%q", plain.String())
 	}
 
-	// Presence: red wraps the padded HIGH cell and yellow wraps the padded
-	// MEDIUM cell. Padding happens before SGR, so the escape is never inside a
-	// width argument.
 	if !bytes.Contains(coloured.Bytes(), []byte(ansiRedT+"HIGH    \x1b[0m")) {
 		t.Errorf("HIGH severity cell must be red and already-padded:\n%q", coloured.String())
 	}
@@ -67,9 +63,6 @@ func TestTableColourPaintsOnlySeverity(t *testing.T) {
 		t.Errorf("LOW severity cell must stay plain text:\n%q", coloured.String())
 	}
 
-	// Absence is as important as presence: only the two elevated severities
-	// carry SGR. One HIGH and one MEDIUM means exactly four escape sequences
-	// (start + reset for each).
 	if got := bytes.Count(coloured.Bytes(), []byte(ansiESC)); got != 4 {
 		t.Fatalf("coloured table must contain exactly 4 escape sequences (red start/reset and yellow start/reset), got %d:\n%q",
 			got, coloured.String())
@@ -117,20 +110,33 @@ func TestTableColourPaintsMultiProjectSeverity(t *testing.T) {
 
 // TestTableNonTerminalWriterIsByteIdentical pins the monochrome table's raw
 // bytes. A table rendered to a buffer (the same writer tests, README examples
-// and the HTML report all use) carries the new SEVERITY column but no ANSI.
+// and the HTML report all use) carries the sectioned layout, ASCII section
+// rules and no ANSI.
 func TestTableNonTerminalWriterIsByteIdentical(t *testing.T) {
 	var buf bytes.Buffer
 	if err := TableRenderer(false).Render(&buf, colourReport()); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 
-	want := "RESOURCE             RULE                   SEVERITY MONTHLY WASTE\n" +
+	want := "FINDINGS\n" +
+		"------------------------------------------------------------------\n" +
+		"RESOURCE             RULE                   SEVERITY MONTHLY WASTE\n" +
 		"disk/pd-standard-01  detached_disk          HIGH            $72.00\n" +
 		"snapshot/backup-2023 old_snapshot           LOW              $1.50\n" +
 		"vm/instance-a        underutilized_instance MEDIUM          $18.20\n" +
 		"------------------------------------------------------------------\n" +
 		"TOTAL                3 findings                             $91.70\n" +
-		"Summary: projects/my-project — 1 project analyzed, 41 resources scanned, 6 rules evaluated, 3 findings, 0 resources skipped, 0s\n"
+		"\n" +
+		"SUMMARY\n" +
+		"------------------------------------------------------------------\n" +
+		"Scope          my-project\n" +
+		"Scope ID       projects/my-project\n" +
+		"Status         ok\n" +
+		"Scanned        41 resources across 1 project\n" +
+		"Evaluated      6 rules\n" +
+		"Total Waste    $91.70 / month\n" +
+		"Duration       0s\n" +
+		"Artifacts      -\n"
 
 	if !bytes.Equal(buf.Bytes(), []byte(want)) {
 		t.Errorf("non-terminal table bytes changed:\n got %q\nwant %q", buf.String(), want)
@@ -232,8 +238,8 @@ func TestJSONAndCSV_NeverColoured(t *testing.T) {
 }
 
 // TestTableEmptyStatusColoursOnlyTheHeadline pins the one non-table place
-// colour is used: the empty-result line. The summary and the metrics-blocked
-// note that follow stay plain.
+// colour is used: the empty-result line inside FINDINGS. The SUMMARY block and
+// the COVERAGE note stay plain.
 func TestTableEmptyStatusColoursOnlyTheHeadline(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -278,9 +284,9 @@ func TestTableEmptyStatusColoursOnlyTheHeadline(t *testing.T) {
 			if !bytes.Contains(buf.Bytes(), []byte(want)) {
 				t.Errorf("empty status line = %q, want it to contain %q", got, want)
 			}
-			// The summary line is plain context, not part of the headline.
-			if bytes.Contains(buf.Bytes(), []byte("Summary: \x1b[")) {
-				t.Errorf("summary line must stay plain:\n%q", got)
+			// The SUMMARY block is plain context, not part of the headline.
+			if bytes.Contains(buf.Bytes(), []byte("SUMMARY\x1b[")) {
+				t.Errorf("SUMMARY header must stay plain:\n%q", got)
 			}
 			if bytes.Contains(buf.Bytes(), []byte("could not be evaluated\x1b[")) {
 				t.Errorf("metrics-blocked note must stay plain:\n%q", got)

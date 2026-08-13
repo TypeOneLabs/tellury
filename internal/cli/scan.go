@@ -789,8 +789,9 @@ func printSkips(w io.Writer, res rules.Result) {
 	if len(tallies) == 0 {
 		return
 	}
-	fmt.Fprintln(w, "\nskipped resources:")
+	fmt.Fprintln(w, "\nSKIP TALLY")
+	fmt.Fprintf(w, "  %-30s %-32s %s\n", "RULE", "CODE", "COUNT")
 	for _, t := range tallies {
-		fmt.Fprintf(w, "  %-28s %-32s %d\n", t.RuleID, t.Code, t.Count)
+		fmt.Fprintf(w, "  %-30s %-32s %d\n", t.RuleID, t.Code, t.Count)
 	}
 }
