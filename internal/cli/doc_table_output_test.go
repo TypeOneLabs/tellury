@@ -27,6 +27,11 @@ func TestDocumentedTableOutputsMatchRenderer(t *testing.T) {
 		{"../../README.md", renderDocTable(t, awsDocReport())},
 		{"../../README.md", renderDocTable(t, azureDocReport())},
 		{"../../README.md", renderDocTable(t, gcpDocReport())},
+		// docs/writing-a-rule.md is the contributor guide, and it is the file that
+		// rotted furthest: its worked example priced a snapshot on the source disk
+		// at a stale rate, teaching a defect that had already reached a real invoice.
+		// It is guarded here so the same thing cannot happen quietly again.
+		{"../../docs/writing-a-rule.md", findingsSectionOnly(renderDocTable(t, oldSnapshotDocReport()))},
 		{"../../README.md", renderDocTable(t, orgDocReport())},
 		{"../../docs/offline.md", renderDocTable(t, offlineNoPriceDocReport())},
 		{"../../docs/offline.md", renderDocTable(t, offlinePriceDocReport())},
@@ -38,7 +43,12 @@ func TestDocumentedTableOutputsMatchRenderer(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadFile(%s): %v", path, err)
 		}
-		if !strings.Contains(string(doc), block.text) {
+		// Compare with LEADING whitespace stripped per line. A fenced block
+		// inside a markdown list item must be indented to stay in the list, so
+		// an exact substring match would fail on formatting rather than on
+		// content. Only the indent is removed: the table's own padding is
+		// interior, so column alignment is still compared exactly.
+		if !strings.Contains(deindent(string(doc)), deindent(block.text)) {
 			t.Errorf("%s does not contain the renderer's current table output:\n%s", path, block.text)
 		}
 	}
@@ -167,4 +177,43 @@ func offlinePriceDocReport() output.Report {
 		MetricsBlocked:       []string{"no_lifecycle_policy", "underutilized_instance"},
 		ReportPath:           "/home/you/tellury-out/report.html",
 	}
+}
+
+// oldSnapshotDocReport is the worked example in docs/writing-a-rule.md: one
+// snapshot billing on its stored bytes, not on the disk it came from.
+// 30 GiB x $0.050/GiB-month = $1.50, the figure old_snapshot_fixture_test.go
+// asserts against the real fixture.
+func oldSnapshotDocReport() output.Report {
+	return output.Report{
+		Findings: []rules.Finding{{
+			Resource:        "snapshot/backup-2023-01-01",
+			RuleID:          "old_snapshot",
+			Severity:        rules.SeverityLow,
+			MonthlyWasteUSD: 1.50,
+		}},
+		FindingCount:         1,
+		TotalMonthlyWasteUSD: 1.50,
+		ResourcesScanned:     1,
+	}
+}
+
+// deindent removes leading whitespace from every line, leaving interior
+// spacing — and therefore column alignment — untouched.
+func deindent(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimLeft(l, " \t")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// findingsSectionOnly keeps the FINDINGS block and drops the SUMMARY that
+// follows. The contributor guide illustrates what a rule produces, not what a
+// whole scan reports, so it shows the table alone — and a guard that demanded
+// the summary too would push noise into the guide to satisfy a test.
+func findingsSectionOnly(s string) string {
+	if i := strings.Index(s, "\n\nSUMMARY"); i > 0 {
+		return s[:i]
+	}
+	return s
 }
