@@ -2,6 +2,7 @@ package orphaned_ami_snapshot
 
 import (
 	"context"
+	"sort"
 	"testing"
 	"time"
 
@@ -102,6 +103,65 @@ func TestEval_ReportsOrphanedAMISnapshot(t *testing.T) {
 	if got := findings[0].RuleID; got != ID {
 		t.Errorf("rule id = %q, want %q", got, ID)
 	}
+}
+
+// TestEval_Evidence pins the evidence payload, which is the rule's entire
+// output for a human or an agent deciding whether to delete a snapshot.
+//
+// This exists because two defects shipped here that every other test passed
+// straight through: three keys were emitted twice (declared in EvidenceKeys AND
+// re-emitted by ExtraEvidence), and price_source was dropped entirely because
+// PriceEvidenceFor returns a []Evidence that ExtraEvidence read back as a
+// singular Evidence. Both were found by reading a real scan's findings.json,
+// not by a test — asserting only the finding count and the waste figure cannot
+// see either one.
+func TestEval_Evidence(t *testing.T) {
+	n := snapshotNode(awsrules.TypeSnapshot, "snap-1", oldEnough, awsrules.SnapshotStateCompleted, true, true, 0, 8)
+	findings, _ := eval(t, n, fakePricer{unit: 0.05})
+	if len(findings) != 1 {
+		t.Fatalf("findings = %d, want 1", len(findings))
+	}
+
+	got := map[string]string{}
+	for _, e := range findings[0].Evidence {
+		if prev, dup := got[e.Key]; dup {
+			t.Errorf("evidence key %q emitted twice (%q then %q): a key must appear "+
+				"in EvidenceKeys or ExtraEvidence, never both", e.Key, prev, e.Value)
+		}
+		got[e.Key] = e.Value
+	}
+
+	for _, want := range []struct{ key, value string }{
+		{"snapshot_id", "snap-1"},
+		{"volume_size_gb", "8"},
+		{"referenced_by_ami_count", "0"},
+		{"age_days", "590"},
+		{"size_basis", "source_volume_size"},
+	} {
+		if got[want.key] != want.value {
+			t.Errorf("evidence %q = %q, want %q", want.key, got[want.key], want.value)
+		}
+	}
+
+	// Provenance must survive to the finding: without it a reader cannot tell a
+	// live API price from a fallback, and $0.40 looks equally authoritative
+	// either way.
+	if _, ok := got["price_source"]; !ok {
+		t.Errorf("price_source absent from evidence; got keys %v", keysOf(got))
+	}
+	// The unit rate makes the arithmetic checkable by hand: 8 GiB x $0.05.
+	if got["unit_price_gib_month"] == "" {
+		t.Errorf("unit_price_gib_month absent from evidence; got keys %v", keysOf(got))
+	}
+}
+
+func keysOf(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // TestEval_SkipPaths pins every guard. The two that matter most are

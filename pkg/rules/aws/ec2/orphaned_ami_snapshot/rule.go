@@ -173,9 +173,14 @@ func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *r
 		return nil, err // engine records SkipNoPrice; never a $0 assumption
 	}
 
-	nc.Set("price_source", rules.PriceEvidenceFor("price_source", p.Price,
-		rules.PricedComponent{Kind: pricing.KindSnapshotStorage, SKU: SnapshotStorageSKU, Region: resolvedRegion}))
+	// PriceEvidence (singular) is deliberate: there is exactly one priced
+	// component here. PriceEvidenceFor returns a []Evidence, and stashing a
+	// slice behind a value-typed read in ExtraEvidence silently drops the
+	// provenance rather than failing.
+	nc.Set("price_source", rules.PriceEvidence("price_source", p.Price,
+		pricing.KindSnapshotStorage, SnapshotStorageSKU, resolvedRegion))
 	nc.Set("currency", rules.CurrencyOf(p))
+	nc.Set("unit_price", unit)
 
 	return []rules.CostBranch{{
 		Label:      "delete",
@@ -184,28 +189,32 @@ func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *r
 	}}, nil
 }
 
+// EvidenceKeys auto-collects the three node attrs that carry the rule's whole
+// case: which snapshot, how big, and the reference count the rule checked
+// rather than assumed (the not_referenced_by_ami guard makes it zero here).
+// Everything else is computed or formatted in ExtraEvidence — a key must appear
+// in exactly one of the two, or the engine emits it twice.
 func (rule) EvidenceKeys() []string {
-	return []string{"snapshot_id", "volume_size_gb", "age_days", "referenced_by_ami_count"}
+	return []string{awsrules.AttrSnapshotID, awsrules.AttrVolumeSizeGB, awsrules.AttrReferencedByAMICount}
 }
 
 func (rule) ExtraEvidence(n *graph.Node, nc *rules.NodeContext, _ rules.CostBranch) []rules.Evidence {
+	cur, _ := nc.Get("currency")
+	curStr, _ := cur.(string)
+	unit, _ := nc.Get("unit_price")
+
 	out := []rules.Evidence{}
-	if v, ok := n.Str(awsrules.AttrSnapshotID); ok {
-		out = append(out, rules.Evidence{Key: "snapshot_id", Value: v})
-	}
-	if v, ok := nc.Get("size_gb"); ok {
-		out = append(out, rules.Evidence{Key: "volume_size_gb", Value: fmt.Sprintf("%.0f", v.(float64))})
-	}
 	if v, ok := nc.Get("age_days"); ok {
 		out = append(out, rules.Evidence{Key: "age_days", Value: fmt.Sprintf("%.0f", v.(float64))})
 	}
-	// Always zero when the rule fires, and stated so a reader can see the rule
-	// checked rather than assumed.
-	out = append(out, rules.Evidence{Key: "referenced_by_ami_count", Value: "0"})
+	// Same basis and caveat as unused_ami: AWS exposes the source volume size,
+	// never the compressed bytes actually stored.
+	out = append(out, rules.Evidence{Key: "size_basis", Value: "source_volume_size"})
+	if u, ok := unit.(float64); ok {
+		out = append(out, rules.EvMoneyIn("unit_price_gib_month", curStr, u, 4))
+	}
 	if v, ok := nc.Get("price_source"); ok {
-		if ev, isEv := v.(rules.Evidence); isEv {
-			out = append(out, ev)
-		}
+		out = append(out, v.(rules.Evidence))
 	}
 	return out
 }
