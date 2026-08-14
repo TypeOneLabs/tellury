@@ -607,14 +607,22 @@ func matchSKU(sk *billingpb.Sku) (pricing.Kind, string, bool) {
 	// per GiB-month. The Cloud Billing resource groups are distinct from
 	// PDSnapshot and are matched before the family switch for the same reason:
 	// a reader would otherwise look under "Compute" and miss them.
+	//
+	// THE TOKENS ARE "storageimage" AND "machineimage", verified against the live
+	// Cloud Billing catalogue. They were originally written as "imagestorage"
+	// and "machineimagestorage" — plausible, symmetric with the Kind names, and
+	// matching nothing. Every live image lookup would have missed and every
+	// image skipped as unpriced, which is the same defect that hid in the GCP
+	// snapshot token and the Azure managed-disk families: a wrong SKU token does
+	// not fail, it silently prices nothing.
 	if usageType == "OnDemand" {
 		switch resourceGroup {
-		case "imagestorage":
+		case "storageimage":
 			if strings.Contains(desc, "early deletion") {
 				return "", "", false
 			}
 			return pricing.KindImageStorage, "standard", true
-		case "machineimagestorage":
+		case "machineimage":
 			if strings.Contains(desc, "early deletion") {
 				return "", "", false
 			}

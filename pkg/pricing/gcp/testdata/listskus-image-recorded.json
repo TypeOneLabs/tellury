@@ -1,0 +1,116 @@
+{
+  "skus": [
+    {
+      "category": {
+        "resourceFamily": "Storage",
+        "resourceGroup": "MachineImage",
+        "serviceDisplayName": "Compute Engine",
+        "usageType": "OnDemand"
+      },
+      "description": "Storage Machine Image",
+      "geoTaxonomy": {
+        "regions": [
+          "asia-east1",
+          "europe-north1",
+          "europe-west1",
+          "us-central1",
+          "us-west1",
+          "us-west2",
+          "us-east1"
+        ],
+        "type": "MULTI_REGIONAL"
+      },
+      "name": "services/6F81-5844-456A/skus/A652-E97D-AB77",
+      "pricingInfo": [
+        {
+          "currencyConversionRate": 1,
+          "effectiveTime": "2026-08-14T07:00:00Z",
+          "pricingExpression": {
+            "baseUnit": "By.s",
+            "baseUnitConversionFactor": 2875910101401600.0,
+            "baseUnitDescription": "byte second",
+            "displayQuantity": 1,
+            "tieredRates": [
+              {
+                "startUsageAmount": 0,
+                "unitPrice": {
+                  "currencyCode": "USD",
+                  "nanos": 50000000,
+                  "units": "0"
+                }
+              }
+            ],
+            "usageUnit": "GiBy.mo",
+            "usageUnitDescription": "gibibyte month"
+          },
+          "summary": ""
+        }
+      ],
+      "serviceProviderName": "Google",
+      "serviceRegions": [
+        "asia-east1",
+        "europe-north1",
+        "europe-west1",
+        "us-central1",
+        "us-west1",
+        "us-west2",
+        "us-east1"
+      ],
+      "skuId": "A652-E97D-AB77"
+    },
+    {
+      "category": {
+        "resourceFamily": "Storage",
+        "resourceGroup": "StorageImage",
+        "serviceDisplayName": "Compute Engine",
+        "usageType": "OnDemand"
+      },
+      "description": "Storage Image",
+      "geoTaxonomy": {
+        "regions": [
+          "asia-east1",
+          "europe-west1",
+          "us-central1",
+          "us-east1",
+          "us-west1"
+        ],
+        "type": "MULTI_REGIONAL"
+      },
+      "name": "services/6F81-5844-456A/skus/DAA2-253C-6680",
+      "pricingInfo": [
+        {
+          "currencyConversionRate": 1,
+          "effectiveTime": "2026-08-14T07:00:00Z",
+          "pricingExpression": {
+            "baseUnit": "By.s",
+            "baseUnitConversionFactor": 2875910101401600.0,
+            "baseUnitDescription": "byte second",
+            "displayQuantity": 1,
+            "tieredRates": [
+              {
+                "startUsageAmount": 0,
+                "unitPrice": {
+                  "currencyCode": "USD",
+                  "nanos": 50000000,
+                  "units": "0"
+                }
+              }
+            ],
+            "usageUnit": "GiBy.mo",
+            "usageUnitDescription": "gibibyte month"
+          },
+          "summary": ""
+        }
+      ],
+      "serviceProviderName": "Google",
+      "serviceRegions": [
+        "us-central1",
+        "us-east1",
+        "us-west1",
+        "asia-east1",
+        "europe-west1"
+      ],
+      "skuId": "DAA2-253C-6680"
+    }
+  ]
+}

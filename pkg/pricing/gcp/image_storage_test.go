@@ -13,12 +13,19 @@ import (
 // TestMatchSKU_ImageStorageTokenPinned pins the live-catalogue image-storage
 // resource group to the token unused_custom_image actually queries. If either
 // side changes without the other, live lookups silently miss.
+// The resource groups below are "StorageImage" and "MachineImage" because that
+// is what the live Cloud Billing catalogue returns. These tests originally used
+// "ImageStorage" and "MachineImageStorage" — the same invented tokens the code
+// queried — so they passed while no real SKU could ever match. A hand-built SKU
+// test can only ever confirm that the code agrees with itself; see
+// image_sku_recorded_test.go, which compares against a recorded response.
+
 func TestMatchSKU_ImageStorageTokenPinned(t *testing.T) {
 	sk := &billingpb.Sku{
 		Category: &billingpb.Category{
 			ServiceDisplayName: "Compute Engine",
 			ResourceFamily:     "Storage",
-			ResourceGroup:      "ImageStorage",
+			ResourceGroup:      "StorageImage",
 			UsageType:          "OnDemand",
 		},
 		Description: "Storage Image",
@@ -44,7 +51,7 @@ func TestMatchSKU_MachineImageStorageTokenPinned(t *testing.T) {
 		Category: &billingpb.Category{
 			ServiceDisplayName: "Compute Engine",
 			ResourceFamily:     "Storage",
-			ResourceGroup:      "MachineImageStorage",
+			ResourceGroup:      "MachineImage",
 			UsageType:          "OnDemand",
 		},
 		Description: "Storage Machine Image",
@@ -70,7 +77,7 @@ func TestMatchSKU_ImageEarlyDeletionIgnored(t *testing.T) {
 		Category: &billingpb.Category{
 			ServiceDisplayName: "Compute Engine",
 			ResourceFamily:     "Storage",
-			ResourceGroup:      "ImageStorage",
+			ResourceGroup:      "StorageImage",
 			UsageType:          "OnDemand",
 		},
 		Description: "Image Early Deletion",
