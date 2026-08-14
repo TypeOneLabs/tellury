@@ -76,14 +76,14 @@ az login
 
 ```
 FINDINGS
-----------------------------------------------------------------------
-RESOURCE                 RULE                   SEVERITY MONTHLY WASTE
+-----------------------------------------------------------------------
+RESOURCE                  RULE                   SEVERITY MONTHLY WASTE
 address/tellury-orphan-ip unassociated_public_ip MEDIUM           $3.65
-----------------------------------------------------------------------
-TOTAL                    1 finding                               $3.65
+-----------------------------------------------------------------------
+TOTAL                     1 finding                               $3.65
 
 SUMMARY
-----------------------------------------------------------------------
+-----------------------------------------------------------------------
 Scope          rg-tellury-test
 Scope ID       subscriptions/000e62f0-1fd2-4e70-b300-6f147b0a687a/resourceGroups/rg-tellury-test
 Status         ok

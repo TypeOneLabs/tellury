@@ -505,18 +505,15 @@ func TestTableRenderedOutput_PopulatedScan(t *testing.T) {
 
 	got := renderTable(t, false, report)
 	want := "FINDINGS\n" +
-		"----------------------------------------------------------------------\n" +
-		"RESOURCE                 RULE                   SEVERITY MONTHLY WASTE\n" +
+		"-----------------------------------------------------------------------\n" +
+		"RESOURCE                  RULE                   SEVERITY MONTHLY WASTE\n" +
 		"address/tellury-orphan-ip unassociated_public_ip MEDIUM           $3.65\n" +
-		"----------------------------------------------------------------------\n" +
-		"TOTAL                    1 finding                               $3.65\n" +
+		"-----------------------------------------------------------------------\n" +
+		"TOTAL                     1 finding                               $3.65\n" +
 		"\n" +
 		"SUMMARY\n" +
-		"----------------------------------------------------------------------\n" +
+		"-----------------------------------------------------------------------\n" +
 		"Scope          rg-tellury-test\n" +
-		// One line, deliberately: a scope ID is a single token and splitting
-		// it at a slash makes it unselectable by double-click and useless to
-		// copy-paste. Overflowing the column is the lesser harm.
 		"Scope ID       subscriptions/000e62f0-1fd2-4e70-b300-6f147b0a687a/resourceGroups/rg-tellury-test\n" +
 		"Status         ok\n" +
 		"Scanned        2 resources (1 skipped) across 1 subscription\n" +
