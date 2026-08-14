@@ -29,7 +29,7 @@ func TestCatalogPricer_EBSSnapshotStoragePinned(t *testing.T) {
 		t.Fatal("snapshot fixture is empty")
 	}
 
-	foundGBMo, foundGBMonth := false, false
+	foundGBMo := false
 	for _, rawDoc := range stored {
 		doc, err := parsePriceListDoc(string(rawDoc))
 		if err != nil {
@@ -38,14 +38,30 @@ func TestCatalogPricer_EBSSnapshotStoragePinned(t *testing.T) {
 		if doc.Product.ProductFamily != "Storage Snapshot" {
 			t.Fatalf("fixture product family = %q, want %q", doc.Product.ProductFamily, "Storage Snapshot")
 		}
+		// The recorded family contains the archive tiers, the Outposts rate and
+		// the underbilling meter alongside the standard one. Only the standard
+		// product indexes, and only its dimensions are pinned — the retrieval
+		// product is priced per GB, not per GB-month, and must not be indexed
+		// at all. Both assumptions below were previously false-by-construction:
+		// the fixture held one hand-made product, so "every product indexes"
+		// and "every unit is GB-Mo" were true of the file and of nothing else.
+		usage := doc.Product.Attributes["usagetype"]
+		entries := indexDoc(doc)
+		if !isStandardSnapshotUsage(usage) {
+			if len(entries) != 0 {
+				t.Errorf("non-standard usagetype %q produced %d entries; the archive, "+
+					"Outposts and underbilling rates must not be indexed", usage, len(entries))
+			}
+			continue
+		}
 		for _, dim := range priceDimensions(doc) {
 			if dim.unit != "GB-Mo" && dim.unit != "GB-month" {
-				t.Fatalf("unexpected snapshot unit %q; only GB-Mo/GB-month are pinned", dim.unit)
+				t.Fatalf("unexpected unit %q on the standard snapshot product", dim.unit)
 			}
 		}
-		entries := indexDoc(doc)
 		if len(entries) == 0 {
-			t.Fatalf("indexDoc produced no entries for %s", doc.Product.Attributes["regionCode"])
+			t.Fatalf("indexDoc produced no entries for the standard product in %s",
+				doc.Product.Attributes["regionCode"])
 		}
 		for _, e := range entries {
 			if e.kind != pricing.KindSnapshotStorage {
@@ -61,10 +77,10 @@ func TestCatalogPricer_EBSSnapshotStoragePinned(t *testing.T) {
 				}
 				foundGBMo = true
 			case "eu-west-1":
-				if e.price != 0.055 {
-					t.Errorf("eu-west-1 snapshot price = %v, want 0.055", e.price)
+				if e.price != 0.05 {
+					t.Errorf("eu-west-1 snapshot price = %v, want 0.05", e.price)
 				}
-				foundGBMonth = true
+				foundGBMo = true
 			default:
 				t.Fatalf("unexpected region %q in snapshot fixture", e.region)
 			}
@@ -72,9 +88,6 @@ func TestCatalogPricer_EBSSnapshotStoragePinned(t *testing.T) {
 	}
 	if !foundGBMo {
 		t.Fatal("snapshot fixture has no GB-Mo product; the unit pin cannot be asserted")
-	}
-	if !foundGBMonth {
-		t.Fatal("snapshot fixture has no GB-month product; the unit pin cannot be asserted")
 	}
 }
 
@@ -155,15 +168,30 @@ func TestSnapshotStorage_OnlyTheStandardRateIsIndexed(t *testing.T) {
 		indexed = append(indexed, indexDoc(doc)...)
 	}
 
-	if len(indexed) != 1 {
-		for _, e := range indexed {
-			t.Logf("  indexed: kind=%s sku=%s region=%s price=%v", e.kind, e.sku, e.region, e.price)
-		}
-		t.Fatalf("indexed %d snapshot entries, want exactly 1: more than one means the "+
-			"archive, outposts or underbilling rate can overwrite the real one", len(indexed))
+	// Exactly ONE entry per region. More than one means a sibling rate reached
+	// the same key and, being a map write, would decide the price by response
+	// order.
+	byRegion := map[string][]catalogueEntry{}
+	for _, e := range indexed {
+		byRegion[e.region] = append(byRegion[e.region], e)
 	}
-	if got := indexed[0].price; got != 0.05 {
-		t.Errorf("indexed price = %v, want 0.05 (the EBS:SnapshotUsage rate for us-east-1); "+
-			"0.0125 is the archive tier and 0.027 is Outposts", got)
+	if len(byRegion) < 2 {
+		t.Fatalf("recording covers %d region(s); it must cover more than one so the "+
+			"region-prefixed usagetype form is exercised too", len(byRegion))
+	}
+	for region, entries := range byRegion {
+		if len(entries) != 1 {
+			for _, e := range entries {
+				t.Logf("  %s: sku=%s price=%v", e.region, e.sku, e.price)
+			}
+			t.Errorf("%s indexed %d entries, want 1: the archive, Outposts and underbilling "+
+				"rates share this family and unit, and the last one written would win",
+				region, len(entries))
+			continue
+		}
+		if got := entries[0].price; got != 0.05 {
+			t.Errorf("%s price = %v, want 0.05 (EBS:SnapshotUsage); 0.0125 is the archive "+
+				"tier and 0.027 is Outposts", region, got)
+		}
 	}
 }
