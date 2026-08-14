@@ -86,4 +86,14 @@ const (
 	// cannot act on, and the group's own sizing is a separate concern with
 	// its own rules.
 	SkipManagedByMIG SkipCode = "managed_by_mig"
+	// SkipNotTargetAssetType: the node's asset_type is not the specific
+	// image (or snapshot) asset type this rule targets. Several image rules
+	// share graph.KindImage, so every image rule needs this discriminator.
+	SkipNotTargetAssetType SkipCode = "not_target_asset_type"
+	// SkipReferencesUnknown: reference enumeration could not be completed;
+	// the rule refuses to assume a resource is unreferenced.
+	SkipReferencesUnknown SkipCode = "references_unknown"
+	// SkipNotAMISnapshot: the snapshot is not an AMI-created snapshot, so
+	// the orphaned_ami_snapshot rule does not apply.
+	SkipNotAMISnapshot SkipCode = "not_ami_created_snapshot"
 )

@@ -20,12 +20,14 @@ import (
 // ingestion list — the scan filter is derived from the rules, so adding a
 // rule for a new asset type never requires touching this file's filter.
 const (
-	TypeInstance = gcprules.TypeInstance
-	TypeDisk     = gcprules.TypeDisk
-	TypeSnapshot = gcprules.TypeSnapshot
-	TypeAddress  = gcprules.TypeAddress
-	TypeNetwork  = gcprules.TypeNetwork
-	TypeBucket   = gcprules.TypeBucket
+	TypeInstance     = gcprules.TypeInstance
+	TypeDisk         = gcprules.TypeDisk
+	TypeSnapshot     = gcprules.TypeSnapshot
+	TypeAddress      = gcprules.TypeAddress
+	TypeNetwork      = gcprules.TypeNetwork
+	TypeBucket       = gcprules.TypeBucket
+	TypeImage        = gcprules.TypeImage
+	TypeMachineImage = gcprules.TypeMachineImage
 )
 
 // SupportedAssetTypes is the default server-side filter, used only when the
@@ -35,6 +37,7 @@ const (
 // asset type in the scope.
 var SupportedAssetTypes = []string{
 	TypeInstance, TypeDisk, TypeSnapshot, TypeAddress, TypeNetwork, TypeBucket,
+	TypeImage, TypeMachineImage,
 }
 
 // Attr keys written by normalize.go and read by rules. Single source of truth:
@@ -86,6 +89,14 @@ const (
 	AttrCreationTime   = gcprules.AttrCreationTime
 	AttrLastAttachTime = gcprules.AttrLastAttachTime
 	AttrLastDetachTime = gcprules.AttrLastDetachTime
+
+	AttrImageID            = gcprules.AttrImageID
+	AttrMachineImageID     = gcprules.AttrMachineImageID
+	AttrFamily             = gcprules.AttrFamily
+	AttrStorageLocation    = gcprules.AttrStorageLocation
+	AttrReferenceCount     = gcprules.AttrReferenceCount
+	AttrReferenceSources   = gcprules.AttrReferenceSources
+	AttrReferencesComplete = gcprules.AttrReferencesComplete
 )
 
 // Address types.

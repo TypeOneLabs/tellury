@@ -30,11 +30,23 @@ const (
 	AttrVCpuCount     = azurerules.AttrVCpuCount
 	AttrMemoryGiB     = azurerules.AttrMemoryGiB
 	AttrMachineFamily = azurerules.AttrMachineFamily
+
+	AttrGalleryImageID        = azurerules.AttrGalleryImageID
+	AttrGallerySizeBytes      = azurerules.AttrGallerySizeBytes
+	AttrCreationTimestamp     = azurerules.AttrCreationTimestamp
+	AttrProvisioningState     = azurerules.AttrProvisioningState
+	AttrGalleryReplicaRegions = azurerules.AttrGalleryReplicaRegions
+	AttrGalleryReplicaCount   = azurerules.AttrGalleryReplicaCount
+
+	AttrReferenceCount     = azurerules.AttrReferenceCount
+	AttrReferenceSources   = azurerules.AttrReferenceSources
+	AttrReferencesComplete = azurerules.AttrReferencesComplete
 )
 
 // Asset-type tokens (provider's own "azure.<service>.<resource>" spelling).
 const (
-	TypeDisk     = azurerules.TypeDisk
-	TypePublicIP = azurerules.TypePublicIP
-	TypeVM       = azurerules.TypeVM
+	TypeDisk                = azurerules.TypeDisk
+	TypePublicIP            = azurerules.TypePublicIP
+	TypeVM                  = azurerules.TypeVM
+	TypeGalleryImageVersion = azurerules.TypeGalleryImageVersion
 )

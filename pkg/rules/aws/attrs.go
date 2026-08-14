@@ -51,6 +51,36 @@ const (
 	AttrProvisioningModel = "provisioning_model" // derived from lifecycle: "SPOT" | "STANDARD"
 )
 
+// Image attributes written by pkg/cloud/aws/normalize.go (NormalizeImage),
+// named from the EC2 SDK's own types.Image fields plus the backing-snapshot
+// and reference derivations the unused_ami rule prices from.
+const (
+	AttrImageID                = "image_id"                  // types.Image.ImageId
+	AttrImageName              = "image_name"                // types.Image.Name
+	AttrCreationTimestamp      = "creation_timestamp"        // types.Image.CreationDate (RFC3339)
+	AttrRootDeviceType         = "root_device_type"          // types.Image.RootDeviceType
+	AttrBlockDeviceMappings    = "block_device_mappings"     // types.Image.BlockDeviceMappings
+	AttrBackingSnapshotIDs     = "backing_snapshot_ids"      // derived: Ebs.SnapshotId for every EBS mapping
+	AttrBackingSnapshotCount   = "backing_snapshot_count"    // len(backing_snapshot_ids), always written
+	AttrBackingSizeGB          = "backing_size_gb"           // sum of backing snapshot VolumeSize, always written
+	AttrBackingExclusiveSizeGB = "backing_exclusive_size_gb" // sum of snapshots referenced only by this AMI, always written
+	AttrBackingComplete        = "backing_complete"          // false when a backing snapshot is absent from DescribeSnapshots
+	AttrReferenceCount         = "reference_count"           // total AMI references, always written (0 means none)
+	AttrReferenceSources       = "reference_sources"         // distinct reference source labels, always written
+	AttrReferencesComplete     = "references_complete"       // false when any reference API could not be read
+)
+
+// Snapshot attributes written by pkg/cloud/aws/normalize.go
+// (NormalizeSnapshot), named from the EC2 SDK's own types.Snapshot fields.
+const (
+	AttrSnapshotID           = "snapshot_id"             // types.Snapshot.SnapshotId
+	AttrVolumeSizeGB         = "volume_size_gb"          // types.Snapshot.VolumeSize (GiB)
+	AttrDescription          = "description"             // types.Snapshot.Description
+	AttrAMICreated           = "ami_created"             // derived: Description starts with "Created by CreateImage("
+	AttrReferencedByAMICount = "referenced_by_ami_count" // count of current AMI block-device mappings naming this snapshot
+	AttrAMIReferenceComplete = "ami_reference_complete"  // false when DescribeImages could not be read
+)
+
 // Volume states: the ec2types.VolumeState values verbatim. DescribeVolumes
 // returns exactly these strings; the unattached_ebs_volume rule compares
 // against them.
@@ -61,6 +91,19 @@ const (
 	StateDeleting  = "deleting"
 	StateDeleted   = "deleted"
 	StateError     = "error"
+)
+
+// Image and snapshot states. They intentionally do not reuse the volume-state
+// constants above: even where the literal string happens to match, the type
+// is named after the resource it came from so a reader can trace it back to
+// DescribeImages / DescribeSnapshots without a translation table.
+const (
+	ImageStateAvailable    = "available"
+	ImageStatePending      = "pending"
+	ImageStateFailed       = "failed"
+	SnapshotStateCompleted = "completed"
+	SnapshotStatePending   = "pending"
+	SnapshotStateError     = "error"
 )
 
 // Address domains: the ec2types.DomainType values verbatim. Every Elastic IP
@@ -90,4 +133,6 @@ const (
 	TypeVolume   = "aws.ec2.volume"
 	TypeAddress  = "aws.ec2.address"
 	TypeInstance = "aws.ec2.instance"
+	TypeImage    = "aws.ec2.image"
+	TypeSnapshot = "aws.ec2.snapshot"
 )

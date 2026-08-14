@@ -1,0 +1,50 @@
+[
+  {
+    "serviceCode": "AmazonEC2",
+    "product": {
+      "productFamily": "Storage Snapshot",
+      "attributes": {
+        "regionCode": "us-east-1",
+        "storageMedia": "Amazon EBS Snapshots",
+        "usagetype": "USW2-EBS:SnapshotUsage"
+      },
+      "sku": "SNAPSHOT-US-EAST-1"
+    },
+    "terms": {
+      "OnDemand": {
+        "offer-1": {
+          "priceDimensions": {
+            "dim-1": {
+              "unit": "GB-Mo",
+              "pricePerUnit": {"USD": "0.05"}
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "serviceCode": "AmazonEC2",
+    "product": {
+      "productFamily": "Storage Snapshot",
+      "attributes": {
+        "regionCode": "eu-west-1",
+        "storageMedia": "Amazon EBS Snapshots",
+        "usagetype": "EUW1-EBS:SnapshotUsage"
+      },
+      "sku": "SNAPSHOT-EU-WEST-1"
+    },
+    "terms": {
+      "OnDemand": {
+        "offer-1": {
+          "priceDimensions": {
+            "dim-1": {
+              "unit": "GB-month",
+              "pricePerUnit": {"USD": "0.055"}
+            }
+          }
+        }
+      }
+    }
+  }
+]

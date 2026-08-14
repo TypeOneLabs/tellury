@@ -31,6 +31,18 @@ const (
 	// so this is an idle, flat cost: it bills every month the snapshot
 	// exists, regardless of whether anything ever restores from it.
 	KindSnapshotStorage Kind = "snapshot_storage"
+	// KindImageStorage is the flat per-GiB-month charge for storing a custom
+	// image archive. It is priced on archiveSizeBytes — the actual stored
+	// bytes — never on the source disk size.
+	KindImageStorage Kind = "image_storage"
+	// KindMachineImageStorage is the flat per-GiB-month charge for storing a
+	// machine image. It is priced on totalStorageBytes.
+	KindMachineImageStorage Kind = "machine_image_storage"
+	// KindGalleryImageStorage is the Azure Compute Gallery image-version
+	// dimension: replica storage priced per GiB-month. A gallery image
+	// version bills once per replica, so the rule multiplies by the regional
+	// replica count rather than pricing the version's size once.
+	KindGalleryImageStorage Kind = "gallery_image_storage"
 )
 
 // HoursPerMonth / DaysPerMonth are the fixed conventions (Invariant I1).

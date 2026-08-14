@@ -1,0 +1,107 @@
+[
+  {
+    "name": "gallery_image_storage_standard_lrs_westeurope",
+    "url": "https://prices.azure.com/api/retail/prices?$filter=serviceName+eq+%27Storage%27+and+armRegionName+eq+%27westeurope%27+and+skuName+eq+%27Standard+LRS%27+and+type+eq+%27Consumption%27+and+productName+eq+%27Standard+HDD+Managed+Disks%27+and+meterName+eq+%27Standard+LRS+Disk%27+and+isPrimaryMeterRegion+eq+true+and+tierMinimumUnits+eq+0",
+    "body": {
+      "BillingCurrency": "USD",
+      "CustomerEntityId": "Default",
+      "CustomerEntityType": "Retail",
+      "Items": [
+        {
+          "currencyCode": "USD",
+          "tierMinimumUnits": 0.0,
+          "retailPrice": 0.05,
+          "unitPrice": 0.05,
+          "armRegionName": "westeurope",
+          "location": "EU West",
+          "effectiveStartDate": "2020-01-01T00:00:00Z",
+          "meterId": "gallery-standard-lrs-disk-west-europe",
+          "meterName": "Standard LRS Disk",
+          "productId": "DZH318Z0BP0G",
+          "skuId": "DZH318Z0BP0G/0001",
+          "productName": "Standard HDD Managed Disks",
+          "skuName": "Standard LRS",
+          "serviceName": "Storage",
+          "serviceId": "DZH317F1HKN0",
+          "serviceFamily": "Storage",
+          "unitOfMeasure": "1 GiB/Month",
+          "type": "Consumption",
+          "isPrimaryMeterRegion": true,
+          "armSkuName": "Standard_LRS"
+        }
+      ],
+      "NextPageLink": null,
+      "Count": 1
+    }
+  },
+  {
+    "name": "gallery_image_storage_standardssd_lrs_westeurope",
+    "url": "https://prices.azure.com/api/retail/prices?$filter=serviceName+eq+%27Storage%27+and+armRegionName+eq+%27westeurope%27+and+skuName+eq+%27Standard+SSD+LRS%27+and+type+eq+%27Consumption%27+and+productName+eq+%27Standard+SSD+Managed+Disks%27+and+meterName+eq+%27Standard+SSD+LRS+Disk%27+and+isPrimaryMeterRegion+eq+true+and+tierMinimumUnits+eq+0",
+    "body": {
+      "BillingCurrency": "USD",
+      "CustomerEntityId": "Default",
+      "CustomerEntityType": "Retail",
+      "Items": [
+        {
+          "currencyCode": "USD",
+          "tierMinimumUnits": 0.0,
+          "retailPrice": 0.08,
+          "unitPrice": 0.08,
+          "armRegionName": "westeurope",
+          "location": "EU West",
+          "effectiveStartDate": "2020-01-01T00:00:00Z",
+          "meterId": "gallery-standard-ssd-lrs-disk-west-europe",
+          "meterName": "Standard SSD LRS Disk",
+          "productId": "DZH318Z0BP0H",
+          "skuId": "DZH318Z0BP0H/0001",
+          "productName": "Standard SSD Managed Disks",
+          "skuName": "Standard SSD LRS",
+          "serviceName": "Storage",
+          "serviceId": "DZH317F1HKN0",
+          "serviceFamily": "Storage",
+          "unitOfMeasure": "1 GiB/Month",
+          "type": "Consumption",
+          "isPrimaryMeterRegion": true,
+          "armSkuName": "StandardSSD_LRS"
+        }
+      ],
+      "NextPageLink": null,
+      "Count": 1
+    }
+  },
+  {
+    "name": "gallery_image_storage_premium_lrs_westeurope",
+    "url": "https://prices.azure.com/api/retail/prices?$filter=serviceName+eq+%27Storage%27+and+armRegionName+eq+%27westeurope%27+and+skuName+eq+%27Premium+LRS%27+and+type+eq+%27Consumption%27+and+productName+eq+%27Premium+SSD+Managed+Disks%27+and+meterName+eq+%27Premium+LRS+Disk%27+and+isPrimaryMeterRegion+eq+true+and+tierMinimumUnits+eq+0",
+    "body": {
+      "BillingCurrency": "USD",
+      "CustomerEntityId": "Default",
+      "CustomerEntityType": "Retail",
+      "Items": [
+        {
+          "currencyCode": "USD",
+          "tierMinimumUnits": 0.0,
+          "retailPrice": 0.17,
+          "unitPrice": 0.17,
+          "armRegionName": "westeurope",
+          "location": "EU West",
+          "effectiveStartDate": "2020-01-01T00:00:00Z",
+          "meterId": "gallery-premium-lrs-disk-west-europe",
+          "meterName": "Premium LRS Disk",
+          "productId": "DZH318Z0BP0J",
+          "skuId": "DZH318Z0BP0J/0001",
+          "productName": "Premium SSD Managed Disks",
+          "skuName": "Premium LRS",
+          "serviceName": "Storage",
+          "serviceId": "DZH317F1HKN0",
+          "serviceFamily": "Storage",
+          "unitOfMeasure": "1 GiB/Month",
+          "type": "Consumption",
+          "isPrimaryMeterRegion": true,
+          "armSkuName": "Premium_LRS"
+        }
+      ],
+      "NextPageLink": null,
+      "Count": 1
+    }
+  }
+]

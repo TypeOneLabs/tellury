@@ -384,6 +384,12 @@ func wantsAssetType(assetTypeHints []string, assetType string) bool {
 // type are ignored (the query asks only for modelled types, but a fixture may
 // be edited to include more).
 //
+// Gallery image versions are enriched here with references read from the SAME
+// ARG rows: VMs and VMSSs are not modelled as rule targets, but their
+// storageProfile.imageReference.id values are the reference inventory the
+// unused_gallery_image_version rule reads. The ARG row already carries the
+// full properties object, so no per-VM or per-VMSS hydration call is needed.
+//
 // When VM asset types are wanted, the subscription's Resource SKUs are loaded
 // once here (cached in the provider's Sizer) and vcpu_count, memory_gib and
 // machine_family are hydrated onto VM nodes. A failed SKU load is logged, not
@@ -428,10 +434,23 @@ func (p *Provider) addResourceRows(ctx context.Context, g *graph.Graph, edges ma
 		}
 	}
 
+	// Enumerate image references once for this subscription's ARG page before
+	// any image node is normalized. A malformed VM/VMSS reference row makes
+	// references_complete false, and the rule will skip rather than assuming
+	// the image is unreferenced.
+	refs, referencesComplete := collectImageReferences(rows)
+
 	for _, row := range rows {
 		n := NormalizeResource(row)
 		if n == nil {
 			continue
+		}
+
+		if n.AssetType == TypeGalleryImageVersion {
+			refCount, refSources := refs.CountFor(n)
+			n.SetAttr(AttrReferenceCount, refCount)
+			n.SetAttr(AttrReferenceSources, refSources)
+			n.SetAttr(AttrReferencesComplete, referencesComplete)
 		}
 
 		if n.Kind == graph.KindInstance && wantVM && p.sizer != nil {

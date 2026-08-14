@@ -191,5 +191,17 @@
     "archive": {
       "default": 0.024
     }
+  },
+  "image_storage": {
+    "standard": {
+      "default": 0.05,
+      "us-central1": 0.05
+    }
+  },
+  "machine_image_storage": {
+    "standard": {
+      "default": 0.05,
+      "us-central1": 0.05
+    }
   }
 }

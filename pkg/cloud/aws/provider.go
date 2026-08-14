@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
@@ -38,15 +39,33 @@ const DefaultRoleName = "OrganizationAccountAccessRole"
 // ec2API is the subset of the EC2 API this provider calls. It is what lets a
 // fixture (offline replay) stand in for the live SDK client without touching
 // the network: the provider drives DescribeRegions, the DescribeVolumes
-// paginator, DescribeAddresses, the DescribeInstances paginator, and
-// DescribeInstanceTypes through this interface, never through the concrete
-// client.
+// paginator, DescribeAddresses, the DescribeInstances paginator,
+// DescribeInstanceTypes, and the AMI discovery and reference APIs through this
+// interface, never through the concrete client.
 type ec2API interface {
 	DescribeRegions(ctx context.Context, params *ec2.DescribeRegionsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeRegionsOutput, error)
 	DescribeVolumes(ctx context.Context, params *ec2.DescribeVolumesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error)
 	DescribeAddresses(ctx context.Context, params *ec2.DescribeAddressesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeAddressesOutput, error)
 	DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
 	DescribeInstanceTypes(ctx context.Context, params *ec2.DescribeInstanceTypesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstanceTypesOutput, error)
+
+	// AMI discovery and reference enumeration. These are gated on
+	// assetTypeHints so existing volume/address/instance scans do not require
+	// the additional permissions.
+	DescribeImages(ctx context.Context, params *ec2.DescribeImagesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeImagesOutput, error)
+	DescribeSnapshots(ctx context.Context, params *ec2.DescribeSnapshotsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeSnapshotsOutput, error)
+	DescribeLaunchTemplates(ctx context.Context, params *ec2.DescribeLaunchTemplatesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeLaunchTemplatesOutput, error)
+	DescribeLaunchTemplateVersions(ctx context.Context, params *ec2.DescribeLaunchTemplateVersionsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeLaunchTemplateVersionsOutput, error)
+	DescribeFleets(ctx context.Context, params *ec2.DescribeFleetsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeFleetsOutput, error)
+	DescribeSpotFleetRequests(ctx context.Context, params *ec2.DescribeSpotFleetRequestsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeSpotFleetRequestsOutput, error)
+}
+
+// autoScalingAPI is the subset of the Auto Scaling API the AWS image
+// reference pass calls. Launch configurations live in the Auto Scaling API,
+// not EC2; the interface keeps the live SDK and the offline fixture behind
+// the same seam.
+type autoScalingAPI interface {
+	DescribeLaunchConfigurations(ctx context.Context, params *autoscaling.DescribeLaunchConfigurationsInput, optFns ...func(*autoscaling.Options)) (*autoscaling.DescribeLaunchConfigurationsOutput, error)
 }
 
 // stsAPI is the subset of STS this provider calls. It is an interface so
@@ -54,6 +73,19 @@ type ec2API interface {
 type stsAPI interface {
 	AssumeRole(ctx context.Context, params *sts.AssumeRoleInput, optFns ...func(*sts.Options)) (*sts.AssumeRoleOutput, error)
 	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
+}
+
+// imageInventory is the per-region result of the AMI hydration path: the
+// self-owned images, the self-owned snapshots used to derive backing sizes,
+// and the reference set used to decide whether an image is in use.
+type imageInventory struct {
+	images               []ec2types.Image
+	snapshots            []ec2types.Snapshot
+	snapshotByID         map[string]ec2types.Snapshot
+	snapshotRefCounts    map[string]int
+	references           imageReferenceSet
+	snapshotsComplete    bool
+	amiReferenceComplete bool
 }
 
 // AccountStatus records the outcome of attempting to scan one member account.
@@ -331,17 +363,18 @@ func (p *Provider) Ingest(ctx context.Context, sc cloud.Scope, assetTypeHints []
 // behaviour, extracted so both the single-account and organization paths
 // share the same per-account hydration logic.
 func (p *Provider) ingestAccount(ctx context.Context, account string, assetTypeHints []string) (*graph.Graph, error) {
-	return p.ingestAccountWithClient(ctx, account, p.ec2Client, p.discoverer, assetTypeHints)
+	return p.ingestAccountWithClient(ctx, account, p.ec2Client, p.autoScalingClient, p.discoverer, assetTypeHints)
 }
 
-// ingestAccountWithClient ingests a single account using the provided EC2
-// client factory and optional discoverer. The discoverer may be nil for
-// accounts where Resource Explorer is unavailable; in that case the account
-// falls back to DescribeRegions.
+// ingestAccountWithClient ingests a single account using the provided EC2 and
+// Auto Scaling client factories and optional discoverer. The discoverer may be
+// nil for accounts where Resource Explorer is unavailable; in that case the
+// account falls back to DescribeRegions.
 func (p *Provider) ingestAccountWithClient(
 	ctx context.Context,
 	account string,
 	ec2Factory func(region string) ec2API,
+	autoScalingFactory func(region string) autoScalingAPI,
 	discoverer *Discoverer,
 	assetTypeHints []string,
 ) (*graph.Graph, error) {
@@ -362,6 +395,9 @@ func (p *Provider) ingestAccountWithClient(
 
 	addNode := func(n *graph.Node) error { return g.AddNode(n) }
 	emit := func(e graph.Edge) { edges[e] = struct{}{} }
+
+	wantImages := hasAssetTypeHint(assetTypeHints, assetTypeImage)
+	wantSnapshots := hasAssetTypeHint(assetTypeHints, assetTypeSnapshot)
 
 	for _, region := range regions {
 		client := ec2Factory(region)
@@ -392,6 +428,18 @@ func (p *Provider) ingestAccountWithClient(
 			if err := p.sizer.LoadFamilies(ctx, client, families); err != nil {
 				p.log.Warn("aws: could not resolve instance-type families; rightsizing candidates unavailable",
 					"region", region, "err", err)
+			}
+		}
+
+		// AMI discovery and reference enumeration are gated on the asset-type
+		// hints produced from the selected rule set. Existing volume/address/
+		// instance scans pass no image/snapshot hint and make none of these
+		// calls, so they do not require the additional permissions.
+		var imageInv imageInventory
+		if wantImages || wantSnapshots {
+			imageInv, err = p.hydrateImages(ctx, client, autoScalingFactory(region), instances, wantImages)
+			if err != nil {
+				return nil, fmt.Errorf("aws: %s: %s: %w", account, region, err)
 			}
 		}
 
@@ -462,6 +510,40 @@ func (p *Provider) ingestAccountWithClient(
 			}
 			emit(graph.Edge{From: n.ID, To: rn.ID, Kind: graph.EdgeContains})
 		}
+
+		// Phase 3: AMI and snapshot nodes, when their asset types were
+		// requested. They are processed after instances so the reference set
+		// has already seen the DescribeInstances image IDs.
+		if wantImages {
+			for i := range imageInv.images {
+				img := &imageInv.images[i]
+				n := NormalizeImage(img, account, region, imageInv.snapshotByID, imageInv.snapshotRefCounts, imageInv.references, imageInv.snapshotsComplete)
+				if n == nil {
+					continue
+				}
+				if err := addNode(n); err != nil {
+					return nil, err
+				}
+				emit(graph.Edge{From: n.ID, To: rn.ID, Kind: graph.EdgeContains})
+			}
+		}
+		if wantSnapshots {
+			for i := range imageInv.snapshots {
+				snap := &imageInv.snapshots[i]
+				snapshotID := ""
+				if snap.SnapshotId != nil {
+					snapshotID = *snap.SnapshotId
+				}
+				n := NormalizeSnapshot(snap, account, region, imageInv.snapshotRefCounts[snapshotID], imageInv.amiReferenceComplete)
+				if n == nil {
+					continue
+				}
+				if err := addNode(n); err != nil {
+					return nil, err
+				}
+				emit(graph.Edge{From: n.ID, To: rn.ID, Kind: graph.EdgeContains})
+			}
+		}
 	}
 
 	for e := range edges {
@@ -502,7 +584,8 @@ func (p *Provider) ingestOrganization(ctx context.Context, scope cloud.AWSScope,
 	// Phase 2: assume role into each account and ingest. This is where the
 	// cost lives — each account pays roughly the same number of API calls
 	// (DescribeRegions or Resource Explorer discovery, then per-region
-	// DescribeVolumes + DescribeAddresses + DescribeInstances + DescribeInstanceTypes).
+	// DescribeVolumes + DescribeAddresses + DescribeInstances + DescribeInstanceTypes,
+	// plus AMI discovery when the selected rules ask for it).
 	g := graph.New()
 	edges := make(map[graph.Edge]struct{}, 1024)
 
@@ -541,7 +624,7 @@ func (p *Provider) ingestOrganization(ctx context.Context, scope cloud.AWSScope,
 		// The caller's own account needs no assumption: the credentials in hand
 		// already address it.
 		if accountID != "" && accountID == callerAccount {
-			ownGraph, err := p.ingestAccountWithClient(ctx, accountID, p.ec2Client, p.discoverer, assetTypeHints)
+			ownGraph, err := p.ingestAccountWithClient(ctx, accountID, p.ec2Client, p.autoScalingClient, p.discoverer, assetTypeHints)
 			if err != nil {
 				p.log.Warn("aws: scanning the caller's own account failed",
 					"account", accountID, "err", err)
@@ -604,9 +687,12 @@ func (p *Provider) ingestOrganization(ctx context.Context, scope cloud.AWSScope,
 		acctEC2 := func(region string) ec2API {
 			return ec2.NewFromConfig(acctCfg, func(o *ec2.Options) { o.Region = region })
 		}
+		acctASG := func(region string) autoScalingAPI {
+			return autoscaling.NewFromConfig(acctCfg, func(o *autoscaling.Options) { o.Region = region })
+		}
 		acctDiscoverer := NewDiscoverer(acctCfg)
 
-		acctGraph, err := p.ingestAccountWithClient(ctx, accountID, acctEC2, acctDiscoverer, assetTypeHints)
+		acctGraph, err := p.ingestAccountWithClient(ctx, accountID, acctEC2, acctASG, acctDiscoverer, assetTypeHints)
 		if err != nil {
 			p.log.Warn("aws: failed to ingest account, skipping",
 				"account", accountID,
@@ -906,6 +992,7 @@ func (p *Provider) resolveRegionsWithClient(
 var assetTypeToCloudFormation = map[string]string{
 	"aws.ec2.volume":  "AWS::EC2::Volume",
 	"aws.ec2.address": "AWS::EC2::EIP",
+	"aws.ec2.image":   "AWS::EC2::Image",
 }
 
 // assetTypesToCloudFormation converts asset-type hints to CloudFormation
@@ -921,6 +1008,17 @@ func assetTypesToCloudFormation(hints []string) []string {
 		}
 	}
 	return out
+}
+
+// hasAssetTypeHint reports whether hints contains exactly want. Empty hints
+// mean "the existing default set" and never include the gated image calls.
+func hasAssetTypeHint(hints []string, want string) bool {
+	for _, h := range hints {
+		if strings.TrimSpace(h) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // hydrateRegion lists every EBS volume, Elastic IP, instance, and instance
@@ -1008,6 +1106,232 @@ func (p *Provider) hydrateRegion(ctx context.Context, client ec2API) ([]ec2types
 	return volumes, addrOut.Addresses, instances, shapes, nil
 }
 
+// hydrateImages discovers self-owned AMIs and snapshots and enumerates the AMI
+// reference sources needed by the unused_ami rule. DescribeImages is a primary
+// discovery API and is fatal on error. DescribeSnapshots failure is non-fatal:
+// images are still emitted with backing_complete=false so the rule skips them
+// as missing data. Reference API failures set references_complete=false rather
+// than aborting the scan.
+func (p *Provider) hydrateImages(
+	ctx context.Context,
+	client ec2API,
+	asgClient autoScalingAPI,
+	instances []ec2types.Instance,
+	enumerateReferences bool,
+) (imageInventory, error) {
+	inv := imageInventory{
+		snapshotByID:         map[string]ec2types.Snapshot{},
+		snapshotRefCounts:    map[string]int{},
+		references:           newImageReferenceSet(),
+		snapshotsComplete:    true,
+		amiReferenceComplete: true,
+	}
+
+	// Self-owned AMIs only.
+	imgPaginator := ec2.NewDescribeImagesPaginator(client, &ec2.DescribeImagesInput{
+		Owners: []string{"self"},
+	})
+	for imgPaginator.HasMorePages() {
+		page, err := imgPaginator.NextPage(ctx)
+		if err != nil {
+			return inv, fmt.Errorf("DescribeImages: %w", err)
+		}
+		inv.images = append(inv.images, page.Images...)
+	}
+
+	// Count how many current self-owned AMIs reference each backing snapshot.
+	for i := range inv.images {
+		for _, snapshotID := range imageSnapshotIDs(&inv.images[i]) {
+			inv.snapshotRefCounts[snapshotID]++
+		}
+	}
+
+	// Self-owned snapshots: the backing-storage inventory. Failure is
+	// non-fatal because backing_complete=false lets the rule skip honestly.
+	snapPaginator := ec2.NewDescribeSnapshotsPaginator(client, &ec2.DescribeSnapshotsInput{
+		OwnerIds: []string{"self"},
+	})
+	for snapPaginator.HasMorePages() {
+		page, err := snapPaginator.NextPage(ctx)
+		if err != nil {
+			p.log.Warn("aws: DescribeSnapshots failed; AMI backing sizes will be incomplete",
+				"err", err)
+			inv.snapshotsComplete = false
+			inv.snapshots = nil
+			inv.snapshotByID = map[string]ec2types.Snapshot{}
+			break
+		}
+		inv.snapshots = append(inv.snapshots, page.Snapshots...)
+	}
+	for _, snap := range inv.snapshots {
+		if snap.SnapshotId != nil {
+			inv.snapshotByID[*snap.SnapshotId] = snap
+		}
+	}
+
+	if !enumerateReferences {
+		return inv, nil
+	}
+
+	// Running/current instances are already in hand from the core hydration
+	// path. Every instance returned by DescribeInstances counts as a
+	// reference, regardless of state: a stopped instance still needs its AMI
+	// to start again.
+	for i := range instances {
+		inst := &instances[i]
+		if inst.ImageId == nil || *inst.ImageId == "" {
+			continue
+		}
+		source := "instance:" + stringValue(inst.InstanceId)
+		inv.references.add(*inst.ImageId, source)
+	}
+
+	// Launch templates, all versions.
+	if err := p.collectLaunchTemplateReferences(ctx, client, &inv.references); err != nil {
+		p.log.Warn("aws: launch template reference enumeration failed; unused_ami will skip",
+			"err", err)
+		inv.references.complete = false
+	}
+
+	// Launch configurations.
+	if asgClient == nil {
+		inv.references.complete = false
+		p.log.Warn("aws: Auto Scaling client unavailable; launch configuration references could not be enumerated")
+	} else if err := p.collectLaunchConfigurationReferences(ctx, asgClient, &inv.references); err != nil {
+		p.log.Warn("aws: launch configuration reference enumeration failed; unused_ami will skip",
+			"err", err)
+		inv.references.complete = false
+	}
+
+	// EC2 Fleets: inline overrides. Launch-template configs are already
+	// covered by the all-versions launch-template pass.
+	if err := p.collectFleetReferences(ctx, client, &inv.references); err != nil {
+		p.log.Warn("aws: EC2 Fleet reference enumeration failed; unused_ami will skip",
+			"err", err)
+		inv.references.complete = false
+	}
+
+	// Spot Fleet requests: inline launch specifications. Launch-template
+	// configs are covered by the all-versions launch-template pass.
+	if err := p.collectSpotFleetReferences(ctx, client, &inv.references); err != nil {
+		p.log.Warn("aws: Spot Fleet reference enumeration failed; unused_ami will skip",
+			"err", err)
+		inv.references.complete = false
+	}
+
+	return inv, nil
+}
+
+// collectLaunchTemplateReferences adds the ImageId from every version of every
+// launch template.
+func (p *Provider) collectLaunchTemplateReferences(ctx context.Context, client ec2API, refs *imageReferenceSet) error {
+	ltPaginator := ec2.NewDescribeLaunchTemplatesPaginator(client, &ec2.DescribeLaunchTemplatesInput{})
+	for ltPaginator.HasMorePages() {
+		page, err := ltPaginator.NextPage(ctx)
+		if err != nil {
+			return err
+		}
+		for _, lt := range page.LaunchTemplates {
+			if lt.LaunchTemplateId == nil || *lt.LaunchTemplateId == "" {
+				continue
+			}
+			versionPaginator := ec2.NewDescribeLaunchTemplateVersionsPaginator(client, &ec2.DescribeLaunchTemplateVersionsInput{
+				LaunchTemplateId: lt.LaunchTemplateId,
+			})
+			for versionPaginator.HasMorePages() {
+				versionPage, err := versionPaginator.NextPage(ctx)
+				if err != nil {
+					return err
+				}
+				for _, v := range versionPage.LaunchTemplateVersions {
+					if v.LaunchTemplateData == nil || v.LaunchTemplateData.ImageId == nil || *v.LaunchTemplateData.ImageId == "" {
+						continue
+					}
+					version := ""
+					if v.VersionNumber != nil {
+						version = fmt.Sprintf(":%d", *v.VersionNumber)
+					}
+					source := "launch_template:" + *lt.LaunchTemplateId + version
+					refs.add(*v.LaunchTemplateData.ImageId, source)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// collectLaunchConfigurationReferences adds the ImageId from every Auto
+// Scaling launch configuration.
+func (p *Provider) collectLaunchConfigurationReferences(ctx context.Context, client autoScalingAPI, refs *imageReferenceSet) error {
+	paginator := autoscaling.NewDescribeLaunchConfigurationsPaginator(client, &autoscaling.DescribeLaunchConfigurationsInput{})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return err
+		}
+		for _, lc := range page.LaunchConfigurations {
+			if lc.ImageId == nil || *lc.ImageId == "" {
+				continue
+			}
+			name := ""
+			if lc.LaunchConfigurationName != nil {
+				name = *lc.LaunchConfigurationName
+			}
+			refs.add(*lc.ImageId, "launch_configuration:"+name)
+		}
+	}
+	return nil
+}
+
+// collectFleetReferences adds inline ImageId overrides from EC2 Fleets.
+// Launch-template references inside a fleet are intentionally NOT re-added
+// here; they are already covered by the all-versions launch-template pass.
+func (p *Provider) collectFleetReferences(ctx context.Context, client ec2API, refs *imageReferenceSet) error {
+	paginator := ec2.NewDescribeFleetsPaginator(client, &ec2.DescribeFleetsInput{})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return err
+		}
+		for _, fleet := range page.Fleets {
+			for _, cfg := range fleet.LaunchTemplateConfigs {
+				for _, override := range cfg.Overrides {
+					if override.ImageId == nil || *override.ImageId == "" {
+						continue
+					}
+					refs.add(*override.ImageId, "ec2_fleet:"+stringValue(fleet.FleetId))
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// collectSpotFleetReferences adds inline ImageId launch specifications from
+// Spot Fleet requests. Launch-template references inside a Spot Fleet request
+// are already covered by the all-versions launch-template pass.
+func (p *Provider) collectSpotFleetReferences(ctx context.Context, client ec2API, refs *imageReferenceSet) error {
+	paginator := ec2.NewDescribeSpotFleetRequestsPaginator(client, &ec2.DescribeSpotFleetRequestsInput{})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return err
+		}
+		for _, req := range page.SpotFleetRequestConfigs {
+			if req.SpotFleetRequestConfig == nil {
+				continue
+			}
+			for _, spec := range req.SpotFleetRequestConfig.LaunchSpecifications {
+				if spec.ImageId == nil || *spec.ImageId == "" {
+					continue
+				}
+				refs.add(*spec.ImageId, "spot_fleet:"+stringValue(req.SpotFleetRequestId))
+			}
+		}
+	}
+	return nil
+}
+
 // ec2Client returns a region-scoped EC2 API. Offline providers return a
 // fixture-backed fake; live providers return the SDK client.
 func (p *Provider) ec2Client(region string) ec2API {
@@ -1021,6 +1345,23 @@ func (p *Provider) ec2Client(region string) ec2API {
 		region = "us-east-1"
 	}
 	return ec2.NewFromConfig(p.awsCfg, func(o *ec2.Options) { o.Region = region })
+}
+
+// autoScalingClient returns a region-scoped Auto Scaling API. Offline
+// providers return a fixture-backed fake; live providers return the SDK
+// client. The client is only built and called when an image/snapshot asset
+// type hint is present.
+func (p *Provider) autoScalingClient(region string) autoScalingAPI {
+	if p.offline {
+		return &fakeAutoScaling{region: region, f: p.fixture}
+	}
+	if region == "" {
+		region = p.awsCfg.Region
+	}
+	if region == "" {
+		region = "us-east-1"
+	}
+	return autoscaling.NewFromConfig(p.awsCfg, func(o *autoscaling.Options) { o.Region = region })
 }
 
 // canonicaliseRegions normalises each region through the single

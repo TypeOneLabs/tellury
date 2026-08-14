@@ -1,6 +1,7 @@
 package aws
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -13,8 +14,8 @@ import (
 // Normalizers: pure functions that convert one EC2 Describe result into a
 // graph node. They are unit-testable without any client or credentials, and
 // their Attrs keys are the EC2 SDK's own field names (see attrs.go), so a rule
-// reads exactly what DescribeVolumes / DescribeAddresses / DescribeInstances
-// documented.
+// reads exactly what DescribeVolumes / DescribeAddresses / DescribeInstances /
+// DescribeImages / DescribeSnapshots documented.
 
 // Service and asset-type tokens. AWS has no Cloud Asset Inventory, so the
 // asset-type token is the provider's own stable "aws.<service>.<resource>"
@@ -24,6 +25,8 @@ const (
 	assetTypeVolume   = "aws.ec2.volume"
 	assetTypeAddress  = "aws.ec2.address"
 	assetTypeInstance = "aws.ec2.instance"
+	assetTypeImage    = "aws.ec2.image"
+	assetTypeSnapshot = "aws.ec2.snapshot"
 )
 
 // InstanceTypeInfo is the resolved shape of one EC2 instance type, from
@@ -33,6 +36,11 @@ type InstanceTypeInfo struct {
 	VCPU      float64 // VCpuInfo.DefaultVCpus
 	MemoryGiB float64 // MemoryInfo.SizeInMiB / 1024
 }
+
+// amiSnapshotDescriptionPrefix is the AWS-generated description prefix on
+// snapshots created by CreateImage. It is the single discriminator the
+// orphaned_ami_snapshot rule uses.
+const amiSnapshotDescriptionPrefix = "Created by CreateImage("
 
 // locationRegion is the location node's answer to "what place is this" — a
 // thin wrapper over the single pricing.CanonicalRegion canonicaliser, exactly
@@ -354,4 +362,246 @@ func machineFamily(instanceType string) string {
 		return instanceType[:idx]
 	}
 	return instanceType
+}
+
+// imageReferenceSet accumulates the AMI references discovered by the EC2 and
+// Auto Scaling reference passes. It deliberately stores every source label so
+// a node can carry reference_sources, and a count so the rule can decide
+// "referenced" without walking the source list.
+type imageReferenceSet struct {
+	counts   map[string]int
+	sources  map[string]map[string]bool
+	complete bool
+}
+
+// newImageReferenceSet returns an empty reference set whose complete flag is
+// true. A failed reference API must set complete=false explicitly.
+func newImageReferenceSet() imageReferenceSet {
+	return imageReferenceSet{
+		counts:   map[string]int{},
+		sources:  map[string]map[string]bool{},
+		complete: true,
+	}
+}
+
+// add records one reference from source for imageID. Empty image IDs and
+// empty source labels are ignored.
+func (r *imageReferenceSet) add(imageID, source string) {
+	if imageID == "" || source == "" {
+		return
+	}
+	r.counts[imageID]++
+	if r.sources[imageID] == nil {
+		r.sources[imageID] = map[string]bool{}
+	}
+	r.sources[imageID][source] = true
+}
+
+// countFor returns the total reference count for an image.
+func (r imageReferenceSet) countFor(imageID string) int {
+	return r.counts[imageID]
+}
+
+// sourcesFor returns the distinct, sorted source labels for an image.
+func (r imageReferenceSet) sourcesFor(imageID string) []string {
+	set := r.sources[imageID]
+	out := make([]string, 0, len(set))
+	for s := range set {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// imageSnapshotIDs extracts the EBS snapshot IDs from an image's block-device
+// mappings, preserving SDK order. Instance-store mappings (no Ebs block) are
+// ignored, exactly as the pricing design requires: only backing EBS snapshots
+// bill.
+func imageSnapshotIDs(img *ec2types.Image) []string {
+	if img == nil {
+		return nil
+	}
+	out := make([]string, 0, len(img.BlockDeviceMappings))
+	for _, m := range img.BlockDeviceMappings {
+		if m.Ebs == nil || m.Ebs.SnapshotId == nil || *m.Ebs.SnapshotId == "" {
+			continue
+		}
+		out = append(out, *m.Ebs.SnapshotId)
+	}
+	return out
+}
+
+// NormalizeImage converts one DescribeImages result into a graph node. An
+// image without an ImageId (which the real API never returns) is dropped.
+//
+// snapshots is the self-owned DescribeSnapshots inventory keyed by SnapshotId;
+// snapshotRefCounts is the number of current self-owned AMI block-device
+// mappings naming each snapshot. snapshotsComplete reports whether that
+// inventory was successfully read; when false, backing_complete is false for
+// every image. refs is the reference set built from the EC2 and Auto Scaling
+// reference passes.
+//
+// Attrs, named from the EC2 SDK's own types.Image fields (see attrs.go):
+//
+//	image_id                    — types.Image.ImageId
+//	image_name                  — types.Image.Name
+//	creation_timestamp          — types.Image.CreationDate (RFC3339)
+//	state                       — types.Image.State
+//	root_device_type            — types.Image.RootDeviceType
+//	block_device_mappings       — types.Image.BlockDeviceMappings
+//	backing_snapshot_ids        — Ebs.SnapshotId for every EBS mapping
+//	backing_snapshot_count      — len(backing_snapshot_ids), always written
+//	backing_size_gb             — sum of backing snapshot VolumeSize, always written
+//	backing_exclusive_size_gb   — sum of snapshots referenced only by this AMI, always written
+//	backing_complete            — false when a backing snapshot is absent from the snapshot inventory
+//	reference_count             — total AMI references, always written (0 means none)
+//	reference_sources           — distinct reference source labels, always written
+//	references_complete         — false when any reference API could not be read
+func NormalizeImage(img *ec2types.Image, account, region string, snapshots map[string]ec2types.Snapshot, snapshotRefCounts map[string]int, refs imageReferenceSet, snapshotsComplete bool) *graph.Node {
+	if img == nil || img.ImageId == nil || *img.ImageId == "" {
+		return nil
+	}
+	id := *img.ImageId
+	n := &graph.Node{
+		ID:        graph.Ref("accounts/" + account + "/regions/" + region + "/images/" + id),
+		Kind:      graph.KindImage,
+		Name:      id,
+		Provider:  "aws",
+		Service:   serviceEC2,
+		AssetType: assetTypeImage,
+		Project:   account,
+		Location:  region,
+		Attrs:     map[string]any{},
+	}
+
+	n.SetAttr(AttrImageID, id)
+	n.SetAttr(AttrImageName, stringValue(img.Name))
+	if img.CreationDate != nil && *img.CreationDate != "" {
+		n.SetAttr(AttrCreationTimestamp, *img.CreationDate)
+	} else {
+		n.SetAttr(AttrCreationTimestamp, "")
+	}
+	n.SetAttr(AttrState, string(img.State))
+	n.SetAttr(AttrRootDeviceType, string(img.RootDeviceType))
+
+	ids := imageSnapshotIDs(img)
+	backingComplete := snapshotsComplete
+	var backingSizeGB float64
+	var exclusiveSizeGB float64
+	for _, snapshotID := range ids {
+		snap, ok := snapshots[snapshotID]
+		if !ok {
+			backingComplete = false
+			continue
+		}
+		if snap.VolumeSize != nil {
+			size := float64(*snap.VolumeSize)
+			backingSizeGB += size
+			if snapshotRefCounts[snapshotID] == 1 {
+				exclusiveSizeGB += size
+			}
+		}
+	}
+
+	// The block-device mapping list and every countable attribute are written
+	// unconditionally, exactly like the other normalizers: a missing key means
+	// an unparsed payload, never "zero" or "unknown".
+	n.SetAttr(AttrBlockDeviceMappings, blockDeviceMappingsOf(img.BlockDeviceMappings))
+	n.SetAttr(AttrBackingSnapshotIDs, ids)
+	n.SetAttr(AttrBackingSnapshotCount, float64(len(ids)))
+	n.SetAttr(AttrBackingSizeGB, backingSizeGB)
+	n.SetAttr(AttrBackingExclusiveSizeGB, exclusiveSizeGB)
+	n.SetAttr(AttrBackingComplete, backingComplete)
+	n.SetAttr(AttrReferenceCount, float64(refs.countFor(id)))
+	n.SetAttr(AttrReferenceSources, refs.sourcesFor(id))
+	n.SetAttr(AttrReferencesComplete, refs.complete)
+
+	return n
+}
+
+// stringValue dereferences a *string, returning "" for nil.
+func stringValue(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// blockDeviceMappingsOf renders an image's BlockDeviceMappings as rule-facing
+// records keyed by the SDK's own field names. Written unconditionally (empty
+// when the image has none).
+func blockDeviceMappingsOf(mappings []ec2types.BlockDeviceMapping) []map[string]any {
+	out := make([]map[string]any, 0, len(mappings))
+	for _, m := range mappings {
+		rec := map[string]any{}
+		if m.DeviceName != nil {
+			rec["device_name"] = *m.DeviceName
+		}
+		if m.Ebs != nil {
+			if m.Ebs.SnapshotId != nil && *m.Ebs.SnapshotId != "" {
+				rec["snapshot_id"] = *m.Ebs.SnapshotId
+			}
+			if m.Ebs.VolumeSize != nil {
+				rec["volume_size"] = float64(*m.Ebs.VolumeSize)
+			}
+			rec["volume_type"] = string(m.Ebs.VolumeType)
+			if m.Ebs.DeleteOnTermination != nil {
+				rec["delete_on_termination"] = *m.Ebs.DeleteOnTermination
+			}
+			if m.Ebs.Iops != nil {
+				rec["iops"] = float64(*m.Ebs.Iops)
+			}
+			if m.Ebs.Throughput != nil {
+				rec["throughput"] = float64(*m.Ebs.Throughput)
+			}
+			if m.Ebs.Encrypted != nil {
+				rec["encrypted"] = *m.Ebs.Encrypted
+			}
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
+// NormalizeSnapshot converts one DescribeSnapshots result into a graph node.
+// A snapshot without a SnapshotId (which the real API never returns) is
+// dropped.
+//
+// Attrs, named from the EC2 SDK's own types.Snapshot fields (see attrs.go):
+// snapshot_id (SnapshotId), volume_size_gb (VolumeSize, in GiB),
+// creation_timestamp (StartTime, RFC3339), state (State), description
+// (Description), ami_created (derived from the AWS CreateImage description
+// prefix), referenced_by_ami_count (always written), and
+// ami_reference_complete (false when DescribeImages could not be read).
+func NormalizeSnapshot(s *ec2types.Snapshot, account, region string, referencedByAMICount int, amiReferenceComplete bool) *graph.Node {
+	if s == nil || s.SnapshotId == nil || *s.SnapshotId == "" {
+		return nil
+	}
+	id := *s.SnapshotId
+	n := &graph.Node{
+		ID:        graph.Ref("accounts/" + account + "/regions/" + region + "/snapshots/" + id),
+		Kind:      graph.KindSnapshot,
+		Name:      id,
+		Provider:  "aws",
+		Service:   serviceEC2,
+		AssetType: assetTypeSnapshot,
+		Project:   account,
+		Location:  region,
+		Attrs:     map[string]any{},
+	}
+	n.SetAttr(AttrSnapshotID, id)
+	if s.VolumeSize != nil {
+		n.SetAttr(AttrVolumeSizeGB, float64(*s.VolumeSize))
+	}
+	if s.StartTime != nil {
+		n.SetAttr(AttrCreationTimestamp, s.StartTime.UTC().Format(time.RFC3339))
+	}
+	n.SetAttr(AttrState, string(s.State))
+	n.SetAttr(AttrDescription, stringValue(s.Description))
+	n.SetAttr(AttrAMICreated, strings.HasPrefix(stringValue(s.Description), amiSnapshotDescriptionPrefix))
+	// Countable attributes are always written so absence is distinguishable
+	// from zero, exactly as the other normalizers do.
+	n.SetAttr(AttrReferencedByAMICount, float64(referencedByAMICount))
+	n.SetAttr(AttrAMIReferenceComplete, amiReferenceComplete)
+	return n
 }

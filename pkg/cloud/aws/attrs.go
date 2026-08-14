@@ -41,6 +41,31 @@ const (
 	AttrMemoryGiB         = awsrules.AttrMemoryGiB         // types.InstanceTypeInfo.MemoryInfo.SizeInMiB / 1024
 	AttrMachineFamily     = awsrules.AttrMachineFamily     // derived from instance_type (prefix before ".")
 	AttrProvisioningModel = awsrules.AttrProvisioningModel // derived from lifecycle: "SPOT" | "STANDARD"
+
+	// Image attributes (EC2 DescribeImages / types.Image plus derived
+	// backing-snapshot and reference counts).
+	AttrImageID                = awsrules.AttrImageID
+	AttrImageName              = awsrules.AttrImageName
+	AttrCreationTimestamp      = awsrules.AttrCreationTimestamp
+	AttrRootDeviceType         = awsrules.AttrRootDeviceType
+	AttrBlockDeviceMappings    = awsrules.AttrBlockDeviceMappings
+	AttrBackingSnapshotIDs     = awsrules.AttrBackingSnapshotIDs
+	AttrBackingSnapshotCount   = awsrules.AttrBackingSnapshotCount
+	AttrBackingSizeGB          = awsrules.AttrBackingSizeGB
+	AttrBackingExclusiveSizeGB = awsrules.AttrBackingExclusiveSizeGB
+	AttrBackingComplete        = awsrules.AttrBackingComplete
+	AttrReferenceCount         = awsrules.AttrReferenceCount
+	AttrReferenceSources       = awsrules.AttrReferenceSources
+	AttrReferencesComplete     = awsrules.AttrReferencesComplete
+
+	// Snapshot attributes (EC2 DescribeSnapshots / types.Snapshot plus
+	// derived AMI-reference counts).
+	AttrSnapshotID           = awsrules.AttrSnapshotID
+	AttrVolumeSizeGB         = awsrules.AttrVolumeSizeGB
+	AttrDescription          = awsrules.AttrDescription
+	AttrAMICreated           = awsrules.AttrAMICreated
+	AttrReferencedByAMICount = awsrules.AttrReferencedByAMICount
+	AttrAMIReferenceComplete = awsrules.AttrAMIReferenceComplete
 )
 
 // Volume states (ec2types.VolumeState values verbatim) and address domains
@@ -57,6 +82,16 @@ const (
 	DomainStandard = awsrules.DomainStandard
 )
 
+// Image and snapshot states, re-exported for the rules.
+const (
+	ImageStateAvailable    = awsrules.ImageStateAvailable
+	ImageStatePending      = awsrules.ImageStatePending
+	ImageStateFailed       = awsrules.ImageStateFailed
+	SnapshotStateCompleted = awsrules.SnapshotStateCompleted
+	SnapshotStatePending   = awsrules.SnapshotStatePending
+	SnapshotStateError     = awsrules.SnapshotStateError
+)
+
 // Instance lifecycle and provisioning model values, re-exported for the rules.
 const (
 	LifecycleSpot        = awsrules.LifecycleSpot
@@ -70,4 +105,6 @@ const (
 	TypeVolume   = awsrules.TypeVolume
 	TypeAddress  = awsrules.TypeAddress
 	TypeInstance = awsrules.TypeInstance
+	TypeImage    = awsrules.TypeImage
+	TypeSnapshot = awsrules.TypeSnapshot
 )

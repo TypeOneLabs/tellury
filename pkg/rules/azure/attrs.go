@@ -43,13 +43,32 @@ const (
 	AttrVCpuCount     = "vcpu_count"     // Resource SKU vCPUs capability
 	AttrMemoryGiB     = "memory_gib"     // Resource SKU MemoryGB capability
 	AttrMachineFamily = "machine_family" // Resource SKU family field, e.g. standardDasv5Family
+
+	// Compute Gallery image-version attributes. size_bytes is the sum of the
+	// OS disk image sizeInBytes and every data disk image sizeInBytes; it is
+	// written only when parsed. replica_regions and replica_count are written
+	// only when publishingProfile.targetRegions parsed non-empty.
+	AttrGalleryImageID        = "gallery_image_id"   // parent gallery image definition ARM ID, derived from row.id
+	AttrGallerySizeBytes      = "size_bytes"         // properties.storageProfile.osDiskImage.sizeInBytes + dataDiskImages[].sizeInBytes
+	AttrCreationTimestamp     = "creation_timestamp" // properties.publishingProfile.publishedDate (RFC3339)
+	AttrProvisioningState     = "provisioning_state" // properties.provisioningState
+	AttrGalleryReplicaRegions = "replica_regions"    // []map{region, replica_count, storage_account_type}
+	AttrGalleryReplicaCount   = "replica_count"      // sum of regionalReplicaCount across targetRegions
+
+	// Reference attributes shared by every image rule. reference_count and
+	// references_complete are written unconditionally for gallery image
+	// versions so absence means "payload not parsed", never "known zero".
+	AttrReferenceCount     = "reference_count"
+	AttrReferenceSources   = "reference_sources"
+	AttrReferencesComplete = "references_complete"
 )
 
 // Asset-type tokens the Azure rules declare in Meta.RequiredAssetTypes: the
 // provider's own stable "azure.<service>.<resource>" spelling, mapped by the
 // provider to Azure Resource Graph types.
 const (
-	TypeDisk     = "azure.compute.disk"
-	TypePublicIP = "azure.network.publicipaddress"
-	TypeVM       = "azure.compute.vm"
+	TypeDisk                = "azure.compute.disk"
+	TypePublicIP            = "azure.network.publicipaddress"
+	TypeVM                  = "azure.compute.vm"
+	TypeGalleryImageVersion = "azure.compute.galleryimageversion"
 )

@@ -23,6 +23,7 @@ import (
 // Provider is the GCP implementation of cloud.Provider.
 type Provider struct {
 	lister       AssetLister
+	templates    InstanceTemplateLister
 	metrics      metrics.Provider
 	metricsClose func() error
 	pricer       pricing.Pricer
@@ -58,6 +59,13 @@ type Option func(*Provider)
 
 // WithLister overrides the asset source (used by tests and --fixture).
 func WithLister(l AssetLister) Option { return func(p *Provider) { p.lister = l } }
+
+// WithInstanceTemplateLister overrides the instance-template reference source
+// (used by tests and --fixture). Live scans construct a Compute Engine client
+// lazily during Ingest only when an image rule asked for TypeImage.
+func WithInstanceTemplateLister(l InstanceTemplateLister) Option {
+	return func(p *Provider) { p.templates = l }
+}
 
 // WithMetricsProvider overrides the enrichment source.
 func WithMetricsProvider(m metrics.Provider) Option { return func(p *Provider) { p.metrics = m } }
@@ -239,6 +247,7 @@ func (p *Provider) Ingest(ctx context.Context, sc cloud.Scope, assetTypeHints []
 		metricsgcp.ResourceGCEInstance: {},
 		metricsgcp.ResourceGCSBucket:   {},
 	}
+	imageNodesByProject := map[string][]*graph.Node{}
 	seen, kept := 0, 0
 
 	// Container nodes are one per distinct project/folder/organization token,
@@ -276,6 +285,9 @@ func (p *Provider) Ingest(ctx context.Context, sc cloud.Scope, assetTypeHints []
 			}
 			kept++
 			indexJoinKeys(joins, n)
+			if n.AssetType == TypeImage {
+				imageNodesByProject[n.Project] = append(imageNodesByProject[n.Project], n)
+			}
 		}
 		// Build the hierarchy container nodes and edges for this asset.
 		// buildHierarchy internally skips the whole pass when Normalize
@@ -287,6 +299,13 @@ func (p *Provider) Ingest(ctx context.Context, sc cloud.Scope, assetTypeHints []
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// Instance-template reference pass. This is deliberately run only when the
+	// scan asked for custom images; existing scans that do not include
+	// TypeImage build no Compute Engine client and need no new permission.
+	if containsStr(types, TypeImage) {
+		p.enrichImageReferences(ctx, imageNodesByProject)
 	}
 
 	for e := range edges {

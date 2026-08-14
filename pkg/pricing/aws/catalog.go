@@ -34,8 +34,11 @@
 //     The live API now surfaces this charge under serviceCode AmazonVPC with
 //     NO productFamily, matched by usagetype suffix. The indexer maps it to
 //     the canonical "AdditionalAddress" token the rule queries.
+//   - The EBS snapshot storage SKU is "standard", from the "Storage Snapshot"
+//     product family, priced per GB-month. The unused_ami rule queries exactly
+//     that token.
 //
-// Both tokens are pinned by pkg/pricing/aws/catalog_test.go against a
+// The tokens are pinned by pkg/pricing/aws/catalog_test.go against a
 // recorded GetProducts response, so a rename by AWS fails the test before it
 // can silently degrade every lookup to the embedded table.
 //
@@ -321,8 +324,9 @@ func (c *CatalogPricer) liveUnitPrice(kind pricing.Kind, sku, region string) (fl
 // (a generic kind->SKU->region->price table) instead of calling the API.
 //
 // It fetches across two service codes:
-//   - AmazonEC2: EBS Storage (capacity), System Operation (IOPS), and
-//     Provisioned Throughput, each filtered by productFamily.
+//   - AmazonEC2: EBS Storage (capacity), System Operation (IOPS),
+//     Provisioned Throughput, and Storage Snapshot, each filtered by
+//     productFamily.
 //   - AmazonVPC: unfiltered (the address product has NO productFamily), with
 //     usagetype-based matching inside indexDoc.
 //
@@ -454,18 +458,19 @@ func parseInstancePriceSKU(sku string) (instanceType, operatingSystem string) {
 //   - AmazonEC2 "Storage"        → disk capacity (GB-Mo / GB-month)
 //   - AmazonEC2 "System Operation" → disk IOPS (IOPS-Mo)
 //   - AmazonEC2 "Provisioned Throughput" → disk throughput (GiBps-mo)
+//   - AmazonEC2 "Storage Snapshot" → EBS snapshot storage (GB-Mo / GB-month)
 //   - AmazonVPC nil              → static IP (no productFamily; matched by
 //     usagetype suffix inside indexDoc)
 //
 // All were read from a real GetProducts response, not guessed — the recorded
-// fixture in testdata/getproducts-recorded.json contains all four.
+// fixtures in testdata contain the families they pin.
 //
 // "Compute Instance" is deliberately absent from this map. It is the largest
 // product family in the AWS price list and adding it here would make every
 // scan's catalogue load unusably slow. Instance pricing is handled by the
 // separate, lazy InstancePrice method instead.
 var priceServiceFamilies = map[string][]string{
-	"AmazonEC2": {"Storage", "System Operation", "Provisioned Throughput"},
+	"AmazonEC2": {"Storage", "System Operation", "Provisioned Throughput", "Storage Snapshot"},
 	"AmazonVPC": nil,
 }
 
@@ -871,6 +876,10 @@ func parsePriceListDoc(raw string) (*priceListDoc, error) {
 // GiBps-month ($40.96/GiBps-mo); tellury works in MiB/s, so the price is
 // divided by 1024 (40.96/1024 = 0.04). Indexed under KindDiskThroughput.
 //
+// EBS snapshot storage: a product with productFamily "Storage Snapshot" and a
+// GB-month/GB-Mo price dimension. The SKU token is the canonical "standard"
+// token the unused_ami rule queries.
+//
 // Static IP: a product with serviceCode "AmazonVPC", NO productFamily, and a
 // usagetype ending in "PublicIPv4:InUseAddress". The SKU token is the
 // canonical "AdditionalAddress" string the unassociated_eip rule queries.
@@ -965,6 +974,20 @@ func indexDoc(doc *priceListDoc) []catalogueEntry {
 				sku:    apiName,
 				region: region,
 				price:  miBpsPrice,
+			})
+		}
+		return out
+	case "Storage Snapshot":
+		var out []catalogueEntry
+		for _, dim := range priceDimensions(doc) {
+			if dim.unit != "GB-Mo" && dim.unit != "GB-month" {
+				continue
+			}
+			out = append(out, catalogueEntry{
+				kind:   pricing.KindSnapshotStorage,
+				sku:    "standard",
+				region: region,
+				price:  dim.price,
 			})
 		}
 		return out

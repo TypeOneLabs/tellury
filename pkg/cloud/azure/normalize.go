@@ -13,9 +13,11 @@ import (
 // the asset-type token is tellury's own stable "azure.<service>.<resource>"
 // spelling, matching the rule registry.
 const (
-	argTypeDisk     = "microsoft.compute/disks"
-	argTypePublicIP = "microsoft.network/publicipaddresses"
-	argTypeVM       = "microsoft.compute/virtualmachines"
+	argTypeDisk                = "microsoft.compute/disks"
+	argTypePublicIP            = "microsoft.network/publicipaddresses"
+	argTypeVM                  = "microsoft.compute/virtualmachines"
+	argTypeVMSS                = "microsoft.compute/virtualmachinescalesets"
+	argTypeGalleryImageVersion = "microsoft.compute/galleries/images/versions"
 
 	serviceCompute = "microsoft.compute"
 	serviceNetwork = "microsoft.network"
@@ -32,6 +34,8 @@ func NormalizeResource(row map[string]any) *graph.Node {
 		return NormalizePublicIP(row)
 	case argTypeVM:
 		return NormalizeVM(row)
+	case argTypeGalleryImageVersion:
+		return NormalizeGalleryImageVersion(row)
 	default:
 		return nil
 	}
@@ -258,6 +262,141 @@ func NormalizeVM(row map[string]any) *graph.Node {
 	return n
 }
 
+// NormalizeGalleryImageVersion converts one
+// Microsoft.Compute/galleries/images/versions Resource Graph row into an image
+// node. A row without an ARM resource `id` is dropped.
+//
+// No hydration call follows this normalizer: ARG returns the image version's
+// `properties` object directly, including publishingProfile.publishedDate,
+// publishingProfile.targetRegions and storageProfile. The reference pass then
+// reads the VM and VMSS rows from the SAME ARG page and stamps reference_count,
+// reference_sources and references_complete on every gallery image node.
+//
+// Attrs:
+//
+//	resource_id          — row.id (ARM version ID; also node ID)
+//	gallery_image_id     — parent gallery image definition ARM ID, derived by
+//	                       dropping the trailing /versions/<version>
+//	resource_group       — row.resourceGroup
+//	subscription_id      — row.subscriptionId
+//	creation_timestamp   — row.properties.publishingProfile.publishedDate
+//	provisioning_state   — row.properties.provisioningState
+//	size_bytes           — osDiskImage.sizeInBytes + sum(dataDiskImages[].sizeInBytes)
+//	replica_regions      — []map{region, replica_count, storage_account_type}
+//	replica_count        — sum of regionalReplicaCount across targetRegions
+func NormalizeGalleryImageVersion(row map[string]any) *graph.Node {
+	id := stringOf(row["id"])
+	if id == "" {
+		return nil
+	}
+
+	subscriptionID := stringOf(row["subscriptionId"])
+	if subscriptionID == "" {
+		subscriptionID = subscriptionFromID(id)
+	}
+	location := locationRegion(stringOf(row["location"]))
+
+	n := &graph.Node{
+		ID:        graph.Ref(id),
+		Kind:      graph.KindImage,
+		Name:      resourceName(row, id),
+		Provider:  "azure",
+		Service:   serviceCompute,
+		AssetType: TypeGalleryImageVersion,
+		Project:   subscriptionID,
+		Location:  location,
+		Labels:    labelsOf(row["tags"]),
+		Attrs:     map[string]any{},
+	}
+
+	n.SetAttr(AttrResourceID, id)
+	n.SetAttr(AttrGalleryImageID, galleryImageDefinitionID(id))
+	n.SetAttr(AttrResourceGroup, stringOf(row["resourceGroup"]))
+	n.SetAttr(AttrSubscriptionID, subscriptionID)
+
+	properties := mapOf(row["properties"])
+	n.SetAttr(AttrProvisioningState, stringOf(properties["provisioningState"]))
+
+	publishingProfile := mapOf(properties["publishingProfile"])
+	if published := stringOf(publishingProfile["publishedDate"]); published != "" {
+		n.SetAttr(AttrCreationTimestamp, published)
+	}
+
+	storageProfile := mapOf(properties["storageProfile"])
+	osDiskImage := mapOf(storageProfile["osDiskImage"])
+	if osSize, ok := numOf(osDiskImage["sizeInBytes"]); ok && osSize > 0 {
+		sizeBytes := osSize
+		for _, dataDisk := range mapsOf(storageProfile["dataDiskImages"]) {
+			if diskSize, ok := numOf(dataDisk["sizeInBytes"]); ok && diskSize > 0 {
+				sizeBytes += diskSize
+			}
+		}
+		n.SetAttr(AttrGallerySizeBytes, sizeBytes)
+	}
+
+	replicaRegions, totalReplicas := replicaRegionsFromTargets(mapsOf(publishingProfile["targetRegions"]))
+	if len(replicaRegions) > 0 {
+		n.SetAttr(AttrGalleryReplicaRegions, replicaRegions)
+		n.SetAttr(AttrGalleryReplicaCount, totalReplicas)
+	}
+
+	return n
+}
+
+// galleryImageDefinitionID derives the parent gallery image definition ARM ID
+// from a gallery image version ARM ID:
+//
+//	/subscriptions/s/resourceGroups/r/providers/Microsoft.Compute/galleries/g/images/i/versions/1.0.0
+//	-> /subscriptions/s/resourceGroups/r/providers/Microsoft.Compute/galleries/g/images/i
+func galleryImageDefinitionID(versionID string) string {
+	versionID = strings.TrimSuffix(versionID, "/")
+	parts := strings.Split(versionID, "/")
+	if len(parts) >= 2 && strings.EqualFold(parts[len(parts)-2], "versions") {
+		return strings.Join(parts[:len(parts)-2], "/")
+	}
+	return versionID
+}
+
+// replicaRegionsFromTargets converts an ARG publishingProfile.targetRegions
+// value into the normalizer's replica_regions contract:
+//
+//	region                = locationRegion(targetRegion.name)
+//	replica_count         = targetRegion.regionalReplicaCount, default 1
+//	storage_account_type  = targetRegion.storageAccountType, default Standard_LRS
+//
+// It returns the list and the total replica count. An absent or empty
+// targetRegions list returns an empty list and zero, so replica_regions stays
+// absent and the rule skips SkipMissingAttr rather than pricing a zero-replica
+// image as free.
+func replicaRegionsFromTargets(targetRegions []map[string]any) ([]map[string]any, float64) {
+	if len(targetRegions) == 0 {
+		return nil, 0
+	}
+	out := make([]map[string]any, 0, len(targetRegions))
+	var total float64
+	for _, target := range targetRegions {
+		region := locationRegion(stringOf(target["name"]))
+		if region == "" {
+			continue
+		}
+		replicaCount := 1.0
+		if v, ok := numOf(target["regionalReplicaCount"]); ok && v > 0 {
+			replicaCount = v
+		}
+		storageAccountType := stringOf(target["storageAccountType"])
+		if storageAccountType == "" {
+			storageAccountType = "Standard_LRS"
+		}
+		out = append(out, map[string]any{
+			"region":               region,
+			"replica_count":        replicaCount,
+			"storage_account_type": storageAccountType,
+		})
+		total += replicaCount
+	}
+	return out, total
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Row field helpers. Resource Graph returns JSON decoded into any; every
 // normalizer reads through these so a malformed field degrades to absent
@@ -293,6 +432,26 @@ func numOf(v any) (float64, bool) {
 func mapOf(v any) map[string]any {
 	m, _ := v.(map[string]any)
 	return m
+}
+
+// mapsOf accepts the two JSON shapes ARG can produce for an array of objects:
+// []map[string]any (fixtures) and []any of map[string]any (some live decoder
+// paths). Any other shape returns nil so callers treat it as absent.
+func mapsOf(v any) []map[string]any {
+	switch t := v.(type) {
+	case []map[string]any:
+		return t
+	case []any:
+		out := make([]map[string]any, 0, len(t))
+		for _, raw := range t {
+			if m, ok := raw.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func resourceName(row map[string]any, id string) string {

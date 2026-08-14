@@ -346,6 +346,9 @@ func lookupFilters(kind pricing.Kind, sku, region string) ([]priceFilter, error)
 		}
 		return managedDiskFilters(sku, region, productName, meterName), nil
 
+	case pricing.KindGalleryImageStorage:
+		return galleryImageStorageFilters(sku, region)
+
 	case pricing.KindStaticIP:
 		// The only billable public-IP SKU the Azure rule queries is the
 		// Standard static IPv4 address. The Retail Prices API row is
@@ -591,9 +594,10 @@ func selectPrice(rows []retailItem, filters []priceFilter, kind pricing.Kind) (r
 // normalizeUnitPrice converts a Retail Prices row's unitOfMeasure into the
 // canonical unit of the requested pricing.Kind:
 //
-//	KindStaticIP    -> per hour
-//	KindManagedDisk -> per disk-month
-//	KindVMInstance  -> per hour (the Azure VM rule multiplies by HoursPerMonth)
+//	KindStaticIP             -> per hour
+//	KindManagedDisk          -> per disk-month
+//	KindVMInstance           -> per hour (the Azure VM rule multiplies by HoursPerMonth)
+//	KindGalleryImageStorage  -> per GiB-month
 //
 // Unknown or unhandled units return false; tellury never guesses a conversion
 // factor.
@@ -627,6 +631,8 @@ func normalizeUnitPrice(kind pricing.Kind, unitOfMeasure string, unitPrice float
 		default:
 			return 0, false
 		}
+	case pricing.KindGalleryImageStorage:
+		return normalizeGalleryImageUnitPrice(unit, unitPrice)
 	default:
 		return 0, false
 	}

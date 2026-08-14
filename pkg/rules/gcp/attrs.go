@@ -55,6 +55,17 @@ const (
 	AttrCreationTime   = "creation_timestamp"
 	AttrLastAttachTime = "last_attach_time"
 	AttrLastDetachTime = "last_detach_time"
+
+	// Custom image and machine image attributes. The sizes follow the same
+	// stored-bytes contract as snapshots: storage_bytes is the billable size
+	// and source_disk_size_gb (custom images only) is evidence, never a price.
+	AttrImageID            = "image_id"
+	AttrMachineImageID     = "machine_image_id"
+	AttrFamily             = "family"
+	AttrStorageLocation    = "storage_location"
+	AttrReferenceCount     = "reference_count"
+	AttrReferenceSources   = "reference_sources"
+	AttrReferencesComplete = "references_complete"
 )
 
 // Provisioning models.
@@ -74,12 +85,19 @@ const (
 	AddressTypeInternal = "INTERNAL"
 )
 
+// StatusReady is the one billable status for custom images and machine
+// images: READY. Other statuses are transitional or failed and accrue no
+// stable storage charge worth reporting.
+const StatusReady = "READY"
+
 // CAI asset types required by the GCP rules.
 const (
-	TypeInstance = "compute.googleapis.com/Instance"
-	TypeDisk     = "compute.googleapis.com/Disk"
-	TypeSnapshot = "compute.googleapis.com/Snapshot"
-	TypeAddress  = "compute.googleapis.com/Address"
-	TypeNetwork  = "compute.googleapis.com/Network"
-	TypeBucket   = "storage.googleapis.com/Bucket"
+	TypeInstance     = "compute.googleapis.com/Instance"
+	TypeDisk         = "compute.googleapis.com/Disk"
+	TypeSnapshot     = "compute.googleapis.com/Snapshot"
+	TypeAddress      = "compute.googleapis.com/Address"
+	TypeNetwork      = "compute.googleapis.com/Network"
+	TypeBucket       = "storage.googleapis.com/Bucket"
+	TypeImage        = "compute.googleapis.com/Image"
+	TypeMachineImage = "compute.googleapis.com/MachineImage"
 )

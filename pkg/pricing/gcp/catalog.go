@@ -307,17 +307,19 @@ func priceFixturePath() string {
 // service display name ListServices returns, so ListSkus can be scoped to
 // the right service instead of walking the entire (very large) catalogue.
 var billingServiceForKind = map[pricing.Kind]string{
-	pricing.KindDiskCapacity:    "Compute Engine",
-	pricing.KindDiskIOPS:        "Compute Engine",
-	pricing.KindDiskThroughput:  "Compute Engine",
-	pricing.KindVMInstance:      "Compute Engine",
-	pricing.KindVMCustomCPU:     "Compute Engine",
-	pricing.KindVMCustomRAM:     "Compute Engine",
-	pricing.KindStaticIP:        "Compute Engine",
-	pricing.KindSnapshotStorage: "Compute Engine",
-	pricing.KindGCSStorage:      "Cloud Storage",
-	pricing.KindGCSRetrieval:    "Cloud Storage",
-	pricing.KindGCSOpsClassA:    "Cloud Storage",
+	pricing.KindDiskCapacity:        "Compute Engine",
+	pricing.KindDiskIOPS:            "Compute Engine",
+	pricing.KindDiskThroughput:      "Compute Engine",
+	pricing.KindVMInstance:          "Compute Engine",
+	pricing.KindVMCustomCPU:         "Compute Engine",
+	pricing.KindVMCustomRAM:         "Compute Engine",
+	pricing.KindStaticIP:            "Compute Engine",
+	pricing.KindSnapshotStorage:     "Compute Engine",
+	pricing.KindImageStorage:        "Compute Engine",
+	pricing.KindMachineImageStorage: "Compute Engine",
+	pricing.KindGCSStorage:          "Cloud Storage",
+	pricing.KindGCSRetrieval:        "Cloud Storage",
+	pricing.KindGCSOpsClassA:        "Cloud Storage",
 }
 
 // liveUnitPrice resolves (kind, sku, region) against the cached catalogue,
@@ -598,6 +600,25 @@ func matchSKU(sk *billingpb.Sku) (pricing.Kind, string, bool) {
 			return pricing.KindSnapshotStorage, "archive", true
 		default:
 			return pricing.KindSnapshotStorage, "standard", true
+		}
+	}
+
+	// Custom images and machine images are also Compute Engine storage, billed
+	// per GiB-month. The Cloud Billing resource groups are distinct from
+	// PDSnapshot and are matched before the family switch for the same reason:
+	// a reader would otherwise look under "Compute" and miss them.
+	if usageType == "OnDemand" {
+		switch resourceGroup {
+		case "imagestorage":
+			if strings.Contains(desc, "early deletion") {
+				return "", "", false
+			}
+			return pricing.KindImageStorage, "standard", true
+		case "machineimagestorage":
+			if strings.Contains(desc, "early deletion") {
+				return "", "", false
+			}
+			return pricing.KindMachineImageStorage, "standard", true
 		}
 	}
 
