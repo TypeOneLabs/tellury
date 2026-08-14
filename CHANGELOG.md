@@ -8,6 +8,41 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-08-14
+
+Region narrowing on AWS, which had never worked.
+
+### Fixed
+
+- **Every AWS scan swept every enabled region.** Resource Explorer was meant to
+  narrow the list and never did — ~70s against an account whose resources sat in
+  one region, now ~15s. Three defects, each measured against the live API:
+  - Resource Explorer has no `OR`. Several types were asked for as
+    `resourcetype:A OR resourcetype:B`; terms are ANDed and `OR` is treated as a
+    literal one, so the combined query matched **nothing** — not A, not B. It is
+    now one query per type.
+  - The resource type strings were CloudFormation aliases, not the values Search
+    returns. Some resolve and some silently do not (`AWS::EC2::Image` → 0 where
+    `ec2:image` → 1). `aws.ec2.instance` and `aws.ec2.snapshot` were not mapped
+    at all.
+  - A zero-result discovery fell through to the sweep with no log line, so the
+    fallback was invisible even at `--log-level debug`.
+
+### Changed
+
+- **The EC2 `DescribeRegions` sweep is gone.** With an aggregator index, one
+  query per type covers every indexed region; without one — most accounts — each
+  enabled region is asked directly. No setup is required either way.
+- **Un-indexed regions are now named in the output.** Resource Explorer only
+  knows a region that has an index, and an un-indexed region answers
+  `0 results, Complete: true` — a confident empty — while being searched creates
+  its index as a side effect. So a first scan of a region reports nothing there
+  and a later scan does. Rather than leave that silent, every enabled region
+  Resource Explorer cannot yet answer for is listed by name.
+- `--aws-regions` bypasses Resource Explorer entirely: nothing is missed, and
+  nothing is created. That last point matters because `Search` creating an index
+  is the one write a scan can perform; `docs/aws-setup.md` says so.
+
 ## [0.2.0] — 2026-08-14
 
 Five image rules, and the eight defects that validating them against real cloud
@@ -105,6 +140,7 @@ month, across AWS, Azure and GCP.
   metric, which neither AWS nor GCP do without an agent, and the backend reads it — but no
   rule declares it yet.
 
-[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/TypeOneLabs/tellury/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/TypeOneLabs/tellury/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/TypeOneLabs/tellury/releases/tag/v0.1.0
