@@ -1,50 +1,257 @@
 [
   {
-    "serviceCode": "AmazonEC2",
     "product": {
-      "productFamily": "Storage Snapshot",
       "attributes": {
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "operation": "",
         "regionCode": "us-east-1",
-        "storageMedia": "Amazon EBS Snapshots",
-        "usagetype": "USW2-EBS:SnapshotUsage"
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "storageMedia": "Amazon S3",
+        "usagetype": "EBS:SnapshotUsage"
       },
-      "sku": "SNAPSHOT-US-EAST-1"
+      "productFamily": "Storage Snapshot",
+      "sku": "7U7TWP44UP36AT3R"
     },
+    "publicationDate": "2026-08-14T01:17:39Z",
+    "serviceCode": "AmazonEC2",
     "terms": {
       "OnDemand": {
-        "offer-1": {
+        "7U7TWP44UP36AT3R.JRTCKXETXF": {
+          "effectiveDate": "2026-08-01T00:00:00Z",
+          "offerTermCode": "JRTCKXETXF",
           "priceDimensions": {
-            "dim-1": {
-              "unit": "GB-Mo",
-              "pricePerUnit": {"USD": "0.05"}
+            "7U7TWP44UP36AT3R.JRTCKXETXF.6YS6EN2CT7": {
+              "appliesTo": [],
+              "beginRange": "0",
+              "description": "$0.05 per GB-Month of snapshot data stored - US East (Northern Virginia)",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.0500000000"
+              },
+              "rateCode": "7U7TWP44UP36AT3R.JRTCKXETXF.6YS6EN2CT7",
+              "unit": "GB-Mo"
             }
-          }
+          },
+          "sku": "7U7TWP44UP36AT3R",
+          "termAttributes": {}
         }
       }
-    }
+    },
+    "version": "20260814011739"
   },
   {
-    "serviceCode": "AmazonEC2",
     "product": {
-      "productFamily": "Storage Snapshot",
       "attributes": {
-        "regionCode": "eu-west-1",
-        "storageMedia": "Amazon EBS Snapshots",
-        "usagetype": "EUW1-EBS:SnapshotUsage"
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "operation": "",
+        "regionCode": "us-east-1",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "snapshotarchivefeetype": "SnapshotArchiveRetrieval",
+        "storageMedia": "Amazon S3",
+        "usagetype": "EBS:SnapshotArchiveRetrieval"
       },
-      "sku": "SNAPSHOT-EU-WEST-1"
+      "productFamily": "Storage Snapshot",
+      "sku": "DDSCQ4YGF66NWWRJ"
     },
+    "publicationDate": "2026-08-14T01:17:39Z",
+    "serviceCode": "AmazonEC2",
     "terms": {
       "OnDemand": {
-        "offer-1": {
+        "DDSCQ4YGF66NWWRJ.JRTCKXETXF": {
+          "effectiveDate": "2026-08-01T00:00:00Z",
+          "offerTermCode": "JRTCKXETXF",
           "priceDimensions": {
-            "dim-1": {
-              "unit": "GB-month",
-              "pricePerUnit": {"USD": "0.055"}
+            "DDSCQ4YGF66NWWRJ.JRTCKXETXF.6YS6EN2CT7": {
+              "appliesTo": [],
+              "beginRange": "0",
+              "description": "$0.03 per GB of snapshot archive data retrieved - US East (Northern Virginia)",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.0300000000"
+              },
+              "rateCode": "DDSCQ4YGF66NWWRJ.JRTCKXETXF.6YS6EN2CT7",
+              "unit": "GB"
             }
-          }
+          },
+          "sku": "DDSCQ4YGF66NWWRJ",
+          "termAttributes": {}
         }
       }
-    }
+    },
+    "version": "20260814011739"
+  },
+  {
+    "product": {
+      "attributes": {
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "operation": "",
+        "regionCode": "us-east-1",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "snapshotarchivefeetype": "SnapshotArchiveEarlyDelete",
+        "storageMedia": "Amazon S3",
+        "usagetype": "EBS:SnapshotArchiveEarlyDelete"
+      },
+      "productFamily": "Storage Snapshot",
+      "sku": "GHTDRQFFXQZVJNXF"
+    },
+    "publicationDate": "2026-08-14T01:17:39Z",
+    "serviceCode": "AmazonEC2",
+    "terms": {
+      "OnDemand": {
+        "GHTDRQFFXQZVJNXF.JRTCKXETXF": {
+          "effectiveDate": "2026-08-01T00:00:00Z",
+          "offerTermCode": "JRTCKXETXF",
+          "priceDimensions": {
+            "GHTDRQFFXQZVJNXF.JRTCKXETXF.6YS6EN2CT7": {
+              "appliesTo": [],
+              "beginRange": "0",
+              "description": "$0.0125 per GB-Month of snapshot archive data deleted earlier than 90 days - US East (Northern Virginia)",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.0125000000"
+              },
+              "rateCode": "GHTDRQFFXQZVJNXF.JRTCKXETXF.6YS6EN2CT7",
+              "unit": "GB-Mo"
+            }
+          },
+          "sku": "GHTDRQFFXQZVJNXF",
+          "termAttributes": {}
+        }
+      }
+    },
+    "version": "20260814011739"
+  },
+  {
+    "product": {
+      "attributes": {
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Outposts",
+        "operation": "",
+        "regionCode": "us-east-1",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "storageMedia": "Amazon S3 Outpost",
+        "usagetype": "USE1-EBS:SnapshotUsage.outposts"
+      },
+      "productFamily": "Storage Snapshot",
+      "sku": "PXAF4HC3TVCEH5XQ"
+    },
+    "publicationDate": "2026-08-14T01:17:39Z",
+    "serviceCode": "AmazonEC2",
+    "terms": {
+      "OnDemand": {
+        "PXAF4HC3TVCEH5XQ.JRTCKXETXF": {
+          "effectiveDate": "2026-08-01T00:00:00Z",
+          "offerTermCode": "JRTCKXETXF",
+          "priceDimensions": {
+            "PXAF4HC3TVCEH5XQ.JRTCKXETXF.6YS6EN2CT7": {
+              "appliesTo": [],
+              "beginRange": "0",
+              "description": "$0.027 per GB-Mo for EBS local snapshots on Outposts in US East (N. Virginia)",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.0270000000"
+              },
+              "rateCode": "PXAF4HC3TVCEH5XQ.JRTCKXETXF.6YS6EN2CT7",
+              "unit": "GB-Mo"
+            }
+          },
+          "sku": "PXAF4HC3TVCEH5XQ",
+          "termAttributes": {}
+        }
+      }
+    },
+    "version": "20260814011739"
+  },
+  {
+    "product": {
+      "attributes": {
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "operation": "",
+        "regionCode": "us-east-1",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "snapshotarchivefeetype": "SnapshotArchiveStorage",
+        "storageMedia": "Amazon S3",
+        "usagetype": "EBS:SnapshotArchiveStorage"
+      },
+      "productFamily": "Storage Snapshot",
+      "sku": "TQQM6CHBJQ7MKT24"
+    },
+    "publicationDate": "2026-08-14T01:17:39Z",
+    "serviceCode": "AmazonEC2",
+    "terms": {
+      "OnDemand": {
+        "TQQM6CHBJQ7MKT24.JRTCKXETXF": {
+          "effectiveDate": "2026-08-01T00:00:00Z",
+          "offerTermCode": "JRTCKXETXF",
+          "priceDimensions": {
+            "TQQM6CHBJQ7MKT24.JRTCKXETXF.6YS6EN2CT7": {
+              "appliesTo": [],
+              "beginRange": "0",
+              "description": "$0.0125 per GB-Month of snapshot archive data stored - US East (Northern Virginia)",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.0125000000"
+              },
+              "rateCode": "TQQM6CHBJQ7MKT24.JRTCKXETXF.6YS6EN2CT7",
+              "unit": "GB-Mo"
+            }
+          },
+          "sku": "TQQM6CHBJQ7MKT24",
+          "termAttributes": {}
+        }
+      }
+    },
+    "version": "20260814011739"
+  },
+  {
+    "product": {
+      "attributes": {
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "operation": "",
+        "regionCode": "us-east-1",
+        "servicecode": "AmazonEC2",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "storageMedia": "Amazon S3",
+        "usagetype": "EBS:SnapshotUsageUnderBilling"
+      },
+      "productFamily": "Storage Snapshot",
+      "sku": "W339DBEHBVGTYPXR"
+    },
+    "publicationDate": "2026-08-14T01:17:39Z",
+    "serviceCode": "AmazonEC2",
+    "terms": {
+      "OnDemand": {
+        "W339DBEHBVGTYPXR.JRTCKXETXF": {
+          "effectiveDate": "2026-08-01T00:00:00Z",
+          "offerTermCode": "JRTCKXETXF",
+          "priceDimensions": {
+            "W339DBEHBVGTYPXR.JRTCKXETXF.6YS6EN2CT7": {
+              "appliesTo": [],
+              "beginRange": "0",
+              "description": "$0.05 per GB-Month of snapshot underbilling for April 30th",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.0500000000"
+              },
+              "rateCode": "W339DBEHBVGTYPXR.JRTCKXETXF.6YS6EN2CT7",
+              "unit": "GB-Mo"
+            }
+          },
+          "sku": "W339DBEHBVGTYPXR",
+          "termAttributes": {}
+        }
+      }
+    },
+    "version": "20260814011739"
   }
 ]

@@ -978,6 +978,23 @@ func indexDoc(doc *priceListDoc) []catalogueEntry {
 		}
 		return out
 	case "Storage Snapshot":
+		// FIVE PRODUCTS IN THIS FAMILY CARRY THE GB-Mo UNIT, and only one is the
+		// standard snapshot rate. Measured against the live API for us-east-1:
+		//
+		//   EBS:SnapshotUsage                $0.05    <- the rate we want
+		//   EBS:SnapshotArchiveStorage       $0.0125  archive tier
+		//   EBS:SnapshotArchiveEarlyDelete   $0.0125
+		//   USE1-EBS:SnapshotUsage.outposts  $0.027   Outposts local snapshots
+		//   EBS:SnapshotUsageUnderBilling    $0.05
+		//
+		// Indexing on productFamily and unit alone wrote all five to the same
+		// (kind, sku, region) key, so whichever the API returned last decided
+		// the price — a snapshot could be valued at the archive rate, a
+		// quarter of the truth, with the answer changing between runs. The
+		// usagetype is the discriminator, exactly as it is for the static IP.
+		if !isStandardSnapshotUsage(doc.Product.Attributes["usagetype"]) {
+			return nil
+		}
 		var out []catalogueEntry
 		for _, dim := range priceDimensions(doc) {
 			if dim.unit != "GB-Mo" && dim.unit != "GB-month" {
@@ -994,6 +1011,23 @@ func indexDoc(doc *priceListDoc) []catalogueEntry {
 	default:
 		return nil
 	}
+}
+
+// isStandardSnapshotUsage reports whether a usagetype names the ordinary EBS
+// snapshot storage rate, as opposed to the archive tiers, the Outposts local
+// rate or the underbilling meter that share its product family and unit.
+//
+// The token is "EBS:SnapshotUsage", carried bare in us-east-1 and with a
+// region prefix elsewhere ("USW2-EBS:SnapshotUsage"). Outposts appends
+// ".outposts", so an exact suffix match after the prefix excludes it.
+func isStandardSnapshotUsage(usagetype string) bool {
+	if usagetype == "" {
+		return false
+	}
+	if i := strings.LastIndex(usagetype, "-"); i >= 0 {
+		usagetype = usagetype[i+1:]
+	}
+	return usagetype == "EBS:SnapshotUsage"
 }
 
 // kindForUnit maps a price dimension's unit string to the pricing.Kind tellury
