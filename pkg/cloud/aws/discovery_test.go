@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -23,6 +24,11 @@ import (
 // and ResourceType), or returns hand-crafted pages for edge-case tests
 // (pagination, error injection). Zero network calls.
 type fakeResourceExplorer struct {
+	// mu guards every field below. DiscoverAcrossRegions searches regions
+	// CONCURRENTLY, so an unsynchronised fake races — caught by -race in CI
+	// after passing locally, because the detector only sees the interleavings
+	// that actually happen.
+	mu      sync.Mutex
 	pages   []*resourceexplorer2.SearchOutput
 	pageIdx int
 	err     error // non-nil to inject an error on the next call
@@ -39,6 +45,8 @@ type fakeResourceExplorer struct {
 }
 
 func (f *fakeResourceExplorer) Search(_ context.Context, in *resourceexplorer2.SearchInput, _ ...func(*resourceexplorer2.Options)) (*resourceexplorer2.SearchOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if in != nil && in.QueryString != nil {
 		f.queries = append(f.queries, *in.QueryString)
 	}
@@ -54,6 +62,8 @@ func (f *fakeResourceExplorer) Search(_ context.Context, in *resourceexplorer2.S
 }
 
 func (f *fakeResourceExplorer) ListIndexes(_ context.Context, _ *resourceexplorer2.ListIndexesInput, _ ...func(*resourceexplorer2.Options)) (*resourceexplorer2.ListIndexesOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.listIndexesErr != nil {
 		return nil, f.listIndexesErr
 	}
