@@ -75,7 +75,11 @@ real scan:
     "Microsoft.Resources/subscriptions/read",
     "Microsoft.Resources/subscriptions/resourceGroups/read",
     "Microsoft.Compute/disks/read",
-    "Microsoft.Network/publicIPAddresses/read"
+    "Microsoft.Network/publicIPAddresses/read",
+    "Microsoft.Compute/galleries/read",
+    "Microsoft.Compute/galleries/images/read",
+    "Microsoft.Compute/galleries/images/versions/read",
+    "Microsoft.Compute/virtualMachineScaleSets/read"
   ],
   "NotActions": [],
   "AssignableScopes": ["/subscriptions/<subscription-id>"]
@@ -93,6 +97,12 @@ Two things about this role are worth knowing before you choose it.
 **`Microsoft.ResourceGraph/resources/read` alone is not enough.** Resource Graph also
 requires `Microsoft.Resources/subscriptions/resources/read`. Without it every query returns
 `AccessDenied` — which at least fails loudly.
+
+**`virtualMachineScaleSets/read` is safety-critical, not optional.** A gallery image
+referenced by a scale set is in use even when no instance is running from it. `tellury`
+does not guess: without visible compute it marks the reference inventory untrusted and the
+rule skips. Resource Graph omits rows an identity cannot read *without failing*, so the
+absence of scale sets is indistinguishable from an identity that cannot see them.
 
 **A missing resource-type action fails SILENTLY, and this is the important one.** Drop
 `Microsoft.Compute/disks/read` and the scan still succeeds. It reports `0 resources scanned`

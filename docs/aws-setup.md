@@ -18,6 +18,11 @@ organization-level scans.
 | `ec2:DescribeAddresses` | List every Elastic IP in a region. |
 | `ec2:DescribeInstances` | List every EC2 instance in a region. Needed by any instance rule. |
 | `ec2:DescribeInstanceTypes` | Read each instance type's vCPU and memory. Used to judge whether a smaller size would fit; tellury reads these live rather than shipping a table that goes stale. |
+| `ec2:DescribeImages` | List customer-owned AMIs. Needed by the image rules. |
+| `ec2:DescribeSnapshots` | List EBS snapshots — both to price an AMI's backing storage and to find snapshots orphaned by a deregistered AMI. |
+| `ec2:DescribeLaunchTemplates`, `ec2:DescribeLaunchTemplateVersions` | Find AMIs referenced by a launch template. **An AMI referenced by a template with no running instances is still in use**, so without these an in-use AMI can be reported as unused. |
+| `ec2:DescribeFleets`, `ec2:DescribeSpotFleetRequests` | The same, for AMIs referenced inline by EC2 Fleet overrides and Spot Fleet launch specifications. |
+| `autoscaling:DescribeLaunchConfigurations` | The same, for Auto Scaling launch configurations. Note this is an `autoscaling:` action, not `ec2:`. |
 | `cloudwatch:GetMetricData` | Read instance CPU utilization. Without it, metric-dependent rules skip and say so. Note this call sits outside the CloudWatch free tier at $0.01 per 1,000 metrics requested — a scan needs tens of thousands of instances before that rounds to a cent. |
 | `pricing:GetProducts` | Load the live Price List catalogue. Without it every resource that needs a price is skipped as unpriced — there is no fallback table. |
 | `resource-explorer-2:Search` | Query the aggregator index to find which regions hold resources of the types the selected rules need, so the scan sweeps only those regions instead of every enabled region. Optional — when missing, the scan falls back to `DescribeRegions`. |
@@ -144,6 +149,13 @@ never produce a stale attribute or a wrong price.
         "ec2:DescribeAddresses",
         "ec2:DescribeInstances",
         "ec2:DescribeInstanceTypes",
+        "ec2:DescribeImages",
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeLaunchTemplates",
+        "ec2:DescribeLaunchTemplateVersions",
+        "ec2:DescribeFleets",
+        "ec2:DescribeSpotFleetRequests",
+        "autoscaling:DescribeLaunchConfigurations",
         "cloudwatch:GetMetricData",
         "pricing:GetProducts",
         "resource-explorer-2:Search"
