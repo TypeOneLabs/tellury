@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	asgtypes "github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
 	"github.com/TypeOneLabs/tellury/pkg/cloud"
@@ -150,5 +151,98 @@ func TestIngest_NoImageHintSkipsAMIDiscovery(t *testing.T) {
 	}
 	if got := gr.CountByKind(graph.KindSnapshot); got != 0 {
 		t.Fatalf("snapshot nodes = %d, want 0", got)
+	}
+}
+
+// allReferenceSourcesFixture adds an AMI per reference source beyond launch
+// templates: an Auto Scaling launch configuration, an EC2 Fleet inline
+// override, and a Spot Fleet inline launch specification.
+//
+// Each of those collectors was previously reachable only in production. A wrong
+// field path or a missing nil check in any of them would compile, pass the
+// suite, and quietly report an in-use AMI as deletable — which is precisely how
+// the AWS Auto Scaling guard shipped dead for a release while its own test
+// passed against a hand-built label.
+func allReferenceSourcesFixture() *Fixture {
+	f := amiFixture()
+	r := f.Regions["us-east-1"]
+
+	for _, id := range []string{"ami-0lc", "ami-0fleet", "ami-0spot"} {
+		r.Images = append(r.Images, ec2types.Image{
+			ImageId:        strPtr(id),
+			Name:           strPtr(id + "-name"),
+			CreationDate:   strPtr("2024-01-01T00:00:00Z"),
+			State:          ec2types.ImageStateAvailable,
+			RootDeviceType: ec2types.DeviceTypeEbs,
+			BlockDeviceMappings: []ec2types.BlockDeviceMapping{{
+				DeviceName: strPtr("/dev/sda1"),
+				Ebs:        &ec2types.EbsBlockDevice{SnapshotId: strPtr("snap-" + id)},
+			}},
+		})
+		r.Snapshots = append(r.Snapshots, ec2types.Snapshot{
+			SnapshotId: strPtr("snap-" + id), VolumeSize: int32Ptr(10),
+		})
+	}
+
+	r.LaunchConfigurations = []asgtypes.LaunchConfiguration{
+		{LaunchConfigurationName: strPtr("lc-0a"), ImageId: strPtr("ami-0lc")},
+	}
+	r.Fleets = []ec2types.FleetData{{
+		FleetId: strPtr("fleet-0a"),
+		LaunchTemplateConfigs: []ec2types.FleetLaunchTemplateConfig{{
+			Overrides: []ec2types.FleetLaunchTemplateOverrides{{ImageId: strPtr("ami-0fleet")}},
+		}},
+	}}
+	r.SpotFleetRequests = []ec2types.SpotFleetRequestConfig{{
+		SpotFleetRequestId: strPtr("sfr-0a"),
+		SpotFleetRequestConfig: &ec2types.SpotFleetRequestConfigData{
+			LaunchSpecifications: []ec2types.SpotFleetLaunchSpecification{{ImageId: strPtr("ami-0spot")}},
+		},
+	}}
+	return f
+}
+
+// TestIngest_EveryReferenceSourceMarksItsAMIReferenced drives all five sources
+// through the real ingest path and asserts each AMI is seen as referenced.
+func TestIngest_EveryReferenceSourceMarksItsAMIReferenced(t *testing.T) {
+	p, err := New(context.Background(),
+		WithOffline(),
+		WithFixture(allReferenceSourcesFixture()),
+		WithLogger(newTestLogger()),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer p.Close()
+	sc := cloud.Scope{Provider: "aws", AWS: &cloud.AWSScope{Account: "123456789012"}}
+	g, err := p.Ingest(context.Background(), sc, []string{TypeImage})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	refCount := map[string]float64{}
+	complete := map[string]bool{}
+	g.Nodes(func(n *graph.Node) bool {
+		if n.Kind != graph.KindImage {
+			return true
+		}
+		id, _ := n.Str(AttrImageID)
+		c, _ := n.Num(AttrReferenceCount)
+		rc, _ := n.Bool(AttrReferencesComplete)
+		refCount[id], complete[id] = c, rc
+		return true
+	})
+
+	for _, id := range []string{"ami-0used", "ami-0lc", "ami-0fleet", "ami-0spot"} {
+		if refCount[id] < 1 {
+			t.Errorf("%s reference count = %v, want >= 1: its reference source is not being "+
+				"enumerated, so an in-use AMI would be reported as deletable", id, refCount[id])
+		}
+		if !complete[id] {
+			t.Errorf("%s references_complete = false, want true", id)
+		}
+	}
+	if refCount["ami-0unused"] != 0 {
+		t.Errorf("ami-0unused reference count = %v, want 0", refCount["ami-0unused"])
 	}
 }
