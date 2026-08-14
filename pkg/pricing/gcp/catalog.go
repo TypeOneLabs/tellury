@@ -352,6 +352,21 @@ func (c *CatalogPricer) liveUnitPrice(kind pricing.Kind, sku, region string) (fl
 // regionCandidates returns the ordered lookup fallback chain for region.
 func regionCandidates(region string) []string {
 	out := []string{region}
+
+	// GCP names the EU multi-region "eu" on a RESOURCE and "europe" in the
+	// CATALOGUE. Verified live: the multi-region serviceRegions on both
+	// PDSnapshot and MachineImage SKUs are "us", "asia" and "europe", while a
+	// snapshot or image in that location reports "eu". The two never met, so
+	// anything stored in the EU multi-region resolved no SKU and skipped as
+	// unpriced — silently, because a missing price is a skip and not an error.
+	//
+	// The alias belongs here rather than in the graph's location: the resource
+	// really is in "eu", the region node should say so, and existing tests
+	// pin that. It is the catalogue that spells it differently.
+	if strings.EqualFold(region, "eu") {
+		out = append(out, "europe")
+	}
+
 	if idx := strings.IndexByte(region, '-'); idx > 0 {
 		out = append(out, region[:idx])
 	}

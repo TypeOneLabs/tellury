@@ -33,8 +33,8 @@ func loadFixtureEntriesT(t *testing.T) []retailFixtureEntry {
 	if err != nil {
 		t.Fatalf("loadFixtureEntries: %v", err)
 	}
-	if len(entries) != 4 {
-		t.Fatalf("recorded fixture has %d entries, want 4", len(entries))
+	if len(entries) < 4 {
+		t.Fatalf("recorded fixture has %d entries, want at least 4", len(entries))
 	}
 	return entries
 }

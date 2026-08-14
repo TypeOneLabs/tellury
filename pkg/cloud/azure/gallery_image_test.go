@@ -8,6 +8,14 @@ import (
 	"github.com/TypeOneLabs/tellury/pkg/graph"
 )
 
+// The fixtures below use "sizeInGB" because that is the field Azure Resource
+// Graph actually returns on storageProfile.osDiskImage — verified against a
+// live gallery image version, whose only size field is sizeInGB. They
+// previously used "sizeInBytes", the same field the normalizer read and
+// neither the API nor the docs mention, so the tests confirmed the code agreed
+// with itself while every real gallery image version skipped as
+// missing_attribute.
+
 func TestNormalizeGalleryImageVersion_MapsFieldsSizeAndReplicas(t *testing.T) {
 	const versionID = "/subscriptions/sub-1/resourceGroups/rg-gallery/providers/Microsoft.Compute/galleries/gal-a/images/img-a/versions/1.0.0"
 	row := map[string]any{
@@ -34,11 +42,11 @@ func TestNormalizeGalleryImageVersion_MapsFieldsSizeAndReplicas(t *testing.T) {
 			},
 			"storageProfile": map[string]any{
 				"osDiskImage": map[string]any{
-					"sizeInBytes": 100.0 * (1 << 30),
+					"sizeInGB": 100.0,
 				},
 				"dataDiskImages": []any{
-					map[string]any{"sizeInBytes": 10.0 * (1 << 30)},
-					map[string]any{"sizeInBytes": 20.0 * (1 << 30)},
+					map[string]any{"sizeInGB": 10.0},
+					map[string]any{"sizeInGB": 20.0},
 				},
 			},
 		},
@@ -116,7 +124,7 @@ func TestNormalizeGalleryImageVersion_MissingTargetRegionsIsAbsent(t *testing.T)
 				"publishedDate": "2024-01-02T03:04:05Z",
 			},
 			"storageProfile": map[string]any{
-				"osDiskImage": map[string]any{"sizeInBytes": 100.0 * (1 << 30)},
+				"osDiskImage": map[string]any{"sizeInGB": 100.0},
 			},
 		},
 	}
@@ -190,7 +198,7 @@ func TestCollectImageReferences_ExactVersionAndScaleSetDefinition(t *testing.T) 
 				},
 			},
 			"storageProfile": map[string]any{
-				"osDiskImage": map[string]any{"sizeInBytes": 100.0 * (1 << 30)},
+				"osDiskImage": map[string]any{"sizeInGB": 100.0},
 			},
 		},
 	}
@@ -245,7 +253,7 @@ func TestProviderIngest_GalleryImageVersionReferencesScaleSetDefinition(t *testi
 					},
 				},
 				"storageProfile": map[string]any{
-					"osDiskImage": map[string]any{"sizeInBytes": 100.0 * (1 << 30)},
+					"osDiskImage": map[string]any{"sizeInGB": 100.0},
 				},
 			},
 		},

@@ -17,14 +17,30 @@ import (
 // provisioned tier such as "S10 LRS". Those spellings are pinned by the
 // recorded retail-prices-recorded.json fixture, exactly as the managed-disk
 // matcher pins its serviceName/productName/meterName spellings.
+// AZURE BILLS GALLERY IMAGE STORAGE AS A SNAPSHOT, not as a managed disk.
+// Verified against the live Retail Prices API for swedencentral:
+//
+//	Standard HDD Managed Disks / Snapshots LRS / "LRS Snapshots"            $0.05  per GB/Month
+//	Standard SSD Managed Disks / Snapshots LRS / "Snapshots LRS Snapshots"  $0.145 per GB/Month
+//	Premium SSD Managed Disks  / Snapshots LRS / "LRS Snapshots"            $0.145 per GB/Month
+//
+// The spellings below were previously "Standard LRS" / "Standard LRS Disk"
+// and friends — the flat managed-DISK tier names. Those match zero rows: the
+// disk products are sold as fixed provisioned tiers ("S10 LRS", $5.888 per
+// month for the whole disk), not per GiB, so no filter over them could ever
+// return a per-GiB-month rate. Every gallery image version therefore skipped
+// as unpriced, silently.
+//
+// Note the Standard SSD meter name genuinely repeats the word: Azure spells it
+// "Snapshots LRS Snapshots". It is not a typo here.
 func galleryImageStorageProduct(sku string) (productName, skuName, meterName string, ok bool) {
 	switch strings.TrimSpace(sku) {
 	case "Standard_LRS":
-		return "Standard HDD Managed Disks", "Standard LRS", "Standard LRS Disk", true
+		return "Standard HDD Managed Disks", "Snapshots LRS", "LRS Snapshots", true
 	case "StandardSSD_LRS":
-		return "Standard SSD Managed Disks", "Standard SSD LRS", "Standard SSD LRS Disk", true
+		return "Standard SSD Managed Disks", "Snapshots LRS", "Snapshots LRS Snapshots", true
 	case "Premium_LRS":
-		return "Premium SSD Managed Disks", "Premium LRS", "Premium LRS Disk", true
+		return "Premium SSD Managed Disks", "Snapshots LRS", "LRS Snapshots", true
 	default:
 		return "", "", "", false
 	}

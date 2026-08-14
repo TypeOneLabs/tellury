@@ -26,6 +26,21 @@ func galleryFixtureCatalog(t *testing.T) *CatalogPricer {
 	return p
 }
 
+// The rates below are the recorded per-GiB-month figures: the API quotes
+// $0.05 / $0.145 / $0.145 per DECIMAL GB-month, which the pricer converts by
+// 1.073741824 to the GiB-month unit the rules use. The previous expectations
+// (0.05 / 0.08 / 0.17) were invented alongside the invented meter names, and
+// note that Standard SSD and Premium genuinely share a snapshot rate — the old
+// figures implied they differed.
+//
+// The skuName/meterName spellings below are the SNAPSHOT meters, verified
+// against the live Retail Prices API: Azure bills gallery image version storage
+// as a snapshot, not as a managed disk. They previously named the flat
+// managed-DISK tiers ("Standard LRS" / "Standard LRS Disk"), which match zero
+// rows — disks are sold as fixed provisioned tiers priced per month, never per
+// GiB — so the tests pinned spellings no real query could return, and every
+// gallery image version skipped as unpriced.
+
 func TestCatalogPricer_GalleryImageStorageResolvesRecordedRates(t *testing.T) {
 	p := galleryFixtureCatalog(t)
 
@@ -33,9 +48,9 @@ func TestCatalogPricer_GalleryImageStorageResolvesRecordedRates(t *testing.T) {
 		sku  string
 		want float64
 	}{
-		{"Standard_LRS", 0.05},
-		{"StandardSSD_LRS", 0.08},
-		{"Premium_LRS", 0.17},
+		{"Standard_LRS", 0.05 * decimalGBPerGiB},
+		{"StandardSSD_LRS", 0.145 * decimalGBPerGiB},
+		{"Premium_LRS", 0.145 * decimalGBPerGiB},
 	}
 	for _, tc := range cases {
 		unit, region, err := p.UnitPrice(pricing.KindGalleryImageStorage, "azure", tc.sku, "westeurope")
@@ -61,9 +76,9 @@ func TestStaticPricer_GalleryImageStorageResolvesRecordedRates(t *testing.T) {
 		sku  string
 		want float64
 	}{
-		{"Standard_LRS", 0.05},
-		{"StandardSSD_LRS", 0.08},
-		{"Premium_LRS", 0.17},
+		{"Standard_LRS", 0.05 * decimalGBPerGiB},
+		{"StandardSSD_LRS", 0.145 * decimalGBPerGiB},
+		{"Premium_LRS", 0.145 * decimalGBPerGiB},
 	}
 	for _, tc := range cases {
 		unit, region, err := p.UnitPrice(pricing.KindGalleryImageStorage, "azure", tc.sku, "westeurope")
@@ -83,9 +98,9 @@ func TestGalleryImageStorageFilters_Pinned(t *testing.T) {
 		retailSKU   string
 		meterName   string
 	}{
-		{"Standard_LRS", "Standard HDD Managed Disks", "Standard LRS", "Standard LRS Disk"},
-		{"StandardSSD_LRS", "Standard SSD Managed Disks", "Standard SSD LRS", "Standard SSD LRS Disk"},
-		{"Premium_LRS", "Premium SSD Managed Disks", "Premium LRS", "Premium LRS Disk"},
+		{"Standard_LRS", "Standard HDD Managed Disks", "Snapshots LRS", "LRS Snapshots"},
+		{"StandardSSD_LRS", "Standard SSD Managed Disks", "Snapshots LRS", "Snapshots LRS Snapshots"},
+		{"Premium_LRS", "Premium SSD Managed Disks", "Snapshots LRS", "LRS Snapshots"},
 	} {
 		filters, err := galleryImageStorageFilters(tc.sku, "westeurope")
 		if err != nil {
@@ -178,8 +193,8 @@ func TestNormalizeGalleryImageUnitPrice(t *testing.T) {
 		want  float64
 		ok    bool
 	}{
-		{"1 GiB/Month", 0.05, 0.05, true},
-		{"1 GiB /Month", 0.05, 0.05, true},
+		{"1 GiB/Month", 0.0536870912, 0.0536870912, true},
+		{"1 GiB /Month", 0.0536870912, 0.0536870912, true},
 		{"1 GB/Month", 0.05, 0.05 * decimalGBPerGiB, true},
 		{"1 GB /Month", 0.05, 0.05 * decimalGBPerGiB, true},
 		{"1/Month", 0.05, 0, false},

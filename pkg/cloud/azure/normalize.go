@@ -26,6 +26,10 @@ const (
 // NormalizeResource dispatches one Azure Resource Graph row to the matching
 // normalizer based on the row's `type` column. A row whose type is not one of
 // the modelled ARG types returns nil.
+// bytesPerGiB converts the GiB figure ARG reports for a gallery image version
+// into the bytes the gallery_size_bytes attribute is denominated in.
+const bytesPerGiB = 1024 * 1024 * 1024
+
 func NormalizeResource(row map[string]any) *graph.Node {
 	switch strings.ToLower(stringOf(row["type"])) {
 	case argTypeDisk:
@@ -322,13 +326,19 @@ func NormalizeGalleryImageVersion(row map[string]any) *graph.Node {
 		n.SetAttr(AttrCreationTimestamp, published)
 	}
 
+	// ARG REPORTS sizeInGB, NOT sizeInBytes. Verified against a live gallery
+	// image version: storageProfile.osDiskImage carries hostCaching, source and
+	// sizeInGB, and no byte-denominated field at all. Reading "sizeInBytes"
+	// found nothing, so the size attribute was never written and every gallery
+	// image version skipped with missing_attribute — silently, because a
+	// missing attribute is a skip and not an error.
 	storageProfile := mapOf(properties["storageProfile"])
 	osDiskImage := mapOf(storageProfile["osDiskImage"])
-	if osSize, ok := numOf(osDiskImage["sizeInBytes"]); ok && osSize > 0 {
-		sizeBytes := osSize
+	if osSizeGB, ok := numOf(osDiskImage["sizeInGB"]); ok && osSizeGB > 0 {
+		sizeBytes := osSizeGB * bytesPerGiB
 		for _, dataDisk := range mapsOf(storageProfile["dataDiskImages"]) {
-			if diskSize, ok := numOf(dataDisk["sizeInBytes"]); ok && diskSize > 0 {
-				sizeBytes += diskSize
+			if diskSizeGB, ok := numOf(dataDisk["sizeInGB"]); ok && diskSizeGB > 0 {
+				sizeBytes += diskSizeGB * bytesPerGiB
 			}
 		}
 		n.SetAttr(AttrGallerySizeBytes, sizeBytes)
