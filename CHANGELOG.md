@@ -8,6 +8,11 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-14
+
+Five image rules, and the eight defects that validating them against real cloud
+resources uncovered.
+
 ### Added
 
 - **Five image rules**, bringing the catalogue to sixteen. Machine and custom images are a
@@ -100,5 +105,6 @@ month, across AWS, Azure and GCP.
   metric, which neither AWS nor GCP do without an agent, and the backend reads it — but no
   rule declares it yet.
 
-[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/TypeOneLabs/tellury/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/TypeOneLabs/tellury/releases/tag/v0.1.0
