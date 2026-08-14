@@ -122,6 +122,40 @@ price — but note `ExtraEvidence` has no `Pass`, so the price-source entry is
 rendered in `Cost` (the only place the pricer is reachable) and carried through
 `nc` via `nc.Set("price_source", rules.PriceEvidence(...))`.
 
+Two mistakes here are silent, and both shipped once. Neither is visible to a
+test that asserts only the finding count and the waste figure — assert the
+evidence itself.
+
+**A key belongs to exactly one of the two.** The engine emits
+`autoCollect(EvidenceKeys())` and then `ExtraEvidence(...)`, concatenated with
+no de-duplication. A key declared in `EvidenceKeys` *and* re-emitted by
+`ExtraEvidence` appears twice in the finding and in `findings.json`.
+
+**Match the price-evidence constructor to how you read it back.**
+`PriceEvidence` returns one `Evidence`; `PriceEvidenceFor` returns
+`[]Evidence` — use the latter only when a cost genuinely has several priced
+components. Reading a stashed value back with a comma-ok assertion to the wrong
+one *always* fails and silently drops the provenance:
+
+```go
+// Cost: one priced component
+nc.Set("price_source", rules.PriceEvidence("price_source", p.Price, kind, sku, region))
+// ExtraEvidence: read it as the same type
+if v, ok := nc.Get("price_source"); ok {
+    ev = append(ev, v.(rules.Evidence))       // NOT v.(rules.Evidence) behind a comma-ok
+}
+
+// Cost: several priced components
+nc.Set("price_source_evidence", rules.PriceEvidenceFor("price_source", p.Price, comps...))
+// ExtraEvidence:
+if v, ok := nc.Get("price_source_evidence"); ok {
+    ev = append(ev, v.([]rules.Evidence)...)
+}
+```
+
+Prefer the plain type assertion, as above: a mismatch then panics in tests
+instead of quietly producing a finding with no provenance.
+
 ### The supporting types you receive
 
 ```go

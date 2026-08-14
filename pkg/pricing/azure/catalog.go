@@ -166,7 +166,15 @@ func (c *CatalogPricer) CurrencyInfo() pricing.CurrencyInfo {
 // failure to resolve returns pricing.ErrNoPrice, never a guessed number.
 func (c *CatalogPricer) UnitPrice(kind pricing.Kind, provider, sku, region string) (float64, string, error) {
 	if v, res, err := c.liveUnitPrice(kind, sku, region); err == nil {
-		c.record(kind, sku, region, pricing.Provenance{Source: pricing.SourceLiveAPI, SKU: res.sku, Region: res.region})
+		prov := pricing.Provenance{Source: pricing.SourceLiveAPI, SKU: res.sku, Region: res.region}
+		// Both spellings — see the AWS and GCP pricers. A rule renders its
+		// evidence with the RESOLVED region, so keying provenance only by the
+		// REQUESTED one makes the lookup miss and the evidence claim a fixture
+		// answered a live scan.
+		c.record(kind, sku, region, prov)
+		if res.region != region {
+			c.record(kind, sku, res.region, prov)
+		}
 		return v, res.region, nil
 	}
 	return 0, "", pricing.ErrNoPrice

@@ -1,9 +1,28 @@
 // Package unused_custom_image implements the "unused_custom_image" FinOps
 // rule: a GCP custom image whose archive no instance template references is
-// idle storage. The image bills per GiB-month on archiveSizeBytes — the
-// actual stored bytes — not on diskSizeGb (the source disk size). An image
-// referenced only by an instance template is IN USE even when no current
-// instance runs from it, because the template can launch an instance later.
+// idle storage. An image referenced only by an instance template is IN USE
+// even when no current instance runs from it, because the template can launch
+// an instance later.
+//
+// SIZE BASIS. GCP bills image storage on the COMPRESSED archive, and exposes
+// that figure as archiveSizeBytes. Measured against the live API on
+// 2026-08-14, archiveSizeBytes is populated only for images IMPORTED from a
+// tar.gz archive (those carry a rawDisk block — Google's own public images are
+// built this way). An image created from a disk, which is what `gcloud compute
+// images create --source-disk` produces and therefore what most custom images
+// are, carries no rawDisk and no archiveSizeBytes — not in images.get, and not
+// in the Cloud Asset Inventory payload this scanner reads.
+//
+// Requiring archiveSizeBytes therefore meant the rule never fired on the
+// images operators actually have. When it is absent the rule falls back to
+// diskSizeGb (the source disk size) and says so in the size_basis evidence, at
+// a lower confidence. That figure is an UPPER BOUND: the stored archive is
+// compressed, so the real bill is smaller, by a ratio GCP does not publish.
+//
+// This is the same bound, for the same reason, that unused_ami and
+// orphaned_ami_snapshot report on AWS, where the source volume size is the
+// only size AWS ever exposes. The recommendation — delete an image nothing
+// references — is correct either way; only the dollar figure is bounded.
 package unused_custom_image
 
 import (
@@ -36,6 +55,25 @@ const (
 	MinMonthlyWasteUSD = 0.10
 )
 
+// Size bases, reported verbatim as the size_basis evidence key so a reader can
+// tell a billed figure from a bounded one.
+const (
+	// basisArchive is archiveSizeBytes: the compressed bytes GCP actually
+	// bills. Exact.
+	basisArchive = "archive_size_bytes"
+	// basisSourceDisk is diskSizeGb: the uncompressed source disk. An upper
+	// bound, used only when archiveSizeBytes is absent.
+	basisSourceDisk = "source_disk_size"
+)
+
+// Confidence by size basis. The reference and age checks are equally
+// deterministic either way; what differs is whether the dollar figure is the
+// billed quantity or a bound on it.
+const (
+	confidenceArchive    = 0.7
+	confidenceSourceDisk = 0.6 // matches the AWS image rules' source-size bound
+)
+
 func init() { rules.RegisterNode(rule{}) }
 
 type rule struct{}
@@ -49,7 +87,10 @@ func (rule) Meta() rules.Meta {
 		Description: "A GCP custom image bills per GiB-month for its stored archive " +
 			"whether or not anything runs from it. An image referenced by an instance " +
 			"template is in use even with no current instances; only an image with no " +
-			"template reference at or beyond the 90-day retention window is reclaimable.",
+			"template reference at or beyond the 90-day retention window is reclaimable. " +
+			"GCP publishes the compressed archive size only for images imported from a " +
+			"tar.gz; for a disk-sourced image the cost is bounded by the source disk size " +
+			"and the size_basis evidence says which was used.",
 		Severity:           rules.SeverityMedium,
 		RequiredAssetTypes: []string{gcprules.TypeImage},
 		RequiredMetrics:    nil, // pure attribute + template-reference pass — zero metric cost
@@ -72,13 +113,29 @@ func (rule) Guards() []rules.Guard {
 			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
 				return n.AssetType == gcprules.TypeImage
 			}},
-		// G2: billable stored bytes present. Absent means the payload was not
-		// parsed; present-but-zero is a real free image and falls out below
-		// the minimum-waste floor rather than skipping as missing data.
-		{Name: "storage_bytes_present", SkipCode: rules.SkipMissingAttr,
+		// G2: a size the rule can price, and which basis it came from.
+		//
+		// archiveSizeBytes is the billed quantity and is preferred whenever
+		// present; present-but-zero is a real free image and falls out below
+		// the minimum-waste floor rather than skipping as missing data. It is
+		// absent on every disk-sourced image (see the package comment), so the
+		// rule falls back to the source disk size as an upper bound rather
+		// than going silent on the majority of real images.
+		//
+		// Only when NEITHER is available is the payload genuinely unreadable.
+		{Name: "size_determinable", SkipCode: rules.SkipMissingAttr,
 			Check: func(n *graph.Node, nc *rules.NodeContext, p *rules.Pass) bool {
-				_, ok := n.Num(gcprules.AttrStorageBytes)
-				return ok
+				if bytes, ok := n.Num(gcprules.AttrStorageBytes); ok {
+					nc.Set("size_gib", bytes/(1<<30))
+					nc.Set("size_basis", basisArchive)
+					return true
+				}
+				if gb, ok := n.Num(gcprules.AttrSourceDiskSizeGB); ok && gb > 0 {
+					nc.Set("size_gib", gb)
+					nc.Set("size_basis", basisSourceDisk)
+					return true
+				}
+				return false
 			}},
 		// G3: creation time parseable; stash the parsed instant once so the
 		// age guard, Cost and ExtraEvidence all read the SAME instant.
@@ -141,11 +198,14 @@ func (rule) Guards() []rules.Guard {
 }
 
 func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *rules.Pass) ([]rules.CostBranch, error) {
-	// The billable quantity is archiveSizeBytes. diskSizeGb (source disk
-	// size) is deliberately NOT priced: it is a nominal/source size that
-	// over-reports stored bytes.
-	storageBytes, _ := n.Num(gcprules.AttrStorageBytes)
-	sizeGB := storageBytes / (1 << 30)
+	// Both the size and which basis produced it were resolved by the
+	// size_determinable guard, so Cost and ExtraEvidence cannot disagree about
+	// what is being priced.
+	sizeAny, _ := nc.Get("size_gib")
+	sizeGB := sizeAny.(float64)
+	basisAny, _ := nc.Get("size_basis")
+	basis := basisAny.(string)
+
 	region := pricing.RegionOf(n.Location)
 	unit, resolvedRegion, err := p.Price.UnitPrice(pricing.KindImageStorage, "gcp", ImageStorageSKU, region)
 	if err != nil {
@@ -154,13 +214,17 @@ func (rule) Cost(ctx context.Context, n *graph.Node, nc *rules.NodeContext, p *r
 	monthlyWaste := sizeGB * unit
 
 	nc.Set("currency", rules.CurrencyOf(p))
-	nc.Set("storage_gib", sizeGB)
 	nc.Set("unit_price_gib_month", unit)
 	nc.Set("price_source", rules.PriceEvidence("price_source", p.Price, pricing.KindImageStorage, ImageStorageSKU, resolvedRegion))
 
+	confidence := confidenceArchive
+	if basis == basisSourceDisk {
+		confidence = confidenceSourceDisk
+	}
+
 	return []rules.CostBranch{{
 		Waste:      round2(monthlyWaste),
-		Confidence: 0.7, // deterministic reference+age check, but "delete old image" is a judgment
+		Confidence: confidence,
 		Label:      "delete_image",
 	}}, nil
 }
@@ -176,14 +240,15 @@ func (rule) EvidenceKeys() []string {
 func (rule) ExtraEvidence(n *graph.Node, nc *rules.NodeContext, branch rules.CostBranch) []rules.Evidence {
 	cur, _ := nc.Get("currency")
 	curStr, _ := cur.(string)
-	storageGiB, _ := nc.Get("storage_gib")
+	storageGiB, _ := nc.Get("size_gib")
 	unit, _ := nc.Get("unit_price_gib_month")
 	ageDays, _ := nc.Get("age_days")
+	basis, _ := nc.Get("size_basis")
 
 	ev := []rules.Evidence{
 		{Key: "storage_gib", Value: fmt.Sprintf("%.2f", storageGiB.(float64))},
 		{Key: "age_days", Value: fmt.Sprintf("%.0f", ageDays.(float64))},
-		{Key: "size_basis", Value: "archive_size_bytes"},
+		{Key: "size_basis", Value: basis.(string)},
 		rules.EvMoneyIn("unit_price_gib_month", curStr, unit.(float64), 4),
 	}
 	if loc, ok := n.Str(gcprules.AttrStorageLocation); ok && loc != "" {

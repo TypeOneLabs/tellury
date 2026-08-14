@@ -1,0 +1,2043 @@
+{
+ "skus": [
+  {
+   "name": "services/6F81-5844-456A/skus/0AD6-2784-F0B6",
+   "skuId": "0AD6-2784-F0B6",
+   "description": "Storage Image in Paris",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "europe-west9"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 58000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "europe-west9"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/0C8D-B9D5-22DD",
+   "skuId": "0C8D-B9D5-22DD",
+   "description": "Storage Image in Turin",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "europe-west12"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 60000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "europe-west12"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/0F70-EC05-BA70",
+   "skuId": "0F70-EC05-BA70",
+   "description": "Storage Image in Sao Paulo",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "southamerica-east1"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 75000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "southamerica-east1"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/1602-C272-B704",
+   "skuId": "1602-C272-B704",
+   "description": "Storage Image in London",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "europe-west2"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 60000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "europe-west2"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/2224-9402-A49A",
+   "skuId": "2224-9402-A49A",
+   "description": "Storage Image in Seoul",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "asia-northeast3"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 65000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "asia-northeast3"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/23E9-37FF-C291",
+   "skuId": "23E9-37FF-C291",
+   "description": "Storage Image in Mexico",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "northamerica-south1"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 54500000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "northamerica-south1"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/29B3-D76D-380E",
+   "skuId": "29B3-D76D-380E",
+   "description": "Storage Image in Melbourne",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "australia-southeast2"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 68000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "australia-southeast2"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/2E3C-A864-D561",
+   "skuId": "2E3C-A864-D561",
+   "description": "Storage Image in Toronto",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "northamerica-northeast2"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 55000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "northamerica-northeast2"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/385C-6ED2-8216",
+   "skuId": "385C-6ED2-8216",
+   "description": "Storage Image in Japan",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "asia-northeast1"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 65000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "asia-northeast1"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/394C-2CB4-9814",
+   "skuId": "394C-2CB4-9814",
+   "description": "Storage Image in Osaka",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "asia-northeast2"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 65000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "asia-northeast2"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/3C39-B650-9ECC",
+   "skuId": "3C39-B650-9ECC",
+   "description": "Storage Image in Mumbai",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "asia-south1"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 60000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "asia-south1"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/3D4E-1B23-8176",
+   "skuId": "3D4E-1B23-8176",
+   "description": "Storage Image in Israel",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "me-west1"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 55000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "me-west1"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/41E4-2C71-A423",
+   "skuId": "41E4-2C71-A423",
+   "description": "Storage Image in Phoenix",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "us-west8"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 50000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "us-west8"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/430D-640C-8D56",
+   "skuId": "430D-640C-8D56",
+   "description": "Storage Image in Doha",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "me-central1"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 60750000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "me-central1"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/4AD1-93A0-6A36",
+   "skuId": "4AD1-93A0-6A36",
+   "description": "Storage Image in Las Vegas",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "us-west4"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 55000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "us-west4"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/5161-ADEE-B888",
+   "skuId": "5161-ADEE-B888",
+   "description": "Storage Image in Los Angeles",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "us-west2"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 60000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "us-west2"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/606D-FC4F-56E5",
+   "skuId": "606D-FC4F-56E5",
+   "description": "Storage Image in Jakarta",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "asia-southeast2"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 59950000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "asia-southeast2"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/6320-505B-94F0",
+   "skuId": "6320-505B-94F0",
+   "description": "Storage Image in Santiago",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "southamerica-west1"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 71500000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "southamerica-west1"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/67C0-F466-82C1",
+   "skuId": "67C0-F466-82C1",
+   "description": "Storage Image in Netherlands",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "europe-west4"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 55000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "europe-west4"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/7048-1127-A6DD",
+   "skuId": "7048-1127-A6DD",
+   "description": "Storage Image in Kuala Lumpur",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "asia-southeast4"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 52500000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "asia-southeast4"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/705D-A824-9993",
+   "skuId": "705D-A824-9993",
+   "description": "Storage Image in Montreal",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "northamerica-northeast1"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 55000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "northamerica-northeast1"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/759C-A8DE-B14F",
+   "skuId": "759C-A8DE-B14F",
+   "description": "Storage Image in Virginia",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "us-east4"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 55000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "us-east4"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/7CAF-C0DA-C679",
+   "skuId": "7CAF-C0DA-C679",
+   "description": "Storage Image in Dallas",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "us-south1"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 59000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "us-south1"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/80E5-E18F-9FA4",
+   "skuId": "80E5-E18F-9FA4",
+   "description": "Storage Machine Image in European Union",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "MachineImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "europe"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 50000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "europe-west1"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/8175-9EAD-4FF0",
+   "skuId": "8175-9EAD-4FF0",
+   "description": "Storage Image in Madrid",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "europe-southwest1"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 59000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "europe-southwest1"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/8961-73BA-7264",
+   "skuId": "8961-73BA-7264",
+   "description": "Storage Image in Dammam",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "me-central2"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 80000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "me-central2"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/90B0-57E1-0A96",
+   "skuId": "90B0-57E1-0A96",
+   "description": "Storage Image in Johannesburg",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "africa-south1"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 50000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "africa-south1"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/94B7-C7FA-15DA",
+   "skuId": "94B7-C7FA-15DA",
+   "description": "Storage Machine Image in Asia",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "MachineImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "asia"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 50000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "MULTI_REGIONAL",
+    "regions": [
+     "asia-east1",
+     "asia-east2",
+     "asia-northeast1",
+     "asia-northeast2",
+     "asia-northeast3",
+     "asia-south1",
+     "asia-southeast1",
+     "asia-southeast2"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/9637-BDFA-1114",
+   "skuId": "9637-BDFA-1114",
+   "description": "Storage Image in Finland",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "europe-north1"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 55000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "europe-north1"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/973A-E737-A940",
+   "skuId": "973A-E737-A940",
+   "description": "Storage Image in Warsaw",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "europe-central2"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 60000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "europe-central2"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/98FE-0869-6989",
+   "skuId": "98FE-0869-6989",
+   "description": "Storage Image in Sydney",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "australia-southeast1"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 68000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "australia-southeast1"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/AEDD-1713-EA96",
+   "skuId": "AEDD-1713-EA96",
+   "description": "Storage Image in Columbus",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "us-east5"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 50000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "us-east5"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/B29F-DA60-6B84",
+   "skuId": "B29F-DA60-6B84",
+   "description": "Storage Image in Salt Lake City",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "us-west3"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 60000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "us-west3"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/B6B2-44BB-2476",
+   "skuId": "B6B2-44BB-2476",
+   "description": "Storage Machine Image in US",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "MachineImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "us"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 50000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "us"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/CB5A-808E-C459",
+   "skuId": "CB5A-808E-C459",
+   "description": "Storage Image in Zurich",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "europe-west6"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 65000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "europe-west6"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/CCE3-FDFA-3A9C",
+   "skuId": "CCE3-FDFA-3A9C",
+   "description": "Storage Image in Milan",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "europe-west8"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 58000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "europe-west8"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/DAA2-253C-6680",
+   "skuId": "DAA2-253C-6680",
+   "description": "Storage Image",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "us-central1",
+    "us-east1",
+    "us-west1",
+    "asia-east1",
+    "europe-west1"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 50000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "MULTI_REGIONAL",
+    "regions": [
+     "asia-east1",
+     "europe-west1",
+     "us-central1",
+     "us-east1",
+     "us-west1"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/DCE0-2876-6858",
+   "skuId": "DCE0-2876-6858",
+   "description": "Storage Image in Frankfurt",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "europe-west3"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 60000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "europe-west3"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/DEB9-2841-5735",
+   "skuId": "DEB9-2841-5735",
+   "description": "Storage Image in Hong Kong",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "asia-east2"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 65000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "asia-east2"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/E08D-4518-CFCB",
+   "skuId": "E08D-4518-CFCB",
+   "description": "Storage Image in Stockholm",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "europe-north2"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 50000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "europe-north2"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/E6A8-B104-747E",
+   "skuId": "E6A8-B104-747E",
+   "description": "Storage Image in Bangkok",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "asia-southeast3"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 52500000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "asia-southeast3"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/E8C3-5B3B-2483",
+   "skuId": "E8C3-5B3B-2483",
+   "description": "Storage Image in Berlin",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "europe-west10"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 60000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "europe-west10"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/EF64-66C5-C01B",
+   "skuId": "EF64-66C5-C01B",
+   "description": "Storage Image in Delhi",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "asia-south2"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 60000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "asia-south2"
+    ]
+   }
+  },
+  {
+   "name": "services/6F81-5844-456A/skus/F8E9-1937-EF0F",
+   "skuId": "F8E9-1937-EF0F",
+   "description": "Storage Image in Singapore",
+   "category": {
+    "serviceDisplayName": "Compute Engine",
+    "resourceFamily": "Storage",
+    "resourceGroup": "StorageImage",
+    "usageType": "OnDemand"
+   },
+   "serviceRegions": [
+    "asia-southeast1"
+   ],
+   "pricingInfo": [
+    {
+     "summary": "",
+     "pricingExpression": {
+      "usageUnit": "GiBy.mo",
+      "displayQuantity": 1,
+      "tieredRates": [
+       {
+        "startUsageAmount": 0,
+        "unitPrice": {
+         "currencyCode": "USD",
+         "units": "0",
+         "nanos": 55000000
+        }
+       }
+      ],
+      "usageUnitDescription": "gibibyte month",
+      "baseUnit": "By.s",
+      "baseUnitDescription": "byte second",
+      "baseUnitConversionFactor": 2875910101401600.0
+     },
+     "currencyConversionRate": 1,
+     "effectiveTime": "2026-08-14T07:00:00Z"
+    }
+   ],
+   "serviceProviderName": "Google",
+   "geoTaxonomy": {
+    "type": "REGIONAL",
+    "regions": [
+     "asia-southeast1"
+    ]
+   }
+  }
+ ]
+}

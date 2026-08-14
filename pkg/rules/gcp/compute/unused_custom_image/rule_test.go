@@ -100,6 +100,82 @@ type rulesPricer interface {
 	MonthlyCost(it pricing.Item) (float64, error)
 }
 
+// TestEval_SourceDiskSizeFallback pins the behaviour that makes this rule fire
+// at all on real images.
+//
+// Measured against the live API on 2026-08-14: GCP populates archiveSizeBytes
+// only for images imported from a tar.gz (they carry a rawDisk block). An image
+// created with --source-disk has neither rawDisk nor archiveSizeBytes, in
+// images.get and in the Cloud Asset Inventory payload alike — so requiring the
+// archive size meant the rule silently skipped the images operators actually
+// have.
+//
+// The fallback prices the source disk size instead, which is an UPPER BOUND
+// because GCP bills the compressed archive. The two things that must hold are
+// that the bound is labelled as such in size_basis, and that it carries a lower
+// confidence than the billed figure.
+func TestEval_SourceDiskSizeFallback(t *testing.T) {
+	old := now.AddDate(0, 0, -120).Format(time.RFC3339)
+
+	t.Run("archive size present wins", func(t *testing.T) {
+		// imageNode writes a source disk 10x the archive, so pricing the wrong
+		// one is off by an order of magnitude rather than subtly wrong.
+		n := imageNode(gcprules.TypeImage, 100, old, gcprules.StatusReady, true, 0)
+		findings, _ := runEval(t, n, fakePricer{unit: 0.05})
+		if len(findings) != 1 {
+			t.Fatalf("want 1 finding, got %d", len(findings))
+		}
+		if got := findings[0].MonthlyWasteUSD; got != 5.00 {
+			t.Errorf("waste = %v, want 5.00 (100 GiB archive x $0.05); "+
+				"50.00 would mean the 1000 GiB source disk was priced", got)
+		}
+		// Literal, not the constant: asserting against the same constant the
+		// rule reads makes the check move with the code and pin nothing.
+		if got := findings[0].Confidence; got != 0.7 {
+			t.Errorf("confidence = %v, want 0.7 for a billed figure", got)
+		}
+		if got := evidenceValue(findings[0], "size_basis"); got != basisArchive {
+			t.Errorf("size_basis = %q, want %q", got, basisArchive)
+		}
+	})
+
+	t.Run("falls back to the source disk when the archive size is absent", func(t *testing.T) {
+		n := imageNode(gcprules.TypeImage, 100, old, gcprules.StatusReady, true, 0)
+		delete(n.Attrs, gcprules.AttrStorageBytes) // exactly what CAI returns
+		findings, skips := runEval(t, n, fakePricer{unit: 0.05})
+		if len(findings) != 1 {
+			t.Fatalf("want 1 finding, got %d (skips %+v): a disk-sourced image "+
+				"must not be silently skipped", len(findings), skips)
+		}
+		if got := findings[0].MonthlyWasteUSD; got != 50.00 {
+			t.Errorf("waste = %v, want 50.00 (1000 GiB source disk x $0.05)", got)
+		}
+		if got := findings[0].Confidence; got != 0.6 {
+			t.Errorf("confidence = %v, want 0.6 — a bound must not claim the "+
+				"confidence of a billed figure", got)
+		}
+		// The invariant that actually matters, stated independently of both
+		// literals: a bounded figure is always less certain than a billed one.
+		if confidenceSourceDisk >= confidenceArchive {
+			t.Errorf("confidenceSourceDisk (%v) must be strictly below confidenceArchive (%v)",
+				confidenceSourceDisk, confidenceArchive)
+		}
+		if got := evidenceValue(findings[0], "size_basis"); got != basisSourceDisk {
+			t.Errorf("size_basis = %q, want %q: a reader cannot tell a bound "+
+				"from a bill without it", got, basisSourceDisk)
+		}
+	})
+}
+
+func evidenceValue(f rules.Finding, key string) string {
+	for _, e := range f.Evidence {
+		if e.Key == key {
+			return e.Value
+		}
+	}
+	return ""
+}
+
 func TestEval_EveryGuardSkipPath(t *testing.T) {
 	old := now.AddDate(0, 0, -120).Format(time.RFC3339)
 	young := now.AddDate(0, 0, -10).Format(time.RFC3339)
@@ -113,7 +189,21 @@ func TestEval_EveryGuardSkipPath(t *testing.T) {
 		code rules.SkipCode
 	}{
 		{"wrong asset type", imageNode(gcprules.TypeMachineImage, 100, old, gcprules.StatusReady, true, 0), rules.SkipNotTargetAssetType},
-		{"missing storage bytes", func() *graph.Node { n := valid(); delete(n.Attrs, gcprules.AttrStorageBytes); return n }(), rules.SkipMissingAttr},
+		// Neither size is available: the payload is genuinely unreadable.
+		// Dropping ONLY archiveSizeBytes is the common case and now falls back
+		// to the source disk size — see TestEval_SourceDiskSizeFallback.
+		{"no size at all", func() *graph.Node {
+			n := valid()
+			delete(n.Attrs, gcprules.AttrStorageBytes)
+			delete(n.Attrs, gcprules.AttrSourceDiskSizeGB)
+			return n
+		}(), rules.SkipMissingAttr},
+		{"no archive size and a zero source disk", func() *graph.Node {
+			n := valid()
+			delete(n.Attrs, gcprules.AttrStorageBytes)
+			n.SetAttr(gcprules.AttrSourceDiskSizeGB, 0.0)
+			return n
+		}(), rules.SkipMissingAttr},
 		{"unparseable creation time", func() *graph.Node { n := valid(); n.SetAttr(gcprules.AttrCreationTime, "not-a-time"); return n }(), rules.SkipMissingAttr},
 		{"non ready status", imageNode(gcprules.TypeImage, 100, old, "PENDING", true, 0), rules.SkipNonBillingStatus},
 		{"missing storage location", func() *graph.Node { n := valid(); delete(n.Attrs, gcprules.AttrStorageLocation); return n }(), rules.SkipMissingAttr},

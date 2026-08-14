@@ -105,6 +105,10 @@ type resolvedSKU struct {
 	skuID     string // Cloud Billing SKU id, e.g. "6F81-5844-456A"
 	unitPrice float64
 	region    string
+	// substitute marks a price answered by an equivalent SKU rather than the
+	// one asked for, so UnitPrice can record SourceEquivalentSKU and the
+	// substitution reaches the finding's evidence.
+	substitute bool
 }
 
 var (
@@ -245,7 +249,25 @@ func (c *CatalogPricer) UnitPrice(kind pricing.Kind, provider, sku, region strin
 	// Live API (or price fixture), cached for the scan's lifetime.
 	if c.client != nil || priceFixturePath() != "" {
 		if v, res, err := c.liveUnitPrice(kind, sku, region); err == nil {
-			c.record(kind, sku, region, pricing.Provenance{Source: pricing.SourceLiveAPI, SKU: res.skuID, Region: res.region})
+			source := pricing.SourceLiveAPI
+			if res.substitute {
+				source = pricing.SourceEquivalentSKU
+			}
+			prov := pricing.Provenance{Source: source, SKU: res.skuID, Region: res.region}
+			// Record under BOTH the requested and the resolved region.
+			//
+			// A rule asks for "eu" (the resource's location) and the catalogue
+			// answers under "europe"; the rule then renders its evidence with
+			// the region UnitPrice returned — the resolved one. Keying the
+			// provenance only by the requested region made that lookup miss,
+			// and PriceEvidence falls back to reporting SourceFixture. A live
+			// scan therefore claimed its price came from a test fixture: seen
+			// in old_machine_image evidence as "fixture sku=standard
+			// region=europe" on 2026-08-14.
+			c.record(kind, sku, region, prov)
+			if res.region != region {
+				c.record(kind, sku, res.region, prov)
+			}
 			return v, res.region, nil
 		} else {
 			// A well-formed-but-unsupported currency is an operator error to
@@ -346,7 +368,57 @@ func (c *CatalogPricer) liveUnitPrice(kind pricing.Kind, sku, region string) (fl
 			return res.unitPrice, res, nil
 		}
 	}
+	if res, ok := c.multiRegionImageSubstitute(kind, sku, region); ok {
+		return res.unitPrice, res, nil
+	}
 	return 0, resolvedSKU{}, pricing.ErrNoPrice
+}
+
+// multiRegionImageSubstitute prices a custom image stored in a MULTI-REGION
+// location, which the catalogue does not publish a SKU for.
+//
+// Measured against the live catalogue on 2026-08-14 (32,242 SKUs, every page):
+// StorageImage has 45 SKUs and every one is regional — there is no "us", "eu",
+// "europe" or "asia" entry. MachineImage, the same storage product for machine
+// images, publishes all three multi-regions, each at exactly $0.05/GiB-month.
+// The generic un-suffixed "Storage Image" SKU is also $0.05. Two independent
+// entries in the catalogue agree on the multi-region rate, and the regional
+// prices of the two products track each other within ~1%.
+//
+// This matters because GCP DEFAULTS a new custom image to a multi-region
+// location. Requiring an exact StorageImage SKU meant the rule skipped as
+// unpriced on the images most projects actually have.
+//
+// The substitution is deliberately narrow: image storage only, multi-region
+// locations only, and only after every normal candidate has missed. The answer
+// is marked so it is recorded as SourceEquivalentSKU and a reader can see the
+// figure came from the machine-image SKU.
+func (c *CatalogPricer) multiRegionImageSubstitute(kind pricing.Kind, sku, region string) (resolvedSKU, bool) {
+	if kind != pricing.KindImageStorage {
+		return resolvedSKU{}, false
+	}
+	for _, candidate := range regionCandidates(region) {
+		if !isMultiRegion(candidate) {
+			continue
+		}
+		if res, ok := c.skusByKey[skuKey{kind: pricing.KindMachineImageStorage, sku: sku, region: candidate}]; ok {
+			res.substitute = true
+			return res, true
+		}
+	}
+	return resolvedSKU{}, false
+}
+
+// isMultiRegion reports whether a CATALOGUE region token names one of GCP's
+// three multi-regions. Note "eu" is the resource-side spelling that
+// regionCandidates aliases to "europe"; both are accepted so this holds
+// wherever it is called from.
+func isMultiRegion(region string) bool {
+	switch strings.ToLower(region) {
+	case "us", "eu", "europe", "asia":
+		return true
+	}
+	return false
 }
 
 // regionCandidates returns the ordered lookup fallback chain for region.

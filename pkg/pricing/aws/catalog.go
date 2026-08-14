@@ -240,7 +240,17 @@ func (c *CatalogPricer) reportCatalogueProgress(done, total int, final bool) {
 func (c *CatalogPricer) UnitPrice(kind pricing.Kind, provider, sku, region string) (float64, string, error) {
 	// Live API (or price fixture), cached for the scan's lifetime.
 	if v, res, err := c.liveUnitPrice(kind, sku, region); err == nil {
-		c.record(kind, sku, region, pricing.Provenance{Source: pricing.SourceLiveAPI, SKU: sku, Region: res.region})
+		prov := pricing.Provenance{Source: pricing.SourceLiveAPI, SKU: sku, Region: res.region}
+		// Both spellings, because a rule renders its evidence with the region
+		// UnitPrice RETURNED while the provenance was keyed by the region it
+		// ASKED for. Where those differ, the lookup misses and PriceEvidence
+		// falls back to reporting SourceFixture — a live price that claims to
+		// have come from a test fixture. See the GCP pricer, where region
+		// aliasing made this reachable in practice.
+		c.record(kind, sku, region, prov)
+		if res.region != region {
+			c.record(kind, sku, res.region, prov)
+		}
 		return v, res.region, nil
 	}
 

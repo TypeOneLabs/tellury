@@ -13,6 +13,13 @@ const (
 	// This is also the source recorded when a Pricer has no provenance
 	// tracking (a bare StaticPricer without a CatalogPricer wrapping it).
 	SourceFixture Source = "fixture"
+	// SourceEquivalentSKU: the catalogue publishes no SKU for this exact
+	// (kind, region), and the price came from a DIFFERENT but equivalent SKU
+	// that the catalogue does publish. The substitution is always narrow,
+	// documented at the site that performs it, and recorded here so it is
+	// visible in a finding's evidence — a substituted price must never read
+	// like a direct catalogue hit.
+	SourceEquivalentSKU Source = "equivalent_sku"
 )
 
 // Provenance records which source answered one price lookup, and which SKU
