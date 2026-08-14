@@ -18,8 +18,8 @@ organization-level scans.
 | `ec2:DescribeAddresses` | List every Elastic IP in a region. |
 | `ec2:DescribeInstances` | List every EC2 instance in a region. Needed by any instance rule. |
 | `ec2:DescribeInstanceTypes` | Read each instance type's vCPU and memory. Used to judge whether a smaller size would fit; tellury reads these live rather than shipping a table that goes stale. |
-| `ec2:DescribeImages` | List customer-owned AMIs. Needed by the image rules. |
-| `ec2:DescribeSnapshots` | List EBS snapshots — both to price an AMI's backing storage and to find snapshots orphaned by a deregistered AMI. |
+| `ec2:DescribeImages` | List customer-owned AMIs. Needed by `unused_ami`, and by `orphaned_ami_snapshot` to know which snapshots a live AMI still backs. |
+| `ec2:DescribeSnapshots` | List EBS snapshots — both to price an AMI's backing storage for `unused_ami` and to find the snapshots `orphaned_ami_snapshot` reports. |
 | `ec2:DescribeLaunchTemplates`, `ec2:DescribeLaunchTemplateVersions` | Find AMIs referenced by a launch template. **An AMI referenced by a template with no running instances is still in use**, so without these an in-use AMI can be reported as unused. |
 | `ec2:DescribeFleets`, `ec2:DescribeSpotFleetRequests` | The same, for AMIs referenced inline by EC2 Fleet overrides and Spot Fleet launch specifications. |
 | `autoscaling:DescribeLaunchConfigurations` | The same, for Auto Scaling launch configurations. Note this is an `autoscaling:` action, not `ec2:`. |

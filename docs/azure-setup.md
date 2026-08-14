@@ -61,9 +61,7 @@ az role assignment create --assignee <appId> --role Reader \
 
 ### The least-privilege answer: a custom role
 
-If Reader is too broad, this is the minimum that works. Every action below was verified by
-assigning exactly this role to a service principal with no other assignment and running a
-real scan:
+If Reader is too broad, this is every action the scanner calls:
 
 ```json
 {
@@ -75,16 +73,38 @@ real scan:
     "Microsoft.Resources/subscriptions/read",
     "Microsoft.Resources/subscriptions/resourceGroups/read",
     "Microsoft.Compute/disks/read",
-    "Microsoft.Network/publicIPAddresses/read",
+    "Microsoft.Compute/virtualMachines/read",
+    "Microsoft.Compute/virtualMachineScaleSets/read",
+    "Microsoft.Compute/skus/read",
     "Microsoft.Compute/galleries/read",
     "Microsoft.Compute/galleries/images/read",
     "Microsoft.Compute/galleries/images/versions/read",
-    "Microsoft.Compute/virtualMachineScaleSets/read"
+    "Microsoft.Network/publicIPAddresses/read",
+    "Microsoft.Insights/metrics/read"
   ],
   "NotActions": [],
   "AssignableScopes": ["/subscriptions/<subscription-id>"]
 }
 ```
+
+| Action | Needed by |
+|---|---|
+| `ResourceGraph/resources/read` + `Resources/subscriptions/resources/read` | Every rule — all discovery goes through Resource Graph |
+| `Resources/subscriptions/read`, `.../resourceGroups/read` | Enumerating scopes, and resolving a resource group scope |
+| `Compute/disks/read` | `unattached_managed_disk` |
+| `Compute/virtualMachines/read` | `underutilized_vm`, and the reference pass behind `unused_gallery_image_version` |
+| `Compute/virtualMachineScaleSets/read` | The same reference pass — see below |
+| `Compute/skus/read` | Resource SKUs, to find a smaller VM size for a rightsize recommendation |
+| `Compute/galleries/**/read` | `unused_gallery_image_version` |
+| `Network/publicIPAddresses/read` | `unassociated_public_ip` |
+| `Insights/metrics/read` | Azure Monitor, for `underutilized_vm` |
+
+**On verification:** the live validation runs behind this documentation used the built-in
+**Reader** role, so the list above is derived from the API calls in the code rather than
+proven by assigning exactly this role and scanning. It was last reconciled against the
+codebase on 2026-08-14. If you assign it and a rule reports nothing you expected, check the
+role first — and please open an issue, because the paragraph below explains why that failure
+is invisible.
 
 ```bash
 az role definition create --role-definition tellury-role.json

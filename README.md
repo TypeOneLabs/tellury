@@ -236,19 +236,38 @@ Not there yet: any cloud beyond these three.
 
 ## Rules
 
-| ID | Provider / service | Severity | Detects |
+Sixteen rules, in one vocabulary across three clouds.
+
+### AWS
+
+| ID | Service | Severity | Detects |
 |---|---|---|---|
-| `detached_disk` | gcp / compute | medium | Persistent disks attached to nothing |
-| `underutilized_instance` | gcp / compute | high | Instances overprovisioned for their CPU load |
-| `old_snapshot` | gcp / compute | low | Snapshots past the retention window |
-| `unused_reserved_ip` | gcp / compute | medium | Reserved external IPs attached to nothing |
-| `no_lifecycle_policy` | gcp / gcs | low | Buckets with no lifecycle rules |
-| `unattached_ebs_volume` | aws / ec2 | medium | EBS volumes attached to nothing |
-| `unassociated_eip` | aws / ec2 | medium | Elastic IPs associated with nothing |
-| `underutilized_ec2` | aws / ec2 | high | EC2 instances overprovisioned for their CPU load |
-| `unattached_managed_disk` | azure / compute | medium | Managed disks attached to no VM |
-| `unassociated_public_ip` | azure / network | medium | Public IPs associated with nothing |
-| `underutilized_vm` | azure / compute | high | Azure VMs overprovisioned for their CPU load |
+| `unattached_ebs_volume` | ec2 | medium | EBS volumes attached to nothing |
+| `unassociated_eip` | ec2 | medium | Elastic IPs associated with nothing |
+| `underutilized_ec2` | ec2 | high | EC2 instances overprovisioned for their CPU load |
+| `unused_ami` | ec2 | medium | AMIs no instance, launch template, launch configuration or fleet references |
+| `orphaned_ami_snapshot` | ec2 | medium | EBS snapshots left behind when their AMI was deregistered |
+
+### Azure
+
+| ID | Service | Severity | Detects |
+|---|---|---|---|
+| `unattached_managed_disk` | compute | medium | Managed disks attached to no VM |
+| `unassociated_public_ip` | network | medium | Public IPs associated with nothing |
+| `underutilized_vm` | compute | high | Azure VMs overprovisioned for their CPU load |
+| `unused_gallery_image_version` | compute | medium | Compute Gallery image versions no VM or scale set references |
+
+### GCP
+
+| ID | Service | Severity | Detects |
+|---|---|---|---|
+| `detached_disk` | compute | medium | Persistent disks attached to nothing |
+| `underutilized_instance` | compute | high | Instances overprovisioned for their CPU load |
+| `unused_reserved_ip` | compute | medium | Reserved external IPs attached to nothing |
+| `old_snapshot` | compute | low | Snapshots past the retention window |
+| `old_machine_image` | compute | low | Machine images past the retention window |
+| `unused_custom_image` | compute | medium | Custom images no instance template references |
+| `no_lifecycle_policy` | gcs | low | Buckets with no lifecycle rules |
 
 `underutilized_instance` and `no_lifecycle_policy` read Cloud Monitoring, `underutilized_ec2`
 reads CloudWatch, and `underutilized_vm` reads Azure Monitor. Without metric access they skip
@@ -257,6 +276,23 @@ and say so — they never guess a value from missing data.
 Every rule here judges CPU only. AWS and GCP publish no guest memory without an agent
 installed in the VM; Azure does publish it as a platform metric, and tellury reads it, but no
 rule declares it yet.
+
+**Image rules report a bounded figure where the cloud publishes no exact one.** AWS exposes
+an AMI's source volume size but never the compressed bytes actually stored; GCP publishes
+`archiveSizeBytes` only for images imported from an archive, not for the disk-sourced images
+most projects create. Where the exact size is unavailable the rule prices the source size,
+says so in its `size_basis` evidence, and lowers its confidence — the recommendation stands,
+the dollar figure is an upper bound. A GCP image in a multi-region location is priced from
+the equivalent multi-region SKU, marked `equivalent_sku` in `price_source`, because the
+catalogue publishes no multi-region image SKU at all.
+
+**A reference-counting rule refuses to guess.** `unused_ami`, `unused_custom_image` and
+`unused_gallery_image_version` each need to enumerate what could reference the image, and
+each records `references_unknown` rather than reporting a finding when that enumeration was
+incomplete — an image referenced by a launch template or instance template with no running
+instances is still in use, and deleting it breaks a future launch. This is why the image
+rules need more read permissions than their resource type alone suggests; the per-cloud
+setup guides list them.
 
 `tellury rules list` shows the catalogue; `tellury rules explain <id>` prints one rule's full
 declaration.

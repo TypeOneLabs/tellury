@@ -25,6 +25,7 @@ required. Without any of the others a scan still runs and reports what it could 
 |---|---|---|---|
 | `roles/cloudasset.viewer` | scanned org, folder or project | Resource discovery | Nothing to scan; required |
 | `roles/monitoring.viewer` | each project in scope | Metric enrichment | Metric-dependent rules skip, each saying why |
+| `roles/compute.viewer` | each project in scope | Instance-template references, for `unused_custom_image` | That rule skips every image as `references_unknown` |
 | `roles/browser` | the org, folder or project | Resolving a project to its billing account | Currency detection stops at step one; figures are USD |
 | `roles/billing.viewer` | the billing account | Reading that account's currency | Figures are USD |
 
@@ -38,12 +39,33 @@ gcloud organizations add-iam-policy-binding ORG_ID \
 gcloud organizations add-iam-policy-binding ORG_ID \
   --member="serviceAccount:SA_EMAIL" --role="roles/monitoring.viewer"
 
+# Image rules: instance-template references (see below).
+gcloud organizations add-iam-policy-binding ORG_ID \
+  --member="serviceAccount:SA_EMAIL" --role="roles/compute.viewer"
+
 # Currency detection: hierarchy read, then the billing account's currency.
 gcloud organizations add-iam-policy-binding ORG_ID \
   --member="serviceAccount:SA_EMAIL" --role="roles/browser"
 gcloud billing accounts add-iam-policy-binding BILLING_ACCOUNT_ID \
   --member="serviceAccount:SA_EMAIL" --role="roles/billing.viewer"
 ```
+
+### Why the image rule needs more than Cloud Asset Inventory
+
+`unused_custom_image` reports an image nothing references. Cloud Asset Inventory lists the
+images themselves, but it does not tell you what points *at* them — so the rule pages through
+`compute.instanceTemplates.list` in each project to collect
+`properties.disks[].initializeParams.sourceImage`.
+
+That call is not covered by `roles/cloudasset.viewer`. The single permission it needs is
+`compute.instanceTemplates.list`; `roles/compute.viewer` is the convenient built-in that
+contains it, and a custom role with just that permission works equally well.
+
+Without it the rule does not guess. It records `references_unknown` for every image and
+reports nothing, because **an image referenced by an instance template with no running
+instances is still in use** — a template that launches later will fail if the image is gone.
+The client is built lazily, only when a scan actually ingests images, so scans that run no
+image rule never need this grant.
 
 ### Impersonation
 
