@@ -4,6 +4,7 @@
 package all
 
 import (
+	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/orphaned_ami_snapshot"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/unassociated_eip"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/unattached_ebs_volume"
 	_ "github.com/TypeOneLabs/tellury/pkg/rules/aws/ec2/underutilized_instance"
