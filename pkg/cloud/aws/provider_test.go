@@ -7,9 +7,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/resourceexplorer2"
+	"github.com/aws/aws-sdk-go-v2/service/resourceexplorer2/types"
 
 	"github.com/TypeOneLabs/tellury/pkg/cloud"
 	"github.com/TypeOneLabs/tellury/pkg/graph"
@@ -251,56 +254,73 @@ func TestIngest_RejectsNilAWSScope(t *testing.T) {
 	}
 }
 
-// TestAssetTypesToCloudFormation_MapsKnownTypes verifies the mapping from the
-// provider's own asset-type tokens ("aws.ec2.volume", "aws.ec2.address") to
-// CloudFormation resource type identifiers ("AWS::EC2::Volume",
-// "AWS::EC2::EIP") that Resource Explorer Search expects. The mapping table
-// must stay exhaustive for the types the current rules declare, so a missing
-// mapping is a test failure — the scan silently falls back to DescribeRegions
-// instead of narrowing.
-func TestAssetTypesToCloudFormation_MapsKnownTypes(t *testing.T) {
-	tests := []struct {
-		hint string
-		want string
-	}{
-		{"aws.ec2.volume", "AWS::EC2::Volume"},
-		{"aws.ec2.address", "AWS::EC2::EIP"},
-	}
-	for _, tt := range tests {
-		got := assetTypesToCloudFormation([]string{tt.hint})
-		if len(got) != 1 || got[0] != tt.want {
-			t.Errorf("assetTypesToCloudFormation(%q) = %v, want [%s]", tt.hint, got, tt.want)
+// The mapping must cover EVERY asset type an AWS rule can declare.
+//
+// There is no DescribeRegions sweep behind it any more: an unmapped type means
+// resolveRegions refuses to narrow at all, because a region holding only that
+// type would otherwise be dropped silently. The old table mapped three of the
+// five types the rules declare — instance and snapshot were missing — which
+// under the current design would refuse every scan.
+func TestAssetTypesToResourceExplorer_CoversEveryRuleAssetType(t *testing.T) {
+	// The asset types the AWS rules declare today.
+	for _, hint := range []string{
+		"aws.ec2.volume",
+		"aws.ec2.address",
+		"aws.ec2.image",
+		"aws.ec2.instance",
+		"aws.ec2.snapshot",
+	} {
+		mapped, unmapped := assetTypesToResourceExplorer([]string{hint})
+		if len(unmapped) != 0 {
+			t.Errorf("asset type %q has no Resource Explorer mapping; scans requesting it "+
+				"cannot resolve regions at all", hint)
+			continue
+		}
+		if len(mapped) != 1 {
+			t.Errorf("assetTypesToResourceExplorer(%q) = %v, want one type", hint, mapped)
 		}
 	}
 }
 
-// TestAssetTypesToCloudFormation_UnknownHintIsDropped: an asset-type hint
-// that has no mapping is dropped, not passed through to Resource Explorer as
-// a bogus type string that would return zero results.
-func TestAssetTypesToCloudFormation_UnknownHintIsDropped(t *testing.T) {
-	got := assetTypesToCloudFormation([]string{"aws.ec2.volume", "aws.s3.bucket", "aws.ec2.address"})
-	want := []string{"AWS::EC2::Volume", "AWS::EC2::EIP"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("assetTypesToCloudFormation = %v, want %v (unknown hints dropped)", got, want)
+// The type strings are the ones Search RETURNS. CloudFormation-style aliases
+// are not reliably accepted: measured 2026-08-14, "AWS::EC2::Volume" resolved
+// 3 hits while "AWS::EC2::Image" resolved 0 where "ec2:image" resolved 1 — a
+// wrong alias returns no error, just nothing.
+func TestAssetTypesToResourceExplorer_UsesNativeTypeStrings(t *testing.T) {
+	for hint, want := range map[string]string{
+		"aws.ec2.volume":   "ec2:volume",
+		"aws.ec2.address":  "ec2:elastic-ip",
+		"aws.ec2.image":    "ec2:image",
+		"aws.ec2.instance": "ec2:instance",
+		"aws.ec2.snapshot": "ec2:snapshot",
+	} {
+		mapped, _ := assetTypesToResourceExplorer([]string{hint})
+		if len(mapped) != 1 || mapped[0] != want {
+			t.Errorf("assetTypesToResourceExplorer(%q) = %v, want [%s]", hint, mapped, want)
+		}
+		if strings.HasPrefix(want, "AWS::") {
+			t.Errorf("mapping for %q uses a CloudFormation alias", hint)
+		}
 	}
 }
 
-// TestAssetTypesToCloudFormation_EmptyInput: nil or empty slice returns nil.
-func TestAssetTypesToCloudFormation_EmptyInput(t *testing.T) {
-	if got := assetTypesToCloudFormation(nil); got != nil {
-		t.Errorf("assetTypesToCloudFormation(nil) = %v, want nil", got)
+// An unmapped hint is REPORTED, not dropped. Dropping it silently is what let
+// a scan narrow to regions chosen by a subset of the types it needed.
+func TestAssetTypesToResourceExplorer_ReportsUnmapped(t *testing.T) {
+	mapped, unmapped := assetTypesToResourceExplorer([]string{"aws.ec2.volume", "aws.rds.instance"})
+	if !reflect.DeepEqual(mapped, []string{"ec2:volume"}) {
+		t.Errorf("mapped = %v, want [ec2:volume]", mapped)
 	}
-	if got := assetTypesToCloudFormation([]string{}); got != nil {
-		t.Errorf("assetTypesToCloudFormation([]) = %v, want nil", got)
+	if !reflect.DeepEqual(unmapped, []string{"aws.rds.instance"}) {
+		t.Errorf("unmapped = %v, want [aws.rds.instance] — an unmappable type must be "+
+			"named so the caller can refuse to narrow", unmapped)
 	}
 }
 
-// TestAssetTypesToCloudFormation_AllUnknown: when none of the hints map, the
-// result is empty — the caller falls through to DescribeRegions.
-func TestAssetTypesToCloudFormation_AllUnknown(t *testing.T) {
-	got := assetTypesToCloudFormation([]string{"aws.s3.bucket", "aws.rds.instance"})
-	if len(got) != 0 {
-		t.Errorf("assetTypesToCloudFormation(all unknown) = %v, want empty (len 0)", got)
+func TestAssetTypesToResourceExplorer_EmptyInput(t *testing.T) {
+	mapped, unmapped := assetTypesToResourceExplorer(nil)
+	if mapped != nil || unmapped != nil {
+		t.Errorf("assetTypesToResourceExplorer(nil) = %v, %v, want nil, nil", mapped, unmapped)
 	}
 }
 
@@ -370,10 +390,10 @@ func TestResolveRegions_DiscoveryNarrowsRegions(t *testing.T) {
 	}
 }
 
-// TestResolveRegions_DiscoveryEmptyResultFallsBack: when discovery returns
+// TestResolveRegions_OfflineWinsOverDiscovery: when discovery returns
 // zero regions (valid index, no matching resources), the provider falls back
 // to DescribeRegions.
-func TestResolveRegions_DiscoveryEmptyResultFallsBack(t *testing.T) {
+func TestResolveRegions_OfflineWinsOverDiscovery(t *testing.T) {
 	emptyDiscoverer := newDiscovererWithClient(&fakeResourceExplorer{
 		pages: []*resourceexplorer2.SearchOutput{
 			{Resources: nil},
@@ -392,17 +412,17 @@ func TestResolveRegions_DiscoveryEmptyResultFallsBack(t *testing.T) {
 		t.Fatalf("resolveRegions: %v", err)
 	}
 	if source != "fixture" {
-		t.Errorf("source = %q, want fixture (offline path after discovery returned empty)", source)
+		t.Errorf("source = %q, want fixture (the offline path precedes discovery)", source)
 	}
 	if len(regions) != 2 {
 		t.Errorf("regions = %v, want 2 regions from fixture fallback", regions)
 	}
 }
 
-// TestResolveRegions_NoHintsUsesDescribeRegions: when asset type hints are
+// TestResolveRegions_OfflineNoHintsUsesFixture: when asset type hints are
 // empty or nil, the discovery path is skipped entirely and the provider falls
 // through to DescribeRegions.
-func TestResolveRegions_NoHintsUsesDescribeRegions(t *testing.T) {
+func TestResolveRegions_OfflineNoHintsUsesFixture(t *testing.T) {
 	p := &Provider{
 		log:     newTestLogger(),
 		offline: true,
@@ -446,5 +466,118 @@ func TestProvider_SizerIsWired(t *testing.T) {
 	}
 	if fam := s.Family("t3.micro"); fam != "t3" {
 		t.Errorf("Family(t3.micro) = %q, want t3", fam)
+	}
+}
+
+// The refusal paths. With no DescribeRegions sweep behind it, resolveRegions
+// must answer "which regions" correctly or not at all — every failure below
+// returns an error naming its remedy, because the alternative is a short region
+// list that looks exactly like a clean scan.
+
+// No aggregator index is the COMMON case, and must not stop a scan: the
+// discoverer sweeps the account's enabled regions, asking each one directly.
+//
+// The sweep needs a region list to sweep, which is the one DescribeRegions call
+// that remains — it enumerates regions to ASK, and hydration still happens only
+// where Resource Explorer found something.
+func TestResolveRegions_NoAggregatorSweepsRegions(t *testing.T) {
+	fix := loadTestFixture(t)
+	f := &fakeResourceExplorer{
+		aggregator: false,
+		pages: []*resourceexplorer2.SearchOutput{{
+			Resources: []types.Resource{
+				{Region: aws.String("eu-west-1"), ResourceType: aws.String("ec2:volume")},
+			},
+		}},
+	}
+	p := &Provider{log: newTestLogger()}
+	factory := func(region string) ec2API { return &fakeEC2{region: region, f: fix} }
+
+	regions, source, err := p.resolveRegionsWithClient(
+		context.Background(), factory, newDiscovererWithClient(f), []string{"aws.ec2.volume"})
+	if err != nil {
+		t.Fatalf("resolveRegions: %v — a missing aggregator index must not stop the scan", err)
+	}
+	if source != "resource_explorer" {
+		t.Errorf("source = %q, want resource_explorer", source)
+	}
+	if len(regions) != 1 || regions[0] != "eu-west-1" {
+		t.Errorf("regions = %v, want [eu-west-1]", regions)
+	}
+	// One Search per region, so each region's own LOCAL index is consulted.
+	if len(f.queries) != len(fix.RegionNames()) {
+		t.Errorf("issued %d searches for %d enabled regions; the sweep must ask each one",
+			len(f.queries), len(fix.RegionNames()))
+	}
+}
+
+// An asset type with no Resource Explorer mapping means the regions holding it
+// are unknowable, so narrowing on the remaining types could drop a region.
+func TestResolveRegions_RefusesUnmappedAssetType(t *testing.T) {
+	p := &Provider{
+		log:        newTestLogger(),
+		discoverer: newDiscovererWithClient(&fakeResourceExplorer{aggregator: true}),
+	}
+	_, _, err := p.resolveRegions(context.Background(), []string{"aws.ec2.volume", "aws.rds.instance"})
+	if err == nil {
+		t.Fatal("an unmapped asset type must not be silently dropped from discovery")
+	}
+	if !strings.Contains(err.Error(), "aws.rds.instance") {
+		t.Errorf("error %q does not name the unmappable type", err)
+	}
+}
+
+// A working aggregator index returning nothing is a REAL answer: the account
+// holds none of those types anywhere. That must scan zero regions rather than
+// erroring, or an empty account could never be scanned.
+func TestResolveRegions_EmptyAggregatorResultIsAnAnswer(t *testing.T) {
+	p := &Provider{
+		log: newTestLogger(),
+		discoverer: newDiscovererWithClient(&fakeResourceExplorer{
+			aggregator: true,
+			pages:      []*resourceexplorer2.SearchOutput{{Resources: nil}},
+		}),
+	}
+	regions, source, err := p.resolveRegions(context.Background(), []string{"aws.ec2.volume"})
+	if err != nil {
+		t.Fatalf("resolveRegions: %v — an empty index result is not a failure", err)
+	}
+	if source != "resource_explorer" {
+		t.Errorf("source = %q, want resource_explorer", source)
+	}
+	if len(regions) != 0 {
+		t.Errorf("regions = %v, want none", regions)
+	}
+}
+
+// No discoverer at all (a provider built without AWS config) must say so.
+func TestResolveRegions_RefusesWithoutDiscoverer(t *testing.T) {
+	p := &Provider{log: newTestLogger()}
+	_, _, err := p.resolveRegions(context.Background(), []string{"aws.ec2.volume"})
+	if err == nil {
+		t.Fatal("no discoverer must be an error, not an empty region list")
+	}
+	if !strings.Contains(err.Error(), "--aws-regions") {
+		t.Errorf("error %q does not offer the escape hatch", err)
+	}
+}
+
+// regionsWithoutIndex names the regions where a search answers a confident
+// empty. It is the difference between a first-run gap that is reported and one
+// that is silent.
+func TestRegionsWithoutIndex(t *testing.T) {
+	enabled := []string{"eu-west-1", "us-east-1", "us-west-1", "ap-south-1"}
+	indexed := map[string]bool{"eu-west-1": true, "us-east-1": true}
+
+	got := regionsWithoutIndex(enabled, indexed)
+	want := []string{"ap-south-1", "us-west-1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("regionsWithoutIndex = %v, want %v", got, want)
+	}
+
+	if got := regionsWithoutIndex(enabled, map[string]bool{
+		"eu-west-1": true, "us-east-1": true, "us-west-1": true, "ap-south-1": true,
+	}); len(got) != 0 {
+		t.Errorf("fully indexed account reported %v as un-indexed", got)
 	}
 }

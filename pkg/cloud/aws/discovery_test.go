@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -25,9 +26,22 @@ type fakeResourceExplorer struct {
 	pages   []*resourceexplorer2.SearchOutput
 	pageIdx int
 	err     error // non-nil to inject an error on the next call
+
+	// queries records every QueryString Search was called with, so a test can
+	// assert that types are asked for ONE PER QUERY. Joining them with " OR "
+	// returns zero results from the live API.
+	queries []string
+
+	// aggregator controls ListIndexes: when false it reports only LOCAL
+	// indexes, which cannot see the whole account.
+	aggregator     bool
+	listIndexesErr error
 }
 
-func (f *fakeResourceExplorer) Search(_ context.Context, _ *resourceexplorer2.SearchInput, _ ...func(*resourceexplorer2.Options)) (*resourceexplorer2.SearchOutput, error) {
+func (f *fakeResourceExplorer) Search(_ context.Context, in *resourceexplorer2.SearchInput, _ ...func(*resourceexplorer2.Options)) (*resourceexplorer2.SearchOutput, error) {
+	if in != nil && in.QueryString != nil {
+		f.queries = append(f.queries, *in.QueryString)
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -37,6 +51,18 @@ func (f *fakeResourceExplorer) Search(_ context.Context, _ *resourceexplorer2.Se
 	page := f.pages[f.pageIdx]
 	f.pageIdx++
 	return page, nil
+}
+
+func (f *fakeResourceExplorer) ListIndexes(_ context.Context, _ *resourceexplorer2.ListIndexesInput, _ ...func(*resourceexplorer2.Options)) (*resourceexplorer2.ListIndexesOutput, error) {
+	if f.listIndexesErr != nil {
+		return nil, f.listIndexesErr
+	}
+	if !f.aggregator {
+		return &resourceexplorer2.ListIndexesOutput{}, nil
+	}
+	return &resourceexplorer2.ListIndexesOutput{
+		Indexes: []types.Index{{Type: types.IndexTypeAggregator}},
+	}, nil
 }
 
 // searchRecord is the on-disk shape of a recorded Resource Explorer Search
@@ -73,9 +99,15 @@ func loadSearchFixture(t *testing.T) *fakeResourceExplorer {
 			ResourceType: &rt,
 		})
 	}
-	return &fakeResourceExplorer{pages: []*resourceexplorer2.SearchOutput{
-		{Resources: resources},
-	}}
+	// aggregator: the recording came from an account whose Search could see
+	// every region, which is the only configuration a region list may be
+	// built from.
+	return &fakeResourceExplorer{
+		aggregator: true,
+		pages: []*resourceexplorer2.SearchOutput{
+			{Resources: resources},
+		},
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -275,39 +307,71 @@ func TestDiscover_DeDuplicates(t *testing.T) {
 	}
 }
 
-// TestBuildSearchQuery constructs query strings for the Resource Explorer
-// search syntax.
+// TestBuildSearchQuery pins ONE TYPE PER QUERY.
+//
+// This function used to join types with " OR ", and this test asserted that
+// exact string — so it passed while the live API returned zero results for
+// every multi-type query, and region narrowing never once worked. Measured
+// 2026-08-14:
+//
+//	resourcetype:AWS::EC2::Volume                                  -> 3
+//	resourcetype:AWS::EC2::Volume OR resourcetype:AWS::EC2::Image  -> 0
+//
+// Resource Explorer ANDs terms and treats "OR" as a literal one.
 func TestBuildSearchQuery(t *testing.T) {
-	tests := []struct {
-		name  string
-		types []string
-		want  string
-	}{
-		{
-			name:  "single",
-			types: []string{"AWS::EC2::Volume"},
-			want:  "resourcetype:AWS::EC2::Volume",
-		},
-		{
-			name:  "two",
-			types: []string{"AWS::EC2::Volume", "AWS::EC2::EIP"},
-			want:  "resourcetype:AWS::EC2::Volume OR resourcetype:AWS::EC2::EIP",
-		},
-		{
-			name:  "three",
-			types: []string{"AWS::EC2::Volume", "AWS::EC2::EIP", "AWS::EC2::Instance"},
-			want:  "resourcetype:AWS::EC2::Volume OR resourcetype:AWS::EC2::EIP OR resourcetype:AWS::EC2::Instance",
-		},
-		{
-			name:  "empty",
-			types: nil,
-			want:  "",
-		},
+	for _, tt := range []struct{ in, want string }{
+		{"ec2:volume", "resourcetype:ec2:volume"},
+		{"ec2:elastic-ip", "resourcetype:ec2:elastic-ip"},
+		{"ec2:snapshot", "resourcetype:ec2:snapshot"},
+	} {
+		if got := buildSearchQuery(tt.in); got != tt.want {
+			t.Errorf("buildSearchQuery(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+		if strings.Contains(buildSearchQuery(tt.in), " OR ") {
+			t.Errorf("buildSearchQuery(%q) contains \" OR \", which matches nothing", tt.in)
+		}
 	}
-	for _, tt := range tests {
+}
+
+// Several types must produce several queries, never one combined query.
+func TestDiscover_IssuesOneQueryPerType(t *testing.T) {
+	f := &fakeResourceExplorer{aggregator: true}
+	d := newDiscovererWithClient(f)
+	types := []string{"ec2:volume", "ec2:image", "ec2:snapshot"}
+	if _, err := d.Discover(context.Background(), types); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(f.queries) != len(types) {
+		t.Fatalf("issued %d queries %v, want one per type (%d)", len(f.queries), f.queries, len(types))
+	}
+	for _, q := range f.queries {
+		if strings.Contains(q, " OR ") {
+			t.Errorf("query %q joins types with OR, which the API matches nothing for", q)
+		}
+	}
+}
+
+// The aggregator check is what stops a LOCAL-only index producing a confident,
+// partial region list. Measured against a real account with LOCAL indexes in
+// eu-west-1, eu-west-3 and us-east-1: a search returned the eu-west-1 instance
+// and never mentioned the one running in us-west-1.
+func TestHasAggregatorIndex(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		aggregator bool
+		want       bool
+	}{
+		{"aggregator present", true, true},
+		{"only local indexes", false, false},
+	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := buildSearchQuery(tt.types); got != tt.want {
-				t.Errorf("buildSearchQuery(%v) = %q, want %q", tt.types, got, tt.want)
+			d := newDiscovererWithClient(&fakeResourceExplorer{aggregator: tt.aggregator})
+			got, err := d.HasAggregatorIndex(context.Background())
+			if err != nil {
+				t.Fatalf("HasAggregatorIndex: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("HasAggregatorIndex = %v, want %v", got, tt.want)
 			}
 		})
 	}

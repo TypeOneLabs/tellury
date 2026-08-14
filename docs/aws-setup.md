@@ -25,7 +25,8 @@ organization-level scans.
 | `autoscaling:DescribeLaunchConfigurations` | The same, for Auto Scaling launch configurations. Note this is an `autoscaling:` action, not `ec2:`. |
 | `cloudwatch:GetMetricData` | Read instance CPU utilization. Without it, metric-dependent rules skip and say so. Note this call sits outside the CloudWatch free tier at $0.01 per 1,000 metrics requested — a scan needs tens of thousands of instances before that rounds to a cent. |
 | `pricing:GetProducts` | Load the live Price List catalogue. Without it every resource that needs a price is skipped as unpriced — there is no fallback table. |
-| `resource-explorer-2:Search` | Query the aggregator index to find which regions hold resources of the types the selected rules need, so the scan sweeps only those regions instead of every enabled region. Optional — when missing, the scan falls back to `DescribeRegions`. |
+| `resource-explorer-2:Search` | Find which regions hold the resource types the selected rules need. Needed unless you pass `--aws-regions`: there is no EC2 `DescribeRegions` sweep. Note this call CREATES an index in an un-indexed region — the one write a scan performs. |
+| `resource-explorer-2:ListIndexes` | Learn which regions Resource Explorer can already answer for, so the ones it cannot are reported rather than silently empty. |
 
 ### Organization / OU scans only
 
@@ -98,21 +99,65 @@ Account outcomes: 1 scanned, 1 unreachable (AccessDenied assuming OrganizationAc
 `Status` is `degraded` whenever an account could not be reached, so a partial scan is
 visible at a glance and in the JSON as `scan_status`, not only in the outcomes list.
 
-## Resource Explorer and region narrowing
+## Resource Explorer decides which regions are scanned
 
-When Resource Explorer is available in an account (an aggregator index exists
-and the caller has `resource-explorer-2:Search`), tellury queries it to learn
-which regions actually hold EBS volumes and Elastic IPs. The scan then hydrates
-only those regions — typically 2–4 instead of all 17+ enabled regions — cutting
-the per-account API call count from ~35 to ~10.
+Resource Explorer is how tellury knows which regions to look in. There is no
+`DescribeRegions` sweep of the EC2 APIs: sweeping every enabled region took ~70s
+against an account whose resources sat in two. The same account now scans in
+~15s.
 
-When Resource Explorer is unavailable (no aggregator index, missing permission,
-or an API error), the scan falls back to `ec2:DescribeRegions` and sweeps every
-enabled region. This fallback is per-account: in an organization scan, one
-account may be narrowed by discovery while its neighbour falls back to the full
-sweep.
+**You do not have to set anything up.** If the account has an aggregator index,
+one query per resource type covers every indexed region. If it does not — which
+is most accounts — tellury asks each enabled region directly. Either way the
+scan then hydrates only the regions that came back with something.
 
-The scan summary tells you which path each account took:
+### Data can be missing on the first runs
+
+This is the cost of requiring no setup, and it is worth understanding before you
+trust a first scan.
+
+Resource Explorer only knows about a Region that has an **index**. AWS is
+explicit: *"If you do not create a user-owned index in a Region, resources from
+that Region will not appear in cross-region search results from other Regions."*
+An un-indexed Region does not return an error when searched — it returns:
+
+```json
+"Count": { "TotalResources": 0, "Complete": true }
+```
+
+A confident empty, indistinguishable from a Region that is genuinely idle.
+
+Searching an un-indexed Region **creates** its index as a side effect. So the
+first scan of a Region reports nothing there, and a later scan sees it once the
+index populates — minutes for tagged resources, up to about two hours for
+untagged ones. Two consequences:
+
+- **The first scan of a new account under-reports.** Expect to run it twice, a
+  couple of hours apart, before treating the total as complete.
+- **A newly indexed Region stays empty for a while.** Its index exists, so it is
+  no longer listed as missing, but it has not finished populating.
+
+tellury names the Regions it knows Resource Explorer cannot yet answer for:
+
+```
+WARN regions have no Resource Explorer index yet; resources there are NOT
+     reported by this scan ... regions=11 list=ap-northeast-1,ap-south-1,...
+```
+
+**To scan a Region immediately, name it.** Explicit regions skip Resource
+Explorer entirely and read the EC2 APIs directly, so nothing is missed and
+nothing is created:
+
+```bash
+tellury scan --aws-account 123456789012 --aws-regions us-west-1
+```
+
+**Note that searching writes.** Creating an index is the one non-read-only thing
+a scan can do, and it happens only on this path. If that is unacceptable in your
+account, pass `--aws-regions` and Resource Explorer is never called.
+
+An empty result from a Region that IS indexed is a real answer: nothing of those
+types is there.
 
 ```
 SUMMARY
@@ -123,9 +168,8 @@ Regions        4 regions (resource_explorer)
 ...
 ```
 
-The `(resource_explorer)` / `(describe_regions)` / `(explicit)` annotation
-appears after the region count in both the summary block and the JSON
-output (`region_source` field).
+The `(resource_explorer)` / `(explicit)` annotation appears after the region
+count in both the summary block and the JSON output (`region_source` field).
 
 ### Staleness
 
@@ -158,7 +202,8 @@ never produce a stale attribute or a wrong price.
         "autoscaling:DescribeLaunchConfigurations",
         "cloudwatch:GetMetricData",
         "pricing:GetProducts",
-        "resource-explorer-2:Search"
+        "resource-explorer-2:Search",
+        "resource-explorer-2:ListIndexes"
       ],
       "Resource": "*"
     }

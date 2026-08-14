@@ -949,31 +949,116 @@ func (p *Provider) resolveRegionsWithClient(
 		return p.fixture.RegionNames(), "fixture", nil
 	}
 
-	// Map asset-type hints to CloudFormation resource type identifiers.
-	cfTypes := assetTypesToCloudFormation(assetTypeHints)
-	if len(cfTypes) > 0 && discoverer != nil {
-		discovered, err := discoverer.Discover(ctx, cfTypes)
-		if err != nil {
-			p.log.Info("resource explorer unavailable, falling back to DescribeRegions sweep",
-				"err", err)
-		} else if len(discovered) > 0 {
-			regions := make([]string, 0, len(discovered))
-			for r := range discovered {
-				regions = append(regions, r)
-			}
-			sort.Strings(regions)
-			p.log.Info("resource explorer narrowed regions",
-				"discovered", len(regions),
-				"regions", strings.Join(regions, ","))
-			return regions, "resource_explorer", nil
-		}
+	// Resource Explorer is the region source. There is no DescribeRegions
+	// sweep: sweeping every enabled region cost ~70s against an account whose
+	// resources sat in two, and it ran on every scan because the old combined
+	// query silently matched nothing.
+	//
+	// The cost of dropping the sweep is that "which regions" must now be
+	// answered correctly or not at all. Each failure below is therefore an
+	// error naming its remedy — never a shorter region list, which would look
+	// exactly like a clean scan.
+	if discoverer == nil {
+		return nil, "", fmt.Errorf("aws: no Resource Explorer client; pass --aws-regions to scan specific regions")
 	}
 
-	// DescribeRegions fallback.
+	mapped, unmapped := assetTypesToResourceExplorer(assetTypeHints)
+	if len(unmapped) > 0 {
+		return nil, "", fmt.Errorf("aws: no Resource Explorer resource type is mapped for %s, "+
+			"so the regions holding it cannot be discovered; pass --aws-regions to scan "+
+			"specific regions, and please report this so the mapping can be added",
+			strings.Join(unmapped, ", "))
+	}
+	if len(mapped) == 0 {
+		return nil, "", fmt.Errorf("aws: no asset types requested; nothing to discover")
+	}
+
+	// An aggregator index lets one query per type cover every indexed region.
+	// Without one, each region has to be asked directly — which needs no setup
+	// from the operator, the trade being the first-run gap documented on
+	// DiscoverAcrossRegions.
+	hasAggregator, err := discoverer.HasAggregatorIndex(ctx)
+	if err != nil {
+		p.log.Info("could not check for a Resource Explorer aggregator index; sweeping regions instead",
+			"err", err)
+	}
+
+	var discovered map[string][]string
+	if hasAggregator {
+		discovered, err = discoverer.Discover(ctx, mapped)
+	} else {
+		// The sweep needs the region list to sweep. This is the one
+		// DescribeRegions call that remains: it enumerates the account's
+		// enabled regions, it does not hydrate any of them.
+		var enabled []string
+		enabled, err = enabledRegions(ctx, ec2Factory)
+		if err != nil {
+			return nil, "", err
+		}
+
+		// Which regions Resource Explorer can actually answer for TODAY.
+		// Asking an un-indexed region returns "0 results, Complete: true" and
+		// creates its index as a side effect, so resources there are missed on
+		// this scan and found on a later one. Report those regions by name:
+		// this project does not ship a gap it could have described.
+		if indexed, idxErr := discoverer.IndexedRegions(ctx); idxErr != nil {
+			p.log.Warn("could not list Resource Explorer indexes; cannot tell which regions it can answer for",
+				"err", idxErr)
+		} else if missing := regionsWithoutIndex(enabled, indexed); len(missing) > 0 {
+			p.log.Warn("regions have no Resource Explorer index yet; resources there are NOT "+
+				"reported by this scan. Searching them creates their index, so a later scan "+
+				"will see them (minutes for tagged resources, up to ~2h otherwise). "+
+				"Use --aws-regions to scan them now",
+				"regions", len(missing),
+				"list", strings.Join(missing, ","))
+		}
+
+		discovered, err = discoverer.DiscoverAcrossRegions(ctx, mapped, enabled)
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("aws: Resource Explorer discovery failed: %w\n"+
+			"Pass --aws-regions to scan specific regions", err)
+	}
+
+	// An empty result from a working aggregator index is a real answer: the
+	// account holds none of these resource types anywhere. The scan proceeds
+	// with no regions and reports no resources, which is true.
+	regions := make([]string, 0, len(discovered))
+	for r := range discovered {
+		regions = append(regions, r)
+	}
+	sort.Strings(regions)
+	p.log.Info("resource explorer resolved regions",
+		"regions", len(regions),
+		"list", strings.Join(regions, ","),
+		"types", strings.Join(mapped, ","),
+		"aggregator", hasAggregator)
+	return canonicaliseRegions(regions), "resource_explorer", nil
+}
+
+// regionsWithoutIndex returns the enabled regions Resource Explorer has no
+// index for, sorted. These are exactly the regions whose search will answer a
+// confident empty on this scan.
+func regionsWithoutIndex(enabled []string, indexed map[string]bool) []string {
+	var missing []string
+	for _, r := range enabled {
+		if !indexed[r] {
+			missing = append(missing, r)
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
+// enabledRegions lists the regions the account has enabled. It is the input to
+// the per-region Resource Explorer sweep — the regions to ASK, not the regions
+// to hydrate. Hydration still happens only where Resource Explorer found
+// something.
+func enabledRegions(ctx context.Context, ec2Factory func(string) ec2API) ([]string, error) {
 	client := ec2Factory("")
 	out, err := client.DescribeRegions(ctx, &ec2.DescribeRegionsInput{AllRegions: aws.Bool(false)})
 	if err != nil {
-		return nil, "", fmt.Errorf("aws: DescribeRegions: %w", err)
+		return nil, fmt.Errorf("aws: DescribeRegions: %w", err)
 	}
 	regions := make([]string, 0, len(out.Regions))
 	for _, r := range out.Regions {
@@ -982,32 +1067,48 @@ func (p *Provider) resolveRegionsWithClient(
 		}
 	}
 	if len(regions) == 0 {
-		return nil, "", fmt.Errorf("aws: DescribeRegions returned no enabled regions")
+		return nil, fmt.Errorf("aws: DescribeRegions returned no enabled regions")
 	}
-	return canonicaliseRegions(regions), "describe_regions", nil
+	return canonicaliseRegions(regions), nil
 }
 
 // assetTypeToCloudFormation maps the provider's own asset-type tokens to
 // CloudFormation resource type identifiers.
-var assetTypeToCloudFormation = map[string]string{
-	"aws.ec2.volume":  "AWS::EC2::Volume",
-	"aws.ec2.address": "AWS::EC2::EIP",
-	"aws.ec2.image":   "AWS::EC2::Image",
+// assetTypeToResourceExplorer maps an asset type to the resource type string
+// Resource Explorer uses.
+//
+// These are the values Search RETURNS, confirmed against a live index on
+// 2026-08-14. The CloudFormation-style spellings that were here before
+// ("AWS::EC2::Image") are not reliably accepted: some resolve and some match
+// nothing, with no error either way.
+//
+// Every asset type an AWS rule can declare must appear here. A missing entry is
+// not a slow path — resolveRegions refuses to narrow when a needed type has no
+// mapping, because a region holding only that type would be dropped from the
+// scan without a word.
+var assetTypeToResourceExplorer = map[string]string{
+	"aws.ec2.volume":   "ec2:volume",
+	"aws.ec2.address":  "ec2:elastic-ip",
+	"aws.ec2.image":    "ec2:image",
+	"aws.ec2.instance": "ec2:instance",
+	"aws.ec2.snapshot": "ec2:snapshot",
 }
 
-// assetTypesToCloudFormation converts asset-type hints to CloudFormation
-// resource type strings, dropping any hint that has no mapping.
-func assetTypesToCloudFormation(hints []string) []string {
+// assetTypesToResourceExplorer converts asset-type hints to Resource Explorer
+// resource type strings. unmapped names any hint with no mapping — the caller
+// must not narrow the region list when that list is non-empty.
+func assetTypesToResourceExplorer(hints []string) (mapped []string, unmapped []string) {
 	if len(hints) == 0 {
-		return nil
+		return nil, nil
 	}
-	out := make([]string, 0, len(hints))
 	for _, h := range hints {
-		if cf, ok := assetTypeToCloudFormation[h]; ok {
-			out = append(out, cf)
+		if rt, ok := assetTypeToResourceExplorer[h]; ok {
+			mapped = append(mapped, rt)
+			continue
 		}
+		unmapped = append(unmapped, h)
 	}
-	return out
+	return mapped, unmapped
 }
 
 // hasAssetTypeHint reports whether hints contains exactly want. Empty hints
