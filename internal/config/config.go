@@ -92,6 +92,14 @@ type Scan struct {
 	// can pass either spelling.
 	AWSRegions []string
 
+	// AWSUseResourceExplorer opts into AWS Resource Explorer region narrowing
+	// (--aws-use-resource-explorer). It is false by default: the default scan
+	// enumerates enabled regions with ec2:DescribeRegions and hydrates every
+	// one, making zero Resource Explorer calls and performing no writes. The
+	// flag path is faster but can be incomplete on early runs while indexes
+	// are generated, and searching an un-indexed region creates its index.
+	AWSUseResourceExplorer bool
+
 	// Azure scope dimensions. Tenant, ManagementGroup and Subscription are
 	// the three top-level dimensions (exactly one is set). ResourceGroup is
 	// not a dimension by itself: it is an optional filter that is meaningful

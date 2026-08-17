@@ -36,6 +36,12 @@ import (
 // use a different name configure it with --aws-role-name.
 const DefaultRoleName = "OrganizationAccountAccessRole"
 
+// regionCountUnknown is the sentinel for a per-account region coverage count
+// that a mode could not determine without an API call the mode deliberately
+// does not make (for example, the enabled-region count in the Resource
+// Explorer aggregator path).
+const regionCountUnknown = -1
+
 // ec2API is the subset of the EC2 API this provider calls. It is what lets a
 // fixture (offline replay) stand in for the live SDK client without touching
 // the network: the provider drives DescribeRegions, the DescribeVolumes
@@ -94,6 +100,14 @@ type AccountStatus struct {
 	Name   string `json:"name,omitempty"`
 	Status string `json:"status"` // "scanned", "unreachable", "suspended", "no_resources"
 	Reason string `json:"reason,omitempty"`
+
+	// RegionsEnabled is the number of enabled regions considered for this
+	// account. RegionsSearchable is the number of those regions Resource
+	// Explorer could actually answer for when the scan ran. A negative value
+	// means the mode could not determine the count without making an API call
+	// it deliberately avoids.
+	RegionsEnabled    int `json:"regions_enabled"`
+	RegionsSearchable int `json:"regions_searchable"`
 }
 
 // Provider is the AWS implementation of cloud.Provider. It ingests a single
@@ -109,8 +123,16 @@ type Provider struct {
 	pricer   pricing.Pricer
 	explicit []string // --aws-regions values, canonicalised and de-duplicated
 
+	// useResourceExplorer opts into AWS Resource Explorer region narrowing
+	// (--aws-use-resource-explorer). It is false by default: the default scan
+	// enumerates enabled regions with ec2:DescribeRegions and hydrates every
+	// one, making zero Resource Explorer calls. When true, discoverer below
+	// is built and the region list is narrowed before hydration.
+	useResourceExplorer bool
+
 	// discoverer queries AWS Resource Explorer to narrow the region list
-	// before hydration. It is nil on the offline path.
+	// before hydration. It is nil unless useResourceExplorer is true, and is
+	// always nil on the offline path.
 	discoverer *Discoverer
 
 	// orgClient is the Organizations API client, pinned to us-east-1. The
@@ -130,8 +152,17 @@ type Provider struct {
 	// lastRegions carries the region coverage of the most recent Ingest, so the
 	// CLI can report "N regions analyzed (source)" in the scan summary
 	// without walking the graph or re-deriving the source from the flags.
+	// For organization scans it is the union across every successfully
+	// scanned account, never just the account that happened to finish last.
 	lastRegions      []string
 	lastRegionSource string
+
+	// lastRegionEnabledCount and lastRegionSearchableCount are the region
+	// coverage figures for the most recent successful account resolution.
+	// The organization path copies them into that account's AccountStatus.
+	// regionCountUnknown means the figure was not available in that mode.
+	lastRegionEnabledCount    int
+	lastRegionSearchableCount int
 
 	// sizer answers "what else exists in this instance's family", which is
 	// what lets a rule recommend a smaller size rather than only stop/delete.
@@ -174,6 +205,14 @@ func WithExplicitRegions(regions []string) Option {
 	}
 }
 
+// WithUseResourceExplorer opts into AWS Resource Explorer region narrowing
+// (--aws-use-resource-explorer). The default is false: without it, the
+// provider sweeps every region returned by ec2:DescribeRegions and makes no
+// Resource Explorer calls at all.
+func WithUseResourceExplorer(use bool) Option {
+	return func(p *Provider) { p.useResourceExplorer = use }
+}
+
 // WithRoleName sets the name of the IAM role to assume in member accounts
 // during organization/OU scans. Defaults to OrganizationAccountAccessRole.
 func WithRoleName(name string) Option {
@@ -194,6 +233,11 @@ func WithRoleName(name string) Option {
 // and the rule skips. When TELLURY_PRICE_FIXTURE is set, the catalogue loads
 // from that file instead of calling the API — a test-only hook, never a
 // user-facing flag.
+//
+// Resource Explorer is opt-in. The default scan constructs NO Discoverer and
+// therefore makes no Resource Explorer calls; region selection is the direct
+// ec2:DescribeRegions sweep. Only WithUseResourceExplorer(true) constructs a
+// Discoverer.
 //
 // credentialResolveTimeout bounds the credential chain's own resolution. The
 // IMDS fallback is the slow leg: off an EC2 instance it retries until its
@@ -239,7 +283,13 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 				"or run on an instance with a role attached: %w", err)
 		}
 		p.awsCfg = cfg
-		p.discoverer = NewDiscoverer(cfg)
+
+		// Resource Explorer is opt-in. The default path deliberately does not
+		// construct a Discoverer, so a default scan is read-only with respect
+		// to Resource Explorer (Search/ListIndexes are never called).
+		if p.useResourceExplorer {
+			p.discoverer = NewDiscoverer(cfg)
+		}
 
 		// Organizations client pinned to us-east-1. The Organizations API is
 		// a global service; a client built for any other region will fail.
@@ -308,13 +358,72 @@ func (p *Provider) Close() error { return nil }
 
 // Regions returns the region list and source of the most recent Ingest. The
 // source is one of "explicit" (--aws-regions), "resource_explorer" (discovery
-// narrowed the list from Resource Explorer), "describe_regions" (fallback:
-// Resource Explorer was unavailable or returned no index, so every enabled
-// region was swept) or "fixture" (offline replay). The CLI reports both in the
-// scan summary so an operator always knows which regions a scan actually
-// covered and why.
+// narrowed the list from Resource Explorer), "describe_regions" (the default:
+// every enabled region was enumerated and hydrated) or "fixture" (offline
+// replay). The CLI reports both in the scan summary so an operator always
+// knows which regions a scan actually covered and why.
 func (p *Provider) Regions() ([]string, string) {
 	return append([]string(nil), p.lastRegions...), p.lastRegionSource
+}
+
+// unionRegions returns the sorted, de-duplicated union of two canonical
+// region lists. It is deliberately independent of order and safe when either
+// side is nil or empty.
+func unionRegions(a, b []string) []string {
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, r := range a {
+		if r == "" || seen[r] {
+			continue
+		}
+		seen[r] = true
+		out = append(out, r)
+	}
+	for _, r := range b {
+		if r == "" || seen[r] {
+			continue
+		}
+		seen[r] = true
+		out = append(out, r)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// mergeRegionSource combines two account-level region sources. Equal sources
+// collapse to that source; different sources become "mixed" so a summary can
+// never claim a single resolution method when accounts disagreed.
+func mergeRegionSource(existing, incoming string) string {
+	switch {
+	case existing == "":
+		return incoming
+	case existing == incoming:
+		return existing
+	default:
+		return "mixed"
+	}
+}
+
+// setRegionCoverage records the per-account region coverage for the most
+// recent successful region resolution.
+func (p *Provider) setRegionCoverage(enabled, searchable int) {
+	p.lastRegionEnabledCount = enabled
+	p.lastRegionSearchableCount = searchable
+}
+
+// searchableRegionCount returns how many enabled regions have a Resource
+// Explorer index. A nil index map means the count is unknown.
+func searchableRegionCount(enabled []string, indexed map[string]bool) int {
+	if indexed == nil {
+		return regionCountUnknown
+	}
+	n := 0
+	for _, r := range enabled {
+		if indexed[r] {
+			n++
+		}
+	}
+	return n
 }
 
 // AccountStatuses returns the status of every account in the organization tree
@@ -323,6 +432,20 @@ func (p *Provider) Regions() ([]string, string) {
 // the summary and JSON output when non-empty.
 func (p *Provider) AccountStatuses() []AccountStatus {
 	return append([]AccountStatus(nil), p.accountStatuses...)
+}
+
+// newScannedAccountStatus builds the AccountStatus for one successfully
+// scanned account, carrying the region coverage figures from the resolution
+// that just finished.
+func (p *Provider) newScannedAccountStatus(id, name, reason string) AccountStatus {
+	return AccountStatus{
+		ID:               id,
+		Name:             name,
+		Status:           "scanned",
+		Reason:           reason,
+		RegionsEnabled:    p.lastRegionEnabledCount,
+		RegionsSearchable: p.lastRegionSearchableCount,
+	}
 }
 
 // Ingest performs ingestion for the given scope. For a single-account scope
@@ -340,6 +463,15 @@ func (p *Provider) Ingest(ctx context.Context, sc cloud.Scope, assetTypeHints []
 	if sc.AWS == nil {
 		return nil, fmt.Errorf("aws: scope requires an AWS scope block")
 	}
+
+	// Every Ingest starts from a clean region-coverage slate. The per-account
+	// ingestion below unions into these fields, so a single-account scan
+	// reports that account and an organization scan reports every account.
+	p.lastRegions = nil
+	p.lastRegionSource = ""
+	p.lastRegionEnabledCount = 0
+	p.lastRegionSearchableCount = 0
+	p.accountStatuses = nil
 
 	// Single-account path: the original behaviour, unchanged.
 	if sc.AWS.Account != "" {
@@ -368,8 +500,9 @@ func (p *Provider) ingestAccount(ctx context.Context, account string, assetTypeH
 
 // ingestAccountWithClient ingests a single account using the provided EC2 and
 // Auto Scaling client factories and optional discoverer. The discoverer may be
-// nil for accounts where Resource Explorer is unavailable; in that case the
-// account falls back to DescribeRegions.
+// nil for accounts where Resource Explorer is not enabled (the default) or
+// unavailable; in that case the account is swept directly through
+// DescribeRegions.
 func (p *Provider) ingestAccountWithClient(
 	ctx context.Context,
 	account string,
@@ -382,8 +515,6 @@ func (p *Provider) ingestAccountWithClient(
 	if err != nil {
 		return nil, err
 	}
-	p.lastRegions = append([]string(nil), regions...)
-	p.lastRegionSource = source
 
 	g := graph.New()
 	edges := make(map[graph.Edge]struct{}, 1024)
@@ -561,6 +692,14 @@ func (p *Provider) ingestAccountWithClient(
 		"container_nodes", g.NodeCount()-g.ResourceNodeCount(),
 		"edges", g.EdgeCount(),
 		"dangling_edges", g.DanglingEdges())
+
+	// Union this account's regions into the provider's overall coverage. A
+	// single-account scan is simply that account; an organization scan keeps
+	// every successful account instead of letting the last one overwrite the
+	// rest.
+	p.lastRegions = unionRegions(p.lastRegions, regions)
+	p.lastRegionSource = mergeRegionSource(p.lastRegionSource, source)
+
 	return g, nil
 }
 
@@ -649,10 +788,7 @@ func (p *Provider) ingestOrganization(ctx context.Context, scope cloud.AWSScope,
 				return true
 			})
 			scanned++
-			p.accountStatuses = append(p.accountStatuses, AccountStatus{
-				ID: accountID, Name: acctName, Status: "scanned",
-				Reason: "caller's own account; no role assumed",
-			})
+			p.accountStatuses = append(p.accountStatuses, p.newScannedAccountStatus(accountID, acctName, "caller's own account; no role assumed"))
 			continue
 		}
 
@@ -673,10 +809,9 @@ func (p *Provider) ingestOrganization(ctx context.Context, scope cloud.AWSScope,
 		}
 
 		// Build a per-account EC2 client using the assumed role credentials
-		// and a fresh Discoverer for Resource Explorer (if available in this
-		// account). The Discoverer may return ErrNoIndex; the per-account
-		// resolveRegions handles that gracefully by falling back to
-		// DescribeRegions.
+		// and, only when Resource Explorer is enabled, a fresh Discoverer for
+		// that account. The Discoverer may return ErrNoIndex; the per-account
+		// resolveRegions handles that gracefully.
 		acctCfg := p.awsCfg.Copy()
 		acctCfg.Credentials = credentials.NewStaticCredentialsProvider(
 			creds.AccessKeyID,
@@ -690,7 +825,10 @@ func (p *Provider) ingestOrganization(ctx context.Context, scope cloud.AWSScope,
 		acctASG := func(region string) autoScalingAPI {
 			return newAutoScalingClient(acctCfg, region)
 		}
-		acctDiscoverer := NewDiscoverer(acctCfg)
+		var acctDiscoverer *Discoverer
+		if p.useResourceExplorer {
+			acctDiscoverer = NewDiscoverer(acctCfg)
+		}
 
 		acctGraph, err := p.ingestAccountWithClient(ctx, accountID, acctEC2, acctASG, acctDiscoverer, assetTypeHints)
 		if err != nil {
@@ -730,11 +868,7 @@ func (p *Provider) ingestOrganization(ctx context.Context, scope cloud.AWSScope,
 		})
 
 		scanned++
-		p.accountStatuses = append(p.accountStatuses, AccountStatus{
-			ID:     accountID,
-			Name:   acctName,
-			Status: "scanned",
-		})
+		p.accountStatuses = append(p.accountStatuses, p.newScannedAccountStatus(accountID, acctName, ""))
 	}
 
 	// Report suspended accounts from the tree.
@@ -933,6 +1067,17 @@ func (p *Provider) resolveRegions(ctx context.Context, assetTypeHints []string) 
 // resolveRegionsWithClient resolves regions using the given EC2 client factory
 // and discoverer. It is the shared implementation for both the caller's own
 // account (single-account scan) and assumed-role accounts (organization scan).
+//
+// The three modes, in precedence order:
+//
+//  1. --aws-regions: scan exactly those regions. Resource Explorer is never
+//     called.
+//  2. --aws-use-resource-explorer: narrow regions through Resource Explorer
+//     (aggregator query if an aggregator index exists, otherwise the
+//     per-region sweep).
+//  3. neither (the default): enumerate enabled regions with
+//     ec2:DescribeRegions and hydrate all of them. This makes no Resource
+//     Explorer calls, so a default scan performs no writes.
 func (p *Provider) resolveRegionsWithClient(
 	ctx context.Context,
 	ec2Factory func(region string) ec2API,
@@ -940,23 +1085,42 @@ func (p *Provider) resolveRegionsWithClient(
 	assetTypeHints []string,
 ) ([]string, string, error) {
 	if len(p.explicit) > 0 {
+		p.setRegionCoverage(len(p.explicit), len(p.explicit))
 		return p.explicit, "explicit", nil
 	}
 	if p.offline {
 		if p.fixture == nil {
 			return nil, "", fmt.Errorf("aws: offline provider has no fixture")
 		}
-		return p.fixture.RegionNames(), "fixture", nil
+		regions := p.fixture.RegionNames()
+		p.setRegionCoverage(len(regions), len(regions))
+		return regions, "fixture", nil
+	}
+
+	// The default mode is the direct DescribeRegions sweep restored from
+	// v0.2.1. It is slower than Resource Explorer and complete on the first
+	// run. It performs no writes and never constructs or calls Resource
+	// Explorer.
+	if !p.useResourceExplorer {
+		regions, err := enabledRegions(ctx, ec2Factory)
+		if err != nil {
+			return nil, "", err
+		}
+		regions = canonicaliseRegions(regions)
+		p.setRegionCoverage(len(regions), len(regions))
+		p.log.Info("describe_regions resolved regions",
+			"regions", len(regions),
+			"list", strings.Join(regions, ","))
+		return regions, "describe_regions", nil
 	}
 
 	// Resource Explorer is the region source. There is no DescribeRegions
-	// sweep: sweeping every enabled region cost ~70s against an account whose
-	// resources sat in two, and it ran on every scan because the old combined
-	// query silently matched nothing.
+	// sweep in this mode beyond the one used to enumerate regions for the
+	// per-region sweep when no aggregator index exists.
 	//
-	// The cost of dropping the sweep is that "which regions" must now be
-	// answered correctly or not at all. Each failure below is therefore an
-	// error naming its remedy — never a shorter region list, which would look
+	// The cost of narrowing is that "which regions" must be answered
+	// correctly or not at all. Each failure below is therefore an error
+	// naming its remedy — never a shorter region list, which would look
 	// exactly like a clean scan.
 	if discoverer == nil {
 		return nil, "", fmt.Errorf("aws: no Resource Explorer client; pass --aws-regions to scan specific regions")
@@ -985,13 +1149,23 @@ func (p *Provider) resolveRegionsWithClient(
 
 	var discovered map[string][]string
 	if hasAggregator {
+		// Coverage for an aggregator query: searchable means "has a local
+		// index", because an aggregator only replicates existing local
+		// indexes. The enabled count is deliberately not resolved here — this
+		// mode makes no DescribeRegions call — so it is reported as unknown.
+		if indexed, idxErr := discoverer.IndexedRegions(ctx); idxErr != nil {
+			p.log.Warn("could not list Resource Explorer indexes; cannot tell which regions it can answer for",
+				"err", idxErr)
+			p.setRegionCoverage(regionCountUnknown, regionCountUnknown)
+		} else {
+			p.setRegionCoverage(regionCountUnknown, len(indexed))
+		}
 		discovered, err = discoverer.Discover(ctx, mapped)
 	} else {
 		// The sweep needs the region list to sweep. This is the one
 		// DescribeRegions call that remains: it enumerates the account's
 		// enabled regions, it does not hydrate any of them.
-		var enabled []string
-		enabled, err = enabledRegions(ctx, ec2Factory)
+		enabled, err := enabledRegions(ctx, ec2Factory)
 		if err != nil {
 			return nil, "", err
 		}
@@ -1001,16 +1175,21 @@ func (p *Provider) resolveRegionsWithClient(
 		// creates its index as a side effect, so resources there are missed on
 		// this scan and found on a later one. Report those regions by name:
 		// this project does not ship a gap it could have described.
-		if indexed, idxErr := discoverer.IndexedRegions(ctx); idxErr != nil {
+		indexed, idxErr := discoverer.IndexedRegions(ctx)
+		if idxErr != nil {
 			p.log.Warn("could not list Resource Explorer indexes; cannot tell which regions it can answer for",
 				"err", idxErr)
-		} else if missing := regionsWithoutIndex(enabled, indexed); len(missing) > 0 {
-			p.log.Warn("regions have no Resource Explorer index yet; resources there are NOT "+
-				"reported by this scan. Searching them creates their index, so a later scan "+
-				"will see them (minutes for tagged resources, up to ~2h otherwise). "+
-				"Use --aws-regions to scan them now",
-				"regions", len(missing),
-				"list", strings.Join(missing, ","))
+			p.setRegionCoverage(len(enabled), regionCountUnknown)
+		} else {
+			if missing := regionsWithoutIndex(enabled, indexed); len(missing) > 0 {
+				p.log.Warn("regions have no Resource Explorer index yet; resources there are NOT "+
+					"reported by this scan. Searching them creates their index, so a later scan "+
+					"will see them (minutes for tagged resources, up to ~2h otherwise). "+
+					"Use --aws-regions to scan them now",
+					"regions", len(missing),
+					"list", strings.Join(missing, ","))
+			}
+			p.setRegionCoverage(len(enabled), searchableRegionCount(enabled, indexed))
 		}
 
 		discovered, err = discoverer.DiscoverAcrossRegions(ctx, mapped, enabled)
@@ -1051,9 +1230,8 @@ func regionsWithoutIndex(enabled []string, indexed map[string]bool) []string {
 }
 
 // enabledRegions lists the regions the account has enabled. It is the input to
-// the per-region Resource Explorer sweep — the regions to ASK, not the regions
-// to hydrate. Hydration still happens only where Resource Explorer found
-// something.
+// the default DescribeRegions sweep and to the per-region Resource Explorer
+// sweep — the regions to hydrate by default, or to ASK when narrowing.
 func enabledRegions(ctx context.Context, ec2Factory func(string) ec2API) ([]string, error) {
 	client := ec2Factory("")
 	out, err := client.DescribeRegions(ctx, &ec2.DescribeRegionsInput{AllRegions: aws.Bool(false)})

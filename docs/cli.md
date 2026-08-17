@@ -71,10 +71,21 @@ notably that a missing resource-type permission yields an empty result rather th
 | Flag | Default | Meaning |
 |---|---|---|
 | `--aws-regions` | every region enabled for the account | Regions to sweep. An availability-zone form like `us-east-1a` is accepted and flattened to its region. |
+| `--aws-use-resource-explorer` | off | Narrow regions through AWS Resource Explorer instead of sweeping every `DescribeRegions` region. Faster, but may miss resources on early runs while indexes are generated, and searching creates indexes. |
 | `--aws-role-name` | `OrganizationAccountAccessRole` | IAM role to assume in member accounts during an organization or OU scan. |
 
-Narrowing `--aws-regions` is the single biggest lever on scan time: without it every enabled
-region is swept for every account in scope.
+AWS region selection has three modes, in precedence order:
+
+1. `--aws-regions` — scan exactly the named regions. Resource Explorer is never called.
+   This is the fastest mode and the recommended way to speed up the default.
+2. `--aws-use-resource-explorer` — narrow regions through Resource Explorer. Fast, may be
+   incomplete on early runs, and creates indexes.
+3. neither (the default) — enumerate enabled regions with `ec2:DescribeRegions` and hydrate
+   all of them. Slower, complete on the first run, and makes no Resource Explorer calls, so
+   a default scan performs no writes.
+
+The chosen mode is reported in the summary's `Regions` line and in JSON as `region_source`
+(`explicit`, `describe_regions`, `resource_explorer`, or `fixture` for an offline replay).
 
 ### Selecting rules
 
@@ -184,6 +195,9 @@ and nothing ever blocks on input, so a scan is safe to run unattended.
 Rule IDs (`detached_disk`, `underutilized_ec2`, …) and skip codes (`in_use`, `no_price`,
 `too_young`, …) are stable identifiers you can branch on. `tellury rules list` enumerates the
 former; `--explain-skips` reports the latter.
+
+For AWS, `regions_analyzed` and `region_source` report which regions the scan actually
+covered and how they were chosen. See the AWS-specific flags section above.
 
 ### Offline input
 

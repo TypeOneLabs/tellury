@@ -669,6 +669,23 @@ func accountStatusLines(statuses []aws.AccountStatus) string {
 		}
 	}
 
+	// List scanned accounts whose region coverage is partial. A clean
+	// default/explicit scan is full coverage (searchable == enabled), so it
+	// adds no noise here; a Resource Explorer first run is exactly where the
+	// missing regions must be visible.
+	for _, s := range statuses {
+		if coverage := accountRegionCoverage(s); coverage != "" {
+			b.WriteString("\n  scanned: ")
+			b.WriteString(s.ID)
+			if s.Name != "" && s.Name != s.ID {
+				b.WriteString(" (")
+				b.WriteString(s.Name)
+				b.WriteString(")")
+			}
+			b.WriteString(coverage)
+		}
+	}
+
 	// List suspended accounts.
 	for _, s := range statuses {
 		if s.Status == "suspended" {
@@ -683,6 +700,26 @@ func accountStatusLines(statuses []aws.AccountStatus) string {
 	}
 
 	return b.String()
+}
+
+// accountRegionCoverage renders the per-account region coverage suffix for a
+// scanned account. Full coverage returns "" so a clean scan's COVERAGE block
+// stays as compact as before; partial or unknown coverage returns the numbers.
+func accountRegionCoverage(s aws.AccountStatus) string {
+	if s.Status != "scanned" {
+		return ""
+	}
+	switch {
+	case s.RegionsEnabled >= 0 && s.RegionsSearchable >= 0:
+		if s.RegionsEnabled == s.RegionsSearchable {
+			return ""
+		}
+		return fmt.Sprintf(" — %d of %d regions searchable", s.RegionsSearchable, s.RegionsEnabled)
+	case s.RegionsEnabled < 0:
+		return fmt.Sprintf(" — %d searchable region(s), enabled count unknown", s.RegionsSearchable)
+	default:
+		return fmt.Sprintf(" — searchable count unknown, %d enabled regions", s.RegionsEnabled)
+	}
 }
 
 // subscriptionStatusLines renders the subscription outcome report below the

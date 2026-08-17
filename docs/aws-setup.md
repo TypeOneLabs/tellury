@@ -5,8 +5,8 @@ Elastic IPs today, with more resource types to follow.
 
 ## Required permissions
 
-The permissions a scan needs depend on the **scope flag** and on **which
-account each API call runs against**.
+The permissions a scan needs depend on the **scope flag**, on **how regions are
+chosen**, and on **which account each API call runs against**.
 
 | Scope | Caller account needs | Every member account needs (through the assumed role) |
 |---|---|---|
@@ -30,7 +30,7 @@ granted through the assumed role.
 
 | Action | Purpose |
 |---|---|
-| `ec2:DescribeRegions` | Discover which regions the account has enabled. |
+| `ec2:DescribeRegions` | Enumerate the account's enabled regions. Required by the **default** scan, and by the Resource Explorer per-region sweep when `--aws-use-resource-explorer` is set without an aggregator index. |
 | `ec2:DescribeVolumes` | List every EBS volume in a region (paginated). |
 | `ec2:DescribeAddresses` | List every Elastic IP in a region. |
 | `ec2:DescribeInstances` | List every EC2 instance in a region. Needed by any instance rule. |
@@ -41,8 +41,12 @@ granted through the assumed role.
 | `ec2:DescribeFleets`, `ec2:DescribeSpotFleetRequests` | The same, for AMIs referenced inline by EC2 Fleet overrides and Spot Fleet launch specifications. |
 | `autoscaling:DescribeLaunchConfigurations` | The same, for Auto Scaling launch configurations. Note this is an `autoscaling:` action, not `ec2:`. |
 | `cloudwatch:GetMetricData` | Read instance CPU utilization. Without it, metric-dependent rules skip and say so. Note this call sits outside the CloudWatch free tier at $0.01 per 1,000 metrics requested — a scan needs tens of thousands of instances before that rounds to a cent. |
-| `resource-explorer-2:Search` | Find which regions hold the resource types the selected rules need. Needed unless you pass `--aws-regions`: there is no EC2 `DescribeRegions` sweep. Note this call CREATES an index in an un-indexed region — the one write a scan performs. |
-| `resource-explorer-2:ListIndexes` | Learn which regions Resource Explorer can already answer for, so the ones it cannot are reported rather than silently empty. |
+| `resource-explorer-2:Search` | **Only with `--aws-use-resource-explorer`.** Find which regions hold the resource types the selected rules need. Note this call CREATES an index in an un-indexed region — a scan with this flag performs writes. |
+| `resource-explorer-2:ListIndexes` | **Only with `--aws-use-resource-explorer`.** Learn which regions Resource Explorer can already answer for, so the ones it cannot are reported rather than silently empty. |
+
+The default scan does **not** need `resource-explorer-2:Search` or
+`resource-explorer-2:ListIndexes`. It uses only `ec2:DescribeRegions` and the
+per-region service APIs, and performs no writes.
 
 ### Caller-only permissions
 
@@ -116,27 +120,39 @@ Account outcomes: 1 scanned, 1 unreachable (AccessDenied assuming OrganizationAc
 `Status` is `degraded` whenever an account could not be reached, so a partial scan is
 visible at a glance and in the JSON as `scan_status`, not only in the outcomes list.
 
-## Resource Explorer decides which regions are scanned
+## Choosing regions: default sweep, explicit regions, or Resource Explorer
 
-Resource Explorer is how tellury knows which regions to look in. There is no
-`DescribeRegions` sweep of the EC2 APIs: sweeping every enabled region took ~70s
-against an account whose resources sat in two. The same account now scans in
-~15s.
+There are three region modes, in precedence order:
 
-**You do not have to set anything up.** If the account has an aggregator index,
-one query per resource type covers every indexed region. If it does not — which
-is most accounts — tellury asks each enabled region directly. Either way the
-scan then hydrates only the regions that came back with something.
+1. **`--aws-regions <list>`** — scan exactly those regions. Resource Explorer is never
+   called. This is the fastest mode and the recommended way to speed up the default.
+2. **`--aws-use-resource-explorer`** — narrow regions through AWS Resource Explorer: an
+   aggregator query if an aggregator index exists, otherwise the per-region sweep. Fast, may
+   be incomplete on early runs, and creates indexes.
+3. **neither (the default)** — enumerate enabled regions with `ec2:DescribeRegions` and
+   hydrate all of them through the service APIs. Slower (about 70s versus 15s on a
+   17-region account), 100% complete on the first run, and makes **no** Resource Explorer
+   calls. A default scan performs no writes.
 
-### Data can be missing on the first runs
+The default is the right choice for a first look at an account. It reads every enabled
+region directly, so an empty result means the account is actually empty (or the identity
+cannot read the resource types), not that a Resource Explorer index has not been created
+yet.
 
-This is the cost of requiring no setup, and it is worth understanding before you
-trust a first scan.
+```bash
+# First look: complete, read-only, no Resource Explorer calls.
+tellury scan --aws-account 123456789012
 
-Resource Explorer only knows about a Region that has an **index**. AWS is
-explicit: *"If you do not create a user-owned index in a Region, resources from
-that Region will not appear in cross-region search results from other Regions."*
-An un-indexed Region does not return an error when searched — it returns:
+# Faster follow-ups: name the regions you know you use.
+tellury scan --aws-account 123456789012 --aws-regions us-east-1,us-west-2
+```
+
+### `--aws-use-resource-explorer` is opt-in
+
+Resource Explorer only knows about a Region that has an **index**. AWS is explicit:
+*"If you do not create a user-owned index in a Region, resources from that Region will not
+appear in cross-region search results from other Regions."* An un-indexed Region does not
+return an error when searched — it returns:
 
 ```json
 "Count": { "TotalResources": 0, "Complete": true }
@@ -144,37 +160,36 @@ An un-indexed Region does not return an error when searched — it returns:
 
 A confident empty, indistinguishable from a Region that is genuinely idle.
 
-Searching an un-indexed Region **creates** its index as a side effect. So the
-first scan of a Region reports nothing there, and a later scan sees it once the
-index populates — minutes for tagged resources, up to about two hours for
-untagged ones. Two consequences:
+Searching an un-indexed Region **creates** its index as a side effect. So with
+`--aws-use-resource-explorer`, the first scan of a Region may report nothing there, and a
+later scan sees it once the index populates — minutes for tagged resources, up to about two
+hours for untagged ones. Consequences:
 
-- **The first scan of a new account under-reports.** Expect to run it twice, a
-  couple of hours apart, before treating the total as complete.
-- **A newly indexed Region stays empty for a while.** Its index exists, so it is
-  no longer listed as missing, but it has not finished populating.
+- **The first scan of a new account can under-report.** Expect to run it twice, a couple of
+  hours apart, before treating the total as complete. This is expected and fine for a
+  regular scheduled CI check; it is the wrong trade for a first manual look at an account.
+- **A newly indexed Region stays empty for a while.** Its index exists, so it is no longer
+  listed as missing, but it has not finished populating.
+- **The flag writes.** Index creation is the one non-read-only thing a scan can do, and it
+  happens only on this path. The default scan and `--aws-regions` never create an index.
 
-tellury names the Regions it knows Resource Explorer cannot yet answer for:
+When using the flag, tellury names the Regions it knows Resource Explorer cannot yet answer
+for:
 
 ```
 WARN regions have no Resource Explorer index yet; resources there are NOT
      reported by this scan ... regions=11 list=ap-northeast-1,ap-south-1,...
 ```
 
-**To scan a Region immediately, name it.** Explicit regions skip Resource
-Explorer entirely and read the EC2 APIs directly, so nothing is missed and
-nothing is created:
+**To scan a Region immediately, name it.** Explicit regions skip Resource Explorer entirely
+and read the EC2 APIs directly, so nothing is missed and nothing is created:
 
 ```bash
 tellury scan --aws-account 123456789012 --aws-regions us-west-1
 ```
 
-**Note that searching writes.** Creating an index is the one non-read-only thing
-a scan can do, and it happens only on this path. If that is unacceptable in your
-account, pass `--aws-regions` and Resource Explorer is never called.
-
-An empty result from a Region that IS indexed is a real answer: nothing of those
-types is there.
+An empty result from a Region that IS indexed is a real answer: nothing of those types is
+there.
 
 ```
 SUMMARY
@@ -185,20 +200,26 @@ Regions        4 regions (resource_explorer)
 ...
 ```
 
-The `(resource_explorer)` / `(explicit)` annotation appears after the region
-count in both the summary block and the JSON output (`region_source` field).
+The region-source annotation appears after the region count in both the summary block and
+the JSON output (`region_source` field). It is one of:
+
+- `explicit` — `--aws-regions` named the regions.
+- `describe_regions` — the default `ec2:DescribeRegions` sweep.
+- `resource_explorer` — `--aws-use-resource-explorer` narrowed the regions.
+- `fixture` — an offline fixture replay named the regions.
 
 ### Staleness
 
-The Resource Explorer index is eventually consistent. Tagged resources appear
-within minutes; untagged resources can take up to two hours. Because hydration
-always reads the live EC2 APIs — never the index's cached attributes — a stale
-index can only cause a very recently created resource to be missed. It can
-never produce a stale attribute or a wrong price.
+The Resource Explorer index is eventually consistent. Tagged resources appear within
+minutes; untagged resources can take up to two hours. Because hydration always reads the
+live EC2 APIs — never the index's cached attributes — a stale index can only cause a very
+recently created resource to be missed. It can never produce a stale attribute or a wrong
+price.
 
 ## Example minimal IAM policies
 
-Policy for the **caller** on a single-account scan (`--aws-account`):
+Policy for the **caller** on a single-account scan using the **default region mode**
+(`--aws-account`):
 
 ```json
 {
@@ -220,14 +241,20 @@ Policy for the **caller** on a single-account scan (`--aws-account`):
         "ec2:DescribeSpotFleetRequests",
         "autoscaling:DescribeLaunchConfigurations",
         "cloudwatch:GetMetricData",
-        "resource-explorer-2:Search",
-        "resource-explorer-2:ListIndexes",
         "pricing:GetProducts"
       ],
       "Resource": "*"
     }
   ]
 }
+```
+
+If you opt into `--aws-use-resource-explorer`, add these two actions to the per-account
+policy (and to each member-account role for organization scans):
+
+```json
+"resource-explorer-2:Search",
+"resource-explorer-2:ListIndexes"
 ```
 
 For organization scans, add these caller-only permissions to the caller policy:
@@ -258,7 +285,7 @@ member accounts:
 ```
 
 And attach this policy to the **role in each member account** (or otherwise
-grant the same actions to the role):
+grant the same actions to the role) for a default or `--aws-regions` scan:
 
 ```json
 {
@@ -279,15 +306,17 @@ grant the same actions to the role):
         "ec2:DescribeFleets",
         "ec2:DescribeSpotFleetRequests",
         "autoscaling:DescribeLaunchConfigurations",
-        "cloudwatch:GetMetricData",
-        "resource-explorer-2:Search",
-        "resource-explorer-2:ListIndexes"
+        "cloudwatch:GetMetricData"
       ],
       "Resource": "*"
     }
   ]
 }
 ```
+
+Add `resource-explorer-2:Search` and `resource-explorer-2:ListIndexes` to the
+member-account role only if that role will be used with
+`--aws-use-resource-explorer`.
 
 Notice that `pricing:GetProducts` and the organization permissions are
 **caller-only** and are absent from the member-account role policy.

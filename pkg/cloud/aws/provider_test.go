@@ -2,6 +2,7 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -46,6 +47,53 @@ func TestNew_OfflineConstructsZeroSDKClients(t *testing.T) {
 	defer p.Close()
 	if p.awsCfg.Region != "" {
 		t.Errorf("offline provider must not resolve an AWS region (no SDK config load)")
+	}
+	if p.discoverer != nil {
+		t.Errorf("offline provider must not construct a Resource Explorer discoverer")
+	}
+}
+
+// TestNew_DefaultDoesNotConstructDiscoverer is the read-only guarantee made
+// mechanical: the default AWS provider (no --aws-use-resource-explorer) must
+// not construct a Discoverer at all, so a default scan can never call
+// Resource Explorer Search or ListIndexes.
+func TestNew_DefaultDoesNotConstructDiscoverer(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
+	t.Setenv("AWS_REGION", "us-east-1")
+
+	p, err := New(context.Background(), WithLogger(newTestLogger()))
+	if err != nil {
+		t.Fatalf("New with static env credentials failed: %v", err)
+	}
+	defer p.Close()
+
+	if p.useResourceExplorer {
+		t.Error("default provider must have useResourceExplorer=false")
+	}
+	if p.discoverer != nil {
+		t.Error("default provider must not construct a Resource Explorer Discoverer")
+	}
+}
+
+// TestNew_UseResourceExplorerConstructsDiscoverer pins the opt-in side: when
+// --aws-use-resource-explorer is set, the provider does construct a Discoverer.
+func TestNew_UseResourceExplorerConstructsDiscoverer(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
+	t.Setenv("AWS_REGION", "us-east-1")
+
+	p, err := New(context.Background(), WithLogger(newTestLogger()), WithUseResourceExplorer(true))
+	if err != nil {
+		t.Fatalf("New with Resource Explorer enabled failed: %v", err)
+	}
+	defer p.Close()
+
+	if !p.useResourceExplorer {
+		t.Error("provider must have useResourceExplorer=true")
+	}
+	if p.discoverer == nil {
+		t.Error("provider with Resource Explorer enabled must construct a Discoverer")
 	}
 }
 
@@ -256,11 +304,13 @@ func TestIngest_RejectsNilAWSScope(t *testing.T) {
 
 // The mapping must cover EVERY asset type an AWS rule can declare.
 //
-// There is no DescribeRegions sweep behind it any more: an unmapped type means
-// resolveRegions refuses to narrow at all, because a region holding only that
-// type would otherwise be dropped silently. The old table mapped three of the
-// five types the rules declare — instance and snapshot were missing — which
-// under the current design would refuse every scan.
+// There is no DescribeRegions sweep behind Resource Explorer, but the default
+// mode does use DescribeRegions. For the opt-in Resource Explorer path, an
+// unmapped type means resolveRegions refuses to narrow at all, because a
+// region holding only that type would otherwise be dropped silently. The old
+// table mapped three of the five types the rules declare — instance and
+// snapshot were missing — which under the current design would refuse every
+// Resource Explorer scan.
 func TestAssetTypesToResourceExplorer_CoversEveryRuleAssetType(t *testing.T) {
 	// The asset types the AWS rules declare today.
 	for _, hint := range []string{
@@ -273,7 +323,7 @@ func TestAssetTypesToResourceExplorer_CoversEveryRuleAssetType(t *testing.T) {
 		mapped, unmapped := assetTypesToResourceExplorer([]string{hint})
 		if len(unmapped) != 0 {
 			t.Errorf("asset type %q has no Resource Explorer mapping; scans requesting it "+
-				"cannot resolve regions at all", hint)
+				"cannot resolve regions through Resource Explorer", hint)
 			continue
 		}
 		if len(mapped) != 1 {
@@ -324,14 +374,15 @@ func TestAssetTypesToResourceExplorer_EmptyInput(t *testing.T) {
 	}
 }
 
-// TestResolveRegions_ExplicitOverridesDiscovery: even with asset type hints,
-// explicit --aws-regions wins and the source is "explicit". The discovery
-// path is never consulted.
+// TestResolveRegions_ExplicitOverridesDiscovery: even with asset type hints
+// and the Resource Explorer flag enabled, explicit --aws-regions wins and the
+// source is "explicit". The discovery path is never consulted.
 func TestResolveRegions_ExplicitOverridesDiscovery(t *testing.T) {
 	p := &Provider{
-		log:      newTestLogger(),
-		offline:  false,
-		explicit: []string{"us-east-1"},
+		log:                 newTestLogger(),
+		offline:             false,
+		useResourceExplorer: true,
+		explicit:            []string{"us-east-1"},
 	}
 	regions, source, err := p.resolveRegions(context.Background(), []string{"aws.ec2.volume"})
 	if err != nil {
@@ -367,14 +418,16 @@ func TestResolveRegions_OfflineReturnsFixture(t *testing.T) {
 	}
 }
 
-// TestResolveRegions_DiscoveryNarrowsRegions: when the discoverer returns
-// regions, those regions are used and the source is "resource_explorer".
+// TestResolveRegions_DiscoveryNarrowsRegions: when the Resource Explorer flag
+// is on and the discoverer returns regions, those regions are used and the
+// source is "resource_explorer".
 func TestResolveRegions_DiscoveryNarrowsRegions(t *testing.T) {
 	fake := newDiscovererWithClient(loadSearchFixture(t))
 	p := &Provider{
-		log:        newTestLogger(),
-		offline:    false,
-		discoverer: fake,
+		log:                 newTestLogger(),
+		offline:             false,
+		useResourceExplorer: true,
+		discoverer:          fake,
 	}
 	regions, source, err := p.resolveRegions(context.Background(), []string{"aws.ec2.volume", "aws.ec2.address"})
 	if err != nil {
@@ -390,9 +443,8 @@ func TestResolveRegions_DiscoveryNarrowsRegions(t *testing.T) {
 	}
 }
 
-// TestResolveRegions_OfflineWinsOverDiscovery: when discovery returns
-// zero regions (valid index, no matching resources), the provider falls back
-// to DescribeRegions.
+// TestResolveRegions_OfflineWinsOverDiscovery: the offline path precedes
+// Resource Explorer, even when the flag is on and a discoverer is present.
 func TestResolveRegions_OfflineWinsOverDiscovery(t *testing.T) {
 	emptyDiscoverer := newDiscovererWithClient(&fakeResourceExplorer{
 		pages: []*resourceexplorer2.SearchOutput{
@@ -401,10 +453,11 @@ func TestResolveRegions_OfflineWinsOverDiscovery(t *testing.T) {
 	})
 
 	p := &Provider{
-		log:        newTestLogger(),
-		offline:    true,
-		discoverer: emptyDiscoverer,
-		fixture:    loadTestFixture(t),
+		log:                 newTestLogger(),
+		offline:             true,
+		useResourceExplorer: true,
+		discoverer:          emptyDiscoverer,
+		fixture:             loadTestFixture(t),
 	}
 
 	regions, source, err := p.resolveRegions(context.Background(), []string{"aws.ec2.volume"})
@@ -420,8 +473,8 @@ func TestResolveRegions_OfflineWinsOverDiscovery(t *testing.T) {
 }
 
 // TestResolveRegions_OfflineNoHintsUsesFixture: when asset type hints are
-// empty or nil, the discovery path is skipped entirely and the provider falls
-// through to DescribeRegions.
+// empty or nil, the discovery path is skipped entirely and the provider
+// returns the fixture regions.
 func TestResolveRegions_OfflineNoHintsUsesFixture(t *testing.T) {
 	p := &Provider{
 		log:     newTestLogger(),
@@ -437,6 +490,59 @@ func TestResolveRegions_OfflineNoHintsUsesFixture(t *testing.T) {
 	}
 	if len(regions) != 2 {
 		t.Errorf("regions = %v, want 2 regions from fixture", regions)
+	}
+}
+
+// TestResolveRegions_DefaultDescribeRegionsSweep pins the restored default:
+// with neither --aws-regions nor --aws-use-resource-explorer, the provider
+// enumerates enabled regions through ec2:DescribeRegions and reports source
+// "describe_regions".
+func TestResolveRegions_DefaultDescribeRegionsSweep(t *testing.T) {
+	fix := loadTestFixture(t)
+	p := &Provider{log: newTestLogger()}
+	factory := func(region string) ec2API { return &fakeEC2{region: region, f: fix} }
+
+	regions, source, err := p.resolveRegionsWithClient(
+		context.Background(), factory, nil, []string{"aws.ec2.volume"})
+	if err != nil {
+		t.Fatalf("resolveRegionsWithClient: %v", err)
+	}
+	if source != "describe_regions" {
+		t.Errorf("source = %q, want describe_regions", source)
+	}
+	want := canonicaliseRegions(fix.RegionNames())
+	if !reflect.DeepEqual(regions, want) {
+		t.Errorf("regions = %v, want %v", regions, want)
+	}
+}
+
+// TestResolveRegions_DefaultMakesNoResourceExplorerCalls proves mechanically
+// that the default path never calls Resource Explorer. The discoverer passed
+// here would error on any Search or ListIndexes call; the fact that the
+// resolution succeeds with a describe_regions source is the assertion.
+func TestResolveRegions_DefaultMakesNoResourceExplorerCalls(t *testing.T) {
+	fix := loadTestFixture(t)
+	f := &fakeResourceExplorer{
+		err:             errors.New("Search was called"),
+		listIndexesErr:  errors.New("ListIndexes was called"),
+		aggregator:      true,
+	}
+	p := &Provider{log: newTestLogger()}
+	factory := func(region string) ec2API { return &fakeEC2{region: region, f: fix} }
+
+	regions, source, err := p.resolveRegionsWithClient(
+		context.Background(), factory, newDiscovererWithClient(f), []string{"aws.ec2.volume"})
+	if err != nil {
+		t.Fatalf("resolveRegionsWithClient default path failed: %v", err)
+	}
+	if source != "describe_regions" {
+		t.Errorf("source = %q, want describe_regions", source)
+	}
+	if len(f.queries) != 0 {
+		t.Errorf("Resource Explorer Search was called %d times, want 0", len(f.queries))
+	}
+	if len(regions) == 0 {
+		t.Error("default path returned no regions")
 	}
 }
 
@@ -469,17 +575,18 @@ func TestProvider_SizerIsWired(t *testing.T) {
 	}
 }
 
-// The refusal paths. With no DescribeRegions sweep behind it, resolveRegions
-// must answer "which regions" correctly or not at all — every failure below
-// returns an error naming its remedy, because the alternative is a short region
-// list that looks exactly like a clean scan.
+// The refusal paths for the opt-in Resource Explorer mode. Without a
+// DescribeRegions sweep behind it, Resource Explorer must answer "which
+// regions" correctly or not at all — every failure below returns an error
+// naming its remedy, because the alternative is a short region list that
+// looks exactly like a clean scan.
 
 // No aggregator index is the COMMON case, and must not stop a scan: the
 // discoverer sweeps the account's enabled regions, asking each one directly.
 //
 // The sweep needs a region list to sweep, which is the one DescribeRegions call
-// that remains — it enumerates regions to ASK, and hydration still happens only
-// where Resource Explorer found something.
+// that remains in Resource Explorer mode — it enumerates regions to ASK, and
+// hydration still happens only where Resource Explorer found something.
 func TestResolveRegions_NoAggregatorSweepsRegions(t *testing.T) {
 	fix := loadTestFixture(t)
 	f := &fakeResourceExplorer{
@@ -490,7 +597,7 @@ func TestResolveRegions_NoAggregatorSweepsRegions(t *testing.T) {
 			},
 		}},
 	}
-	p := &Provider{log: newTestLogger()}
+	p := &Provider{log: newTestLogger(), useResourceExplorer: true}
 	factory := func(region string) ec2API { return &fakeEC2{region: region, f: fix} }
 
 	regions, source, err := p.resolveRegionsWithClient(
@@ -515,8 +622,9 @@ func TestResolveRegions_NoAggregatorSweepsRegions(t *testing.T) {
 // are unknowable, so narrowing on the remaining types could drop a region.
 func TestResolveRegions_RefusesUnmappedAssetType(t *testing.T) {
 	p := &Provider{
-		log:        newTestLogger(),
-		discoverer: newDiscovererWithClient(&fakeResourceExplorer{aggregator: true}),
+		log:                 newTestLogger(),
+		useResourceExplorer: true,
+		discoverer:          newDiscovererWithClient(&fakeResourceExplorer{aggregator: true}),
 	}
 	_, _, err := p.resolveRegions(context.Background(), []string{"aws.ec2.volume", "aws.rds.instance"})
 	if err == nil {
@@ -533,6 +641,7 @@ func TestResolveRegions_RefusesUnmappedAssetType(t *testing.T) {
 func TestResolveRegions_EmptyAggregatorResultIsAnAnswer(t *testing.T) {
 	p := &Provider{
 		log: newTestLogger(),
+		useResourceExplorer: true,
 		discoverer: newDiscovererWithClient(&fakeResourceExplorer{
 			aggregator: true,
 			pages:      []*resourceexplorer2.SearchOutput{{Resources: nil}},
@@ -550,9 +659,10 @@ func TestResolveRegions_EmptyAggregatorResultIsAnAnswer(t *testing.T) {
 	}
 }
 
-// No discoverer at all (a provider built without AWS config) must say so.
+// No discoverer at all (a provider built without AWS config) must say so when
+// Resource Explorer is requested.
 func TestResolveRegions_RefusesWithoutDiscoverer(t *testing.T) {
-	p := &Provider{log: newTestLogger()}
+	p := &Provider{log: newTestLogger(), useResourceExplorer: true}
 	_, _, err := p.resolveRegions(context.Background(), []string{"aws.ec2.volume"})
 	if err == nil {
 		t.Fatal("no discoverer must be an error, not an empty region list")

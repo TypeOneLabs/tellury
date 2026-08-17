@@ -68,6 +68,9 @@ func newScanCmd(g *globalFlags) *cobra.Command {
 	f.StringSliceVar(&cfg.AWSRegions, "aws-regions", nil,
 		"regions to scan for the AWS provider (default: every region enabled for the account via DescribeRegions; "+
 			"an availability-zone form like us-east-1a is accepted and flattened to its region)")
+	f.BoolVar(&cfg.AWSUseResourceExplorer, "aws-use-resource-explorer", false,
+		"narrow AWS regions through Resource Explorer instead of sweeping every DescribeRegions region; "+
+			"faster, but can miss resources on early runs while indexes are generated, and searching creates indexes")
 	f.StringVar(&cfg.AWSRoleName, "aws-role-name", "",
 		"IAM role name to assume in member accounts during an organization/OU scan "+
 			"(default: OrganizationAccountAccessRole)")
@@ -337,9 +340,10 @@ func runScan(
 	// AWS region coverage: which regions a scan actually looked at, and how
 	// they were chosen, comes from the provider's own resolution (explicit
 	// --aws-regions, resource_explorer discovery, the DescribeRegions
-	// fallback, or the fixture), so the scan summary's "N regions analyzed
-	// (source)" figure and this log line can never drift from the scan's real
-	// coverage. GCP never sets these fields, keeping its report byte-identical.
+	// default sweep, or the fixture), so the scan summary's "N regions
+	// analyzed (source)" figure and this log line can never drift from the
+	// scan's real coverage. GCP never sets these fields, keeping its report
+	// byte-identical.
 	if cfg.Provider == "aws" {
 		meta.AccountsAnalyzed = gr.CountByKind(graph.KindAccount)
 		if rp, ok := provider.(regionReporter); ok {
@@ -435,10 +439,10 @@ func runScan(
 
 // regionReporter is the optional provider capability that reports which
 // regions a scan covered and how they were chosen (explicit --aws-regions,
-// resource_explorer discovery, the DescribeRegions fallback, or a fixture).
-// Only the AWS provider implements it today; the scan summary's "N regions
-// analyzed (source)" figure and the region coverage log line come from it, so
-// the report never guesses about a scan's real coverage.
+// resource_explorer discovery, the DescribeRegions default sweep, or a
+// fixture). Only the AWS provider implements it today; the scan summary's "N
+// regions analyzed (source)" figure and the region coverage log line come from
+// it, so the report never guesses about a scan's real coverage.
 type regionReporter interface {
 	Regions() ([]string, string)
 }
@@ -669,6 +673,9 @@ func newProvider(ctx context.Context, cfg config.Scan, log *slog.Logger, offline
 		}
 		if len(cfg.AWSRegions) > 0 {
 			opts = append(opts, aws.WithExplicitRegions(cfg.AWSRegions))
+		}
+		if cfg.AWSUseResourceExplorer {
+			opts = append(opts, aws.WithUseResourceExplorer(true))
 		}
 		if cfg.AWSRoleName != "" {
 			opts = append(opts, aws.WithRoleName(cfg.AWSRoleName))
