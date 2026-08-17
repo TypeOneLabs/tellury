@@ -8,6 +8,38 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
+### Added
+
+- `--aws-use-resource-explorer`. Resource Explorer region narrowing is now opt-in.
+  Three modes, in precedence order: `--aws-regions` (exact regions, fastest), the flag
+  (fast, may under-report on early runs, creates indexes), and the default (every enabled
+  region, complete on the first run, **no Resource Explorer calls and no writes**).
+- Per-account region coverage in the summary and the JSON (`regions_searchable` /
+  `regions_enabled`), so a brand-new account is distinguishable from a genuinely clean one.
+
+### Changed
+
+- **The default AWS scan sweeps every enabled region again.** Slower than 0.2.1 — about 70s
+  versus 15s on a 17-region account — and complete on the first run. Pass `--aws-regions`
+  for speed, or `--aws-use-resource-explorer` for the 0.2.1 behaviour.
+
+### Fixed
+
+- **Organization scans never reached a member account, in any release.** The org tree and
+  `sts:AssumeRole` both succeeded; every member account then failed on its first API call
+  with "Invalid Configuration: Missing Region", because the per-account client factories
+  omitted the empty-region fallback the own-account factories have. Both now share one
+  helper.
+- The organization summary reported the last account's region count instead of the union
+  across accounts.
+
+### Documentation
+
+- `docs/aws-setup.md`: which permissions each **scope** needs, and that the per-account read
+  permissions belong in each **member account** through the assumed role, not in the caller.
+  Which permissions each **region mode** needs, that the Resource Explorer flag writes
+  (searching creates an index), and that coverage under it builds over several runs.
+
 ## [0.2.1] — 2026-08-14
 
 Region narrowing on AWS, which had never worked.

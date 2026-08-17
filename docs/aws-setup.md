@@ -1,7 +1,8 @@
 # AWS setup for tellury
 
-tellury scans AWS accounts for waste — unattached EBS volumes and unassociated
-Elastic IPs today, with more resource types to follow.
+tellury scans AWS accounts for waste: unattached EBS volumes, unassociated Elastic IPs,
+overprovisioned EC2 instances, unused AMIs and the EBS snapshots a deregistered AMI leaves
+behind.
 
 ## Required permissions
 
@@ -115,7 +116,15 @@ Scanned        5 resources (4 skipped) across 2 accounts
 
 COVERAGE
 Account outcomes: 1 scanned, 1 unreachable (AccessDenied assuming OrganizationAccountAccessRole)
+  scanned:     171140037492 (management) — 17 of 17 regions searchable
+  unreachable: 222222222222 (prod) — cannot assume role OrganizationAccountAccessRole
 ```
+
+Each account also reports how many of its enabled regions were actually searchable, in the
+table and in the JSON (`regions_searchable` / `regions_enabled`). Under the default mode this
+is always every enabled region. Under `--aws-use-resource-explorer` it is the number of
+Regions Resource Explorer could answer for, which is how a brand-new account is told apart
+from a genuinely clean one.
 
 `Status` is `degraded` whenever an account could not be reached, so a partial scan is
 visible at a glance and in the JSON as `scan_status`, not only in the outcomes list.
@@ -165,8 +174,11 @@ Searching an un-indexed Region **creates** its index as a side effect. So with
 later scan sees it once the index populates — minutes for tagged resources, up to about two
 hours for untagged ones. Consequences:
 
-- **The first scan of a new account can under-report.** Expect to run it twice, a couple of
-  hours apart, before treating the total as complete. This is expected and fine for a
+- **The first scans of a new account under-report, and coverage builds up over several
+  runs.** Index creation is asynchronous and only a few Regions are indexed per scan.
+  Measured on a fresh account: 3, then 8, then 12, then 14 of 17 Regions searchable across
+  four scans. Do not assume one repeat run is enough — read the per-account coverage line
+  (below) and treat the total as complete only once it stops moving. This is fine for a
   regular scheduled CI check; it is the wrong trade for a first manual look at an account.
 - **A newly indexed Region stays empty for a while.** Its index exists, so it is no longer
   listed as missing, but it has not finished populating.
