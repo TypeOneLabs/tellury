@@ -8,6 +8,11 @@ version is `0`, the CLI surface and the rule interface may change between minor 
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-08-17
+
+Region discovery is now a choice, organization scans work, and every documented
+permission set is verified against a real identity.
+
 ### Added
 
 - `--aws-use-resource-explorer`. Resource Explorer region narrowing is now opt-in.
@@ -39,6 +44,12 @@ version is `0`, the CLI surface and the rule interface may change between minor 
   permissions belong in each **member account** through the assumed role, not in the caller.
   Which permissions each **region mode** needs, that the Resource Explorer flag writes
   (searching creates an index), and that coverage under it builds over several runs.
+- An ARN-scoped `sts:AssumeRole` must match `--aws-role-name`. The example policy hardcodes
+  `OrganizationAccountAccessRole`, so a custom role name is reported as an unreachable member
+  account when the caller's own policy is what blocked it.
+- Every documented permission set is now verified by scanning with a principal holding
+  exactly that set: AWS account, organization and member-account roles; GCP with and without
+  `roles/compute.viewer`; Azure at subscription, management-group and tenant scope.
 
 ## [0.2.1] — 2026-08-14
 
@@ -172,7 +183,8 @@ month, across AWS, Azure and GCP.
   metric, which neither AWS nor GCP do without an agent, and the backend reads it — but no
   rule declares it yet.
 
-[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/TypeOneLabs/tellury/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/TypeOneLabs/tellury/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/TypeOneLabs/tellury/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/TypeOneLabs/tellury/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/TypeOneLabs/tellury/releases/tag/v0.1.0
