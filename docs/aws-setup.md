@@ -61,7 +61,7 @@ do not need to be added to member-account roles.
 | `organizations:ListRoots` | `--aws-organization`, `--aws-organizational-unit` | List the root(s) of the organization. |
 | `organizations:ListOrganizationalUnitsForParent` | `--aws-organization`, `--aws-organizational-unit` | Walk the OU hierarchy. |
 | `organizations:ListAccountsForParent` | `--aws-organization`, `--aws-organizational-unit` | List every account under a root or OU. |
-| `sts:AssumeRole` | `--aws-organization`, `--aws-organizational-unit` | Assume the cross-account role in each member account. Called once per account. |
+| `sts:AssumeRole` | `--aws-organization`, `--aws-organizational-unit` | Assume the cross-account role in each member account. Called once per account. **If you scope it by ARN, the ARN must match `--aws-role-name`** — see below. |
 
 ### The cross-account role
 
@@ -295,6 +295,12 @@ member accounts:
   "Resource": "arn:aws:iam::*:role/OrganizationAccountAccessRole"
 }
 ```
+
+**That ARN hardcodes the default role name.** If you pass `--aws-role-name MyScanRole`, this
+policy does not cover it and every member account is reported `unreachable` with an
+`AccessDenied` on `sts:AssumeRole`. The scan is `degraded` and names the member account —
+which reads like a problem in that account, when the caller's own policy is at fault. Keep
+the two in step, or use `arn:aws:iam::*:role/*` if you would rather not.
 
 And attach this policy to the **role in each member account** (or otherwise
 grant the same actions to the role) for a default or `--aws-regions` scan:
