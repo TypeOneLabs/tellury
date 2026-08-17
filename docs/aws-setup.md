@@ -5,11 +5,28 @@ Elastic IPs today, with more resource types to follow.
 
 ## Required permissions
 
-Every permission below is an IAM action the caller's credentials must allow.
-The table groups them by whether they are needed for every scan or only for
-organization-level scans.
+The permissions a scan needs depend on the **scope flag** and on **which
+account each API call runs against**.
 
-### Every AWS scan
+| Scope | Caller account needs | Every member account needs (through the assumed role) |
+|---|---|---|
+| `--aws-account <id>` | The **per-account read permissions** below, plus `pricing:GetProducts`. The account is scanned directly; no role is assumed. | None. |
+| `--aws-organizational-unit <ou>` | The **per-account read permissions** below (for the caller's own account), plus `pricing:GetProducts`, the **organization permissions** below, and `sts:AssumeRole`. The caller's own account is scanned directly and **needs no role**. | The **per-account read permissions** below, granted to the assumed role. These permissions are checked in **each member account**, not in the caller's account. |
+| `--aws-organization <o-...>` | Same as `--aws-organizational-unit`. | Same as `--aws-organizational-unit`. |
+
+The caller's own account is scanned directly and needs no role. Every other
+account in scope is scanned by assuming that account's role, so the per-account
+read permissions must exist **in each member account**. If you grant the read
+permissions only to the caller, the member-account scans fail with
+`AccessDenied` (or the accounts are reported unreachable), and the summary says
+the scan was degraded without making the missing member-account grant obvious.
+
+### Per-account read permissions
+
+These are the actions tellury uses against **the account being scanned**. In a
+single-account scan they must exist in that account. In an organization or OU
+scan they must exist in the caller's own account AND in every member account,
+granted through the assumed role.
 
 | Action | Purpose |
 |---|---|
@@ -24,23 +41,22 @@ organization-level scans.
 | `ec2:DescribeFleets`, `ec2:DescribeSpotFleetRequests` | The same, for AMIs referenced inline by EC2 Fleet overrides and Spot Fleet launch specifications. |
 | `autoscaling:DescribeLaunchConfigurations` | The same, for Auto Scaling launch configurations. Note this is an `autoscaling:` action, not `ec2:`. |
 | `cloudwatch:GetMetricData` | Read instance CPU utilization. Without it, metric-dependent rules skip and say so. Note this call sits outside the CloudWatch free tier at $0.01 per 1,000 metrics requested — a scan needs tens of thousands of instances before that rounds to a cent. |
-| `pricing:GetProducts` | Load the live Price List catalogue. Without it every resource that needs a price is skipped as unpriced — there is no fallback table. |
 | `resource-explorer-2:Search` | Find which regions hold the resource types the selected rules need. Needed unless you pass `--aws-regions`: there is no EC2 `DescribeRegions` sweep. Note this call CREATES an index in an un-indexed region — the one write a scan performs. |
 | `resource-explorer-2:ListIndexes` | Learn which regions Resource Explorer can already answer for, so the ones it cannot are reported rather than silently empty. |
 
-### Organization / OU scans only
+### Caller-only permissions
 
-These permissions are needed ONLY when scanning with `--aws-organization` or
-`--aws-organizational-unit`. A single-account scan (`--aws-account`) does not
-use them.
+These permissions are checked against the **caller's own IAM principal**. They
+do not need to be added to member-account roles.
 
-| Action | Purpose |
-|---|---|
-| `organizations:DescribeOrganization` | Read the organization ID (the `o-` string). |
-| `organizations:ListRoots` | List the root(s) of the organization. |
-| `organizations:ListOrganizationalUnitsForParent` | Walk the OU hierarchy. |
-| `organizations:ListAccountsForParent` | List every account under a root or OU. |
-| `sts:AssumeRole` | Assume the cross-account role in each member account. Called once per account. |
+| Action | Needed for | Purpose |
+|---|---|---|
+| `pricing:GetProducts` | Every scope | Load the live Price List catalogue. Without it every resource that needs a price is skipped as unpriced — there is no fallback table. Pricing is always called with the caller's credentials, never with a member-account role. |
+| `organizations:DescribeOrganization` | `--aws-organization`, `--aws-organizational-unit` | Read the organization ID (the `o-` string). |
+| `organizations:ListRoots` | `--aws-organization`, `--aws-organizational-unit` | List the root(s) of the organization. |
+| `organizations:ListOrganizationalUnitsForParent` | `--aws-organization`, `--aws-organizational-unit` | Walk the OU hierarchy. |
+| `organizations:ListAccountsForParent` | `--aws-organization`, `--aws-organizational-unit` | List every account under a root or OU. |
+| `sts:AssumeRole` | `--aws-organization`, `--aws-organizational-unit` | Assume the cross-account role in each member account. Called once per account. |
 
 ### The cross-account role
 
@@ -50,7 +66,8 @@ IAM role that the caller can assume. By convention AWS Organizations creates
 this role as **`OrganizationAccountAccessRole`** when an account is created
 through the console.
 
-The role must grant at minimum the **Every AWS scan** permissions above.
+The role must grant at minimum the **per-account read permissions** above. It
+does not need `pricing:GetProducts` or the organization permissions.
 
 If your organization uses a different role name, pass it with:
 
@@ -179,7 +196,9 @@ always reads the live EC2 APIs — never the index's cached attributes — a sta
 index can only cause a very recently created resource to be missed. It can
 never produce a stale attribute or a wrong price.
 
-## Example minimal IAM policy
+## Example minimal IAM policies
+
+Policy for the **caller** on a single-account scan (`--aws-account`):
 
 ```json
 {
@@ -201,9 +220,9 @@ never produce a stale attribute or a wrong price.
         "ec2:DescribeSpotFleetRequests",
         "autoscaling:DescribeLaunchConfigurations",
         "cloudwatch:GetMetricData",
-        "pricing:GetProducts",
         "resource-explorer-2:Search",
-        "resource-explorer-2:ListIndexes"
+        "resource-explorer-2:ListIndexes",
+        "pricing:GetProducts"
       ],
       "Resource": "*"
     }
@@ -211,7 +230,7 @@ never produce a stale attribute or a wrong price.
 }
 ```
 
-For organization scans, add:
+For organization scans, add these caller-only permissions to the caller policy:
 
 ```json
 {
@@ -237,6 +256,41 @@ member accounts:
   "Resource": "arn:aws:iam::*:role/OrganizationAccountAccessRole"
 }
 ```
+
+And attach this policy to the **role in each member account** (or otherwise
+grant the same actions to the role):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeRegions",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeAddresses",
+        "ec2:DescribeInstances",
+        "ec2:DescribeInstanceTypes",
+        "ec2:DescribeImages",
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeLaunchTemplates",
+        "ec2:DescribeLaunchTemplateVersions",
+        "ec2:DescribeFleets",
+        "ec2:DescribeSpotFleetRequests",
+        "autoscaling:DescribeLaunchConfigurations",
+        "cloudwatch:GetMetricData",
+        "resource-explorer-2:Search",
+        "resource-explorer-2:ListIndexes"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+Notice that `pricing:GetProducts` and the organization permissions are
+**caller-only** and are absent from the member-account role policy.
 
 ## Credentials
 

@@ -58,10 +58,14 @@ type Discoverer struct {
 	client resourceExplorerAPI
 }
 
-// NewDiscoverer builds a Discoverer from an AWS config. The client is
-// region-agnostic — Resource Explorer Search queries the aggregator index,
-// not a single region — so no region pin is needed.
+// NewDiscoverer builds a Discoverer from an AWS config. The Resource Explorer
+// SDK client still requires a non-empty Region to resolve an endpoint, so an
+// absent cfg.Region is replaced with the same us-east-1 fallback used by the
+// regional EC2 and Auto Scaling factories. Apart from that requirement the
+// discoverer is region-agnostic: it never pins Resource Explorer to a
+// particular scan region.
 func NewDiscoverer(cfg aws.Config) *Discoverer {
+	cfg.Region = regionalRegion("", cfg.Region)
 	return &Discoverer{client: resourceexplorer2.NewFromConfig(cfg)}
 }
 

@@ -685,10 +685,10 @@ func (p *Provider) ingestOrganization(ctx context.Context, scope cloud.AWSScope,
 		)
 
 		acctEC2 := func(region string) ec2API {
-			return ec2.NewFromConfig(acctCfg, func(o *ec2.Options) { o.Region = region })
+			return newEC2Client(acctCfg, region)
 		}
 		acctASG := func(region string) autoScalingAPI {
-			return autoscaling.NewFromConfig(acctCfg, func(o *autoscaling.Options) { o.Region = region })
+			return newAutoScalingClient(acctCfg, region)
 		}
 		acctDiscoverer := NewDiscoverer(acctCfg)
 
@@ -1433,36 +1433,61 @@ func (p *Provider) collectSpotFleetReferences(ctx context.Context, client ec2API
 	return nil
 }
 
+// regionalRegion resolves the region a regional AWS client should be pinned
+// to. The explicit region wins; when it is empty, the config's region is
+// used; when that is empty too, the call falls back to us-east-1. The
+// important rule is that an SDK client must never be constructed with an
+// empty o.Region: doing so overrides the config and fails on the first API
+// call with "Invalid Configuration: Missing Region".
+func regionalRegion(region, fallback string) string {
+	if region != "" {
+		return region
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return "us-east-1"
+}
+
+// newEC2Client builds a live, region-scoped EC2 client from cfg. It is the
+// single live-construction path shared by the caller's own account and the
+// assumed-role member-account factories; the offline path is handled by the
+// Provider.ec2Client wrapper, not here.
+func newEC2Client(cfg aws.Config, region string) ec2API {
+	return ec2.NewFromConfig(cfg, func(o *ec2.Options) {
+		o.Region = regionalRegion(region, cfg.Region)
+	})
+}
+
+// newAutoScalingClient builds a live, region-scoped Auto Scaling client from
+// cfg. It is the single live-construction path shared by the caller's own
+// account and the assumed-role member-account factories; the offline path is
+// handled by the Provider.autoScalingClient wrapper, not here.
+func newAutoScalingClient(cfg aws.Config, region string) autoScalingAPI {
+	return autoscaling.NewFromConfig(cfg, func(o *autoscaling.Options) {
+		o.Region = regionalRegion(region, cfg.Region)
+	})
+}
+
 // ec2Client returns a region-scoped EC2 API. Offline providers return a
-// fixture-backed fake; live providers return the SDK client.
+// fixture-backed fake; live providers return the SDK client built by the
+// shared live-construction helper.
 func (p *Provider) ec2Client(region string) ec2API {
 	if p.offline {
 		return &fakeEC2{region: region, f: p.fixture}
 	}
-	if region == "" {
-		region = p.awsCfg.Region
-	}
-	if region == "" {
-		region = "us-east-1"
-	}
-	return ec2.NewFromConfig(p.awsCfg, func(o *ec2.Options) { o.Region = region })
+	return newEC2Client(p.awsCfg, region)
 }
 
 // autoScalingClient returns a region-scoped Auto Scaling API. Offline
 // providers return a fixture-backed fake; live providers return the SDK
-// client. The client is only built and called when an image/snapshot asset
-// type hint is present.
+// client built by the shared live-construction helper. The client is only
+// built and called when an image/snapshot asset type hint is present.
 func (p *Provider) autoScalingClient(region string) autoScalingAPI {
 	if p.offline {
 		return &fakeAutoScaling{region: region, f: p.fixture}
 	}
-	if region == "" {
-		region = p.awsCfg.Region
-	}
-	if region == "" {
-		region = "us-east-1"
-	}
-	return autoscaling.NewFromConfig(p.awsCfg, func(o *autoscaling.Options) { o.Region = region })
+	return newAutoScalingClient(p.awsCfg, region)
 }
 
 // canonicaliseRegions normalises each region through the single
