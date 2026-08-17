@@ -523,9 +523,9 @@ func TestResolveRegions_DefaultDescribeRegionsSweep(t *testing.T) {
 func TestResolveRegions_DefaultMakesNoResourceExplorerCalls(t *testing.T) {
 	fix := loadTestFixture(t)
 	f := &fakeResourceExplorer{
-		err:             errors.New("Search was called"),
-		listIndexesErr:  errors.New("ListIndexes was called"),
-		aggregator:      true,
+		err:            errors.New("Search was called"),
+		listIndexesErr: errors.New("ListIndexes was called"),
+		aggregator:     true,
 	}
 	p := &Provider{log: newTestLogger()}
 	factory := func(region string) ec2API { return &fakeEC2{region: region, f: fix} }
@@ -640,7 +640,7 @@ func TestResolveRegions_RefusesUnmappedAssetType(t *testing.T) {
 // erroring, or an empty account could never be scanned.
 func TestResolveRegions_EmptyAggregatorResultIsAnAnswer(t *testing.T) {
 	p := &Provider{
-		log: newTestLogger(),
+		log:                 newTestLogger(),
 		useResourceExplorer: true,
 		discoverer: newDiscovererWithClient(&fakeResourceExplorer{
 			aggregator: true,

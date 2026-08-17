@@ -11,14 +11,14 @@ import (
 
 func TestTableCoverage_AccountRegionCoverageIsVisible(t *testing.T) {
 	report := Report{
-		Provider:     "aws",
-		ScanStatus:   StatusOK,
-		WindowDays:   14,
+		Provider:   "aws",
+		ScanStatus: StatusOK,
+		WindowDays: 14,
 		AccountStatuses: []aws.AccountStatus{
 			{
-				ID:               "111122223333",
-				Name:             "AcctOne",
-				Status:           "scanned",
+				ID:                "111122223333",
+				Name:              "AcctOne",
+				Status:            "scanned",
 				RegionsEnabled:    17,
 				RegionsSearchable: 1,
 			},
@@ -45,9 +45,9 @@ func TestJSON_CarriesAccountRegionCoverage(t *testing.T) {
 		Provider: "aws",
 		AccountStatuses: []aws.AccountStatus{
 			{
-				ID:               "111122223333",
-				Name:             "AcctOne",
-				Status:           "scanned",
+				ID:                "111122223333",
+				Name:              "AcctOne",
+				Status:            "scanned",
 				RegionsEnabled:    17,
 				RegionsSearchable: 1,
 			},
@@ -80,8 +80,8 @@ func TestScanStatus_DoesNotDegradeForPartialRegionCoverage(t *testing.T) {
 		ResourcesScanned: 2,
 		AccountStatuses: []aws.AccountStatus{
 			{
-				ID:               "111122223333",
-				Status:           "scanned",
+				ID:                "111122223333",
+				Status:            "scanned",
 				RegionsEnabled:    17,
 				RegionsSearchable: 1,
 			},

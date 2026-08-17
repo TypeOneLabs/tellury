@@ -439,10 +439,10 @@ func (p *Provider) AccountStatuses() []AccountStatus {
 // that just finished.
 func (p *Provider) newScannedAccountStatus(id, name, reason string) AccountStatus {
 	return AccountStatus{
-		ID:               id,
-		Name:             name,
-		Status:           "scanned",
-		Reason:           reason,
+		ID:                id,
+		Name:              name,
+		Status:            "scanned",
+		Reason:            reason,
 		RegionsEnabled:    p.lastRegionEnabledCount,
 		RegionsSearchable: p.lastRegionSearchableCount,
 	}
